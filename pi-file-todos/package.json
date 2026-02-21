@@ -1,0 +1,11 @@
+{
+  "name": "@ssweens/pi-file-todos",
+  "version": "1.0.0",
+  "description": "File-based todo tracking skill package for pi",
+  "keywords": ["pi-package", "todo", "skills", "workflow"],
+  "author": "",
+  "license": "MIT",
+  "pi": {
+    "skills": ["./skills"]
+  }
+}

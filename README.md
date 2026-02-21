@@ -10,6 +10,8 @@ Extension packages for the [Pi coding agent](https://github.com/nicholasgasior/p
 | **pi-handoff** | Context management for agentic coding workflows |
 | **pi-image-gen** | Provider-agnostic image generation |
 | **pi-dynamic-models** | Dynamic model discovery from any configured API server at startup |
+| **pi-plan-mode** | Plan mode — read-only exploration before execution |
+| **pi-file-todos** | File-based todo tracking skill |
 
 ## Installation
 
@@ -20,6 +22,8 @@ pi install /path/to/pi-packages/pi-vertex
 pi install /path/to/pi-packages/pi-handoff
 pi install /path/to/pi-packages/pi-image-gen
 pi install /path/to/pi-packages/pi-dynamic-models
+pi install /path/to/pi-packages/pi-plan-mode
+pi install /path/to/pi-packages/pi-file-todos
 ```
 
 ## License

@@ -1,0 +1,12 @@
+{
+  "name": "@ssweens/pi-plan-mode",
+  "version": "1.0.0",
+  "description": "Plan mode for pi - read-only exploration before execution",
+  "keywords": ["pi-package", "plan-mode", "safe-mode", "read-only"],
+  "author": "",
+  "license": "MIT",
+  "pi": {
+    "extensions": ["./extensions"],
+    "skills": ["./skills"]
+  }
+}
