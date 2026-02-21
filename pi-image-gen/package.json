@@ -1,0 +1,20 @@
+{
+  "name": "@ssweens/pi-image-gen",
+  "version": "0.2.0",
+  "description": "Provider-agnostic image generation for Pi coding agent",
+  "keywords": ["pi-package"],
+  "license": "MIT",
+  "scripts": {
+    "generate-models": "npx tsx scripts/generate-image-models.ts"
+  },
+  "pi": {
+    "extensions": ["./extensions"]
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-agent-core": "*",
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-tui": "*",
+    "@sinclair/typebox": "*"
+  }
+}

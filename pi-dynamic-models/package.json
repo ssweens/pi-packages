@@ -1,0 +1,21 @@
+{
+  "name": "@ssweens/pi-dynamic-models",
+  "version": "1.0.0",
+  "description": "Dynamic model discovery for Pi coding agent — fetches models from any configured API server at startup",
+  "type": "module",
+  "scripts": {
+    "clean": "echo 'nothing to clean'",
+    "build": "echo 'nothing to build'",
+    "check": "echo 'nothing to check'"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-coding-agent": "*"
+  },
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
+  "keywords": ["pi-extension", "pi-package", "dynamic-models", "openai-compatible", "local-llm"],
+  "author": "",
+  "license": "MIT"
+}
