@@ -48,13 +48,10 @@
  * unreachable /models endpoint are skipped entirely.
  */
 
+import { getAgentDir, CONFIG_DIR_NAME } from "@mariozechner/pi-coding-agent";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
-
-const CONFIG_PATH = join(homedir(), ".pi", "agent", "settings", "pi-dynamic-models.json");
-const PROJECT_CONFIG_FILE = join(".pi", "settings", "pi-dynamic-models.json");
 
 // Mirrors OpenAICompletionsCompat from @mariozechner/pi-ai
 interface OpenAICompat {
@@ -130,8 +127,10 @@ function parseConfigFile(path: string): ServerConfig[] {
 /** Load and merge global + project configs.
  *  Project servers override global ones by provider name; extras are appended. */
 function loadConfig(cwd: string = process.cwd()): ServerConfig[] {
-  const global = parseConfigFile(CONFIG_PATH);
-  const project = parseConfigFile(join(cwd, PROJECT_CONFIG_FILE));
+  const configPath = join(getAgentDir(), "settings", "pi-dynamic-models.json");
+  const projectConfigFile = join(CONFIG_DIR_NAME, "settings", "pi-dynamic-models.json");
+  const global = parseConfigFile(configPath);
+  const project = parseConfigFile(join(cwd, projectConfigFile));
 
   if (project.length === 0) return global;
 

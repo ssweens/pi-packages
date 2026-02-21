@@ -313,12 +313,13 @@ export default function (pi: ExtensionAPI) {
 		const usage = checkContextUsage(ctx);
 		const pctStr = usage ? `${Math.round(usage.percent * 100)}%` : "high";
 
-		const wantsHandoff = await ctx.ui.confirm(
-			"Context Full",
-			`Context is ${pctStr} full. Handoff to a new session instead of compacting?`,
+		const choice = await ctx.ui.select(
+			`Context is ${pctStr} full. What would you like to do?`,
+			["Handoff to new session", "Compact context", "Continue without either"],
 		);
 
-		if (!wantsHandoff) return; // fall through to normal compaction
+		if (choice === "Compact context" || choice === undefined) return; // fall through to normal compaction
+		if (choice === "Continue without either") return { cancel: true };
 
 		handoffPending = true;
 		const error = await performHandoff(pi, ctx, "Continue current work", "compactHook");

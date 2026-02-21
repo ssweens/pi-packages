@@ -10,7 +10,7 @@ import { existsSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import type { AuthConfig } from "./types.js";
-import { loadConfig } from "./config.js";
+import { loadConfig, getConfigPath } from "./config.js";
 
 const DEFAULT_ADC_PATH = join(homedir(), ".config", "gcloud", "application_default_credentials.json");
 
@@ -58,7 +58,7 @@ export function getAuthConfig(preferredRegion?: string): AuthConfig {
   if (!projectId) {
     throw new Error(
       "Vertex AI requires a project ID.\n" +
-      `  Config file: set "project" in ${join(homedir(), ".pi", "agent", "config", "pi-vertex.json")}\n` +
+      `  Config file: set "project" in ${getConfigPath()}\n` +
       "  Env var: export GOOGLE_CLOUD_PROJECT=your-project-id\n" +
       "  Also ensure you've run: gcloud auth application-default login"
     );
@@ -68,7 +68,7 @@ export function getAuthConfig(preferredRegion?: string): AuthConfig {
     throw new Error(
       "Vertex AI requires Application Default Credentials.\n" +
       "  Run: gcloud auth application-default login\n" +
-      `  Or set "credentialsFile" in ${join(homedir(), ".pi", "agent", "config", "pi-vertex.json")}`
+      `  Or set "credentialsFile" in ${getConfigPath()}`
     );
   }
 

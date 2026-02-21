@@ -30,7 +30,7 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { Model, Api } from "@mariozechner/pi-ai";
 import { ALL_MODELS, getModelById } from "./models/index.js";
 import { hasAdcCredentials, resolveProjectId } from "./auth.js";
-import { loadConfig, CONFIG_PATH } from "./config.js";
+import { loadConfig, getConfigPath } from "./config.js";
 import { streamVertex } from "./streaming/index.js";
 import type { VertexModelConfig } from "./types.js";
 
@@ -70,7 +70,7 @@ export default function (pi: ExtensionAPI) {
   if (!projectId) {
     console.log(
       `[pi-vertex] Skipping: no project ID found.\n` +
-      `  Config file: set "project" in ${CONFIG_PATH}\n` +
+      `  Config file: set "project" in ${getConfigPath()}\n` +
       `  Env var: export GOOGLE_CLOUD_PROJECT=your-project-id`
     );
     return;
@@ -80,7 +80,7 @@ export default function (pi: ExtensionAPI) {
     console.log(
       `[pi-vertex] Skipping: ADC credentials not found.\n` +
       `  Run: gcloud auth application-default login\n` +
-      `  Or set "credentialsFile" in ${CONFIG_PATH}`
+      `  Or set "credentialsFile" in ${getConfigPath()}`
     );
     return;
   }

@@ -17,8 +17,8 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { getAgentDir, CONFIG_DIR_NAME } from "@mariozechner/pi-coding-agent";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { AgentToolResult, AgentToolUpdateCallback } from "@mariozechner/pi-agent-core";
 import { Container, fuzzyFilter, getEditorKeybindings, Input, Spacer, Text } from "@mariozechner/pi-tui";
@@ -85,21 +85,24 @@ function readJsonFile(path: string): Record<string, unknown> {
   }
 }
 
-const GLOBAL_CONFIG_PATH = join(homedir(), ".pi", "agent", "settings", "pi-image-gen.json");
+function globalConfigPath(): string {
+  return join(getAgentDir(), "settings", "pi-image-gen.json");
+}
 
 function loadConfig(cwd: string): ExtensionConfig {
-  const globalConfig = readJsonFile(GLOBAL_CONFIG_PATH);
-  const projectConfig = readJsonFile(join(cwd, ".pi", "settings", "pi-image-gen.json"));
+  const globalConfig = readJsonFile(globalConfigPath());
+  const projectConfig = readJsonFile(join(cwd, CONFIG_DIR_NAME, "settings", "pi-image-gen.json"));
   return { ...globalConfig, ...projectConfig } as ExtensionConfig;
 }
 
 /** Persist model selection to global config so it survives across sessions. */
 async function saveDefaultModel(provider: string, modelId: string): Promise<void> {
-  const existing = readJsonFile(GLOBAL_CONFIG_PATH);
+  const path = globalConfigPath();
+  const existing = readJsonFile(path);
   existing.defaultProvider = provider;
   existing.defaultModel = modelId;
-  await mkdir(join(homedir(), ".pi", "agent", "settings"), { recursive: true });
-  await writeFile(GLOBAL_CONFIG_PATH, JSON.stringify(existing, null, 2));
+  await mkdir(join(getAgentDir(), "settings"), { recursive: true });
+  await writeFile(path, JSON.stringify(existing, null, 2));
 }
 
 // ── models.json Integration ────────────────────────────────────────
@@ -167,7 +170,7 @@ function inferLegacyImageApi(provider: string, apiField?: string): ImageApi {
 }
 
 function readModelsJson(): Partial<ModelsJsonConfig> {
-  const modelsJsonPath = join(homedir(), ".pi", "agent", "models.json");
+  const modelsJsonPath = join(getAgentDir(), "models.json");
   return readJsonFile(modelsJsonPath) as Partial<ModelsJsonConfig>;
 }
 
@@ -229,8 +232,8 @@ function getModelsJsonImageModels(): ImageModel[] {
 // Discovery runs non-blocking — if the cache is warm, it's instant.
 // If the fetch fails, we silently fall back to built-in + models.json.
 
-const DISCOVERY_CACHE_DIR = join(homedir(), ".pi", "agent", "cache");
-const DISCOVERY_CACHE_FILE = join(DISCOVERY_CACHE_DIR, "pi-image-gen-discovered.json");
+function discoveryCacheDir(): string { return join(getAgentDir(), "cache"); }
+function discoveryCacheFile(): string { return join(discoveryCacheDir(), "pi-image-gen-discovered.json"); }
 const DISCOVERY_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 interface DiscoveryCache {
@@ -240,13 +243,14 @@ interface DiscoveryCache {
 
 /** Read cached discovered models if cache is fresh */
 function readDiscoveryCache(): ImageModel[] {
-  if (!existsSync(DISCOVERY_CACHE_FILE)) return [];
+  const cacheFile = discoveryCacheFile();
+  if (!existsSync(cacheFile)) return [];
   try {
-    const stat = statSync(DISCOVERY_CACHE_FILE);
+    const stat = statSync(cacheFile);
     const ageMs = Date.now() - stat.mtimeMs;
     if (ageMs > DISCOVERY_TTL_MS) return []; // Stale
 
-    const cache = JSON.parse(readFileSync(DISCOVERY_CACHE_FILE, "utf-8")) as DiscoveryCache;
+    const cache = JSON.parse(readFileSync(cacheFile, "utf-8")) as DiscoveryCache;
     return cache.models;
   } catch {
     return [];
@@ -264,9 +268,10 @@ let discoveredModels: ImageModel[] = readDiscoveryCache();
  */
 async function refreshDiscoveryCache(): Promise<void> {
   // Skip if cache is still fresh
-  if (existsSync(DISCOVERY_CACHE_FILE)) {
+  const cacheFile = discoveryCacheFile();
+  if (existsSync(cacheFile)) {
     try {
-      const stat = statSync(DISCOVERY_CACHE_FILE);
+      const stat = statSync(cacheFile);
       if (Date.now() - stat.mtimeMs < DISCOVERY_TTL_MS) return;
     } catch {
       // Continue to fetch
@@ -331,9 +336,9 @@ async function refreshDiscoveryCache(): Promise<void> {
     }
 
     // Write cache
-    await mkdir(DISCOVERY_CACHE_DIR, { recursive: true });
+    await mkdir(discoveryCacheDir(), { recursive: true });
     const cache: DiscoveryCache = { fetchedAt: Date.now(), models };
-    await writeFile(DISCOVERY_CACHE_FILE, JSON.stringify(cache, null, 2));
+    await writeFile(discoveryCacheFile(), JSON.stringify(cache, null, 2));
 
     // Update in-memory
     discoveredModels = models;
@@ -400,7 +405,7 @@ function resolveSaveConfig(save: string | undefined, saveDir: string | undefined
   const mode = (save || config.save || "none") as SaveMode;
 
   if (mode === "project") return { mode, outputDir: join(cwd, ".pi", "generated-images") };
-  if (mode === "global") return { mode, outputDir: join(homedir(), ".pi", "agent", "generated-images") };
+  if (mode === "global") return { mode, outputDir: join(getAgentDir(), "generated-images") };
   if (mode === "custom") {
     const dir = saveDir || config.saveDir;
     if (!dir?.trim()) throw new Error("save=custom requires saveDir parameter or saveDir in config.");
