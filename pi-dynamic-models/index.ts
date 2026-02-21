@@ -203,7 +203,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
         apiKey: apiKey ?? "none",
         authHeader: !!apiKey,
         api: api ?? "openai-completions",
-        models: Array.from(allIds).map((id) => {
+        models: Array.from(allIds).sort((a, b) => a.localeCompare(b)).map((id) => {
           const override = modelOverrides?.[id];
           return {
             id,
