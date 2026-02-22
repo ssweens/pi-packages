@@ -5,6 +5,11 @@
   "keywords": ["pi-package", "plan-mode", "safe-mode", "read-only"],
   "author": "",
   "license": "MIT",
+  "peerDependencies": {
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-agent-core": "*",
+    "@mariozechner/pi-coding-agent": "*"
+  },
   "pi": {
     "extensions": ["./extensions"],
     "skills": ["./skills"]
