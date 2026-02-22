@@ -284,6 +284,12 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_before_compact", async (event, ctx) => {
 		if (!ctx.hasUI || !ctx.model) return;
 
+		// Skip if a handoff was just initiated - the new session is already being created
+		const currentSessionFile = ctx.sessionManager.getSessionFile();
+		if (currentSessionFile && pendingHandoffText.has(currentSessionFile)) {
+			return;
+		}
+
 		const usage = ctx.getContextUsage();
 		const pctStr = usage ? `${Math.round(usage.percent)}%` : "high";
 
