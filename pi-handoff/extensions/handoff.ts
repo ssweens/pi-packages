@@ -1,14 +1,14 @@
 /**
- * Enhanced Handoff Extension
+ * Handoff Extension
  *
- * Combines the best of pi-amplike and mina approaches:
- * - User preview/editing of handoff draft (from pi example)
- * - Context monitoring with warnings (from mina)
- * - Structured bullet format with code pointers (from mina)
- * - Parent session linking for session_query tool (from pi-amplike)
- * - Agent-callable handoff tool (from pi-amplike)
- * - Auto-inject session-query skill when parent session detected
- * - System prompt hints for handoff awareness
+ * Transfers conversation context to a new focused session via:
+ * - /handoff <goal> command
+ * - Agent-callable handoff tool
+ * - Auto-handoff option when Pi triggers compaction
+ *
+ * The compaction hook uses Pi's preparation data (messagesToSummarize,
+ * previousSummary) instead of the full conversation, so the summary
+ * generation won't overflow the context window.
  *
  * Usage:
  *   /handoff now implement this for teams as well
@@ -23,12 +23,6 @@ import { complete, type Message } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@mariozechner/pi-coding-agent";
 import { BorderedLoader, convertToLlm, serializeConversation } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-
-// Context warning threshold (from mina)
-const CONTEXT_WARNING_THRESHOLD = 0.8; // 80%
-
-let handoffPending = false;
-
 
 // Handoff generation system prompt.
 //
@@ -91,21 +85,6 @@ Handoffs are especially effective after planning — clear the context and start
 At high context usage, suggest a handoff rather than losing important context.`;
 
 /**
- * Check context usage and warn if approaching limits
- */
-function checkContextUsage(ctx: ExtensionContext): { tokens: number; limit: number; percent: number } | null {
-	const usage = ctx.getContextUsage();
-	if (!usage) return null;
-
-	const percent = usage.tokens / usage.contextWindow;
-	return {
-		tokens: usage.tokens,
-		limit: usage.contextWindow,
-		percent,
-	};
-}
-
-/**
  * Generate a session name from the goal (slug format)
  */
 function goalToSessionName(goal: string): string {
@@ -138,6 +117,7 @@ async function performHandoff(
 	ctx: ExtensionContext,
 	goal: string,
 	mode: HandoffMode = "command",
+	preBuiltContext?: string,
 ): Promise<string | undefined> {
 	if (!ctx.hasUI) {
 		return "Handoff requires interactive mode.";
@@ -147,29 +127,25 @@ async function performHandoff(
 		return "No model selected.";
 	}
 
-	// Gather conversation context from current branch
-	const branch = ctx.sessionManager.getBranch();
-	const messages = branch
-		.filter((entry): entry is SessionEntry & { type: "message" } => entry.type === "message")
-		.map((entry) => entry.message);
+	let conversationText: string;
 
-	if (messages.length === 0) {
-		return "No conversation to hand off.";
+	if (preBuiltContext) {
+		// compactHook: context already built from preparation data
+		conversationText = preBuiltContext;
+	} else {
+		// command/tool: gather full conversation (context isn't full yet)
+		const branch = ctx.sessionManager.getBranch();
+		const messages = branch
+			.filter((entry): entry is SessionEntry & { type: "message" } => entry.type === "message")
+			.map((entry) => entry.message);
+
+		if (messages.length === 0) {
+			return "No conversation to hand off.";
+		}
+
+		conversationText = serializeConversation(convertToLlm(messages));
 	}
 
-	// Show context usage info
-	const usage = checkContextUsage(ctx);
-	if (usage) {
-		const pct = Math.round(usage.percent * 100);
-		ctx.ui.notify(
-			`Context: ${pct}% (${Math.round(usage.tokens / 1000)}k tokens)`,
-			usage.percent >= CONTEXT_WARNING_THRESHOLD ? "warning" : "info",
-		);
-	}
-
-	// Convert to LLM format and serialize
-	const llmMessages = convertToLlm(messages);
-	const conversationText = serializeConversation(llmMessages);
 	const currentSessionFile = ctx.sessionManager.getSessionFile();
 
 	// Generate the handoff prompt with loader UI
@@ -247,7 +223,6 @@ async function performHandoff(
 	}
 
 	pi.setSessionName(goalToSessionName(goal));
-	ctx.ui.setStatus("handoff-warning", undefined);
 
 	// Prepend session-query skill if parent session present
 	const messageToSend = /\*\*Parent session:\*\*/.test(fullPrompt)
@@ -271,73 +246,44 @@ export default function (pi: ExtensionAPI) {
 		};
 	});
 
-	// --- Auto-inject session-query skill ---
-	// Note: skill is now prepended in setEditorText before user sends,
-	// not via input transform hook (which caused double-enter issues).
-
-
-	// --- Context monitoring ---
-	pi.on("turn_end", async (_event, ctx) => {
-		if (!ctx.hasUI) return;
-
-		const usage = checkContextUsage(ctx);
-		if (!usage) return;
-
-		if (usage.percent >= CONTEXT_WARNING_THRESHOLD) {
-			const pct = Math.round(usage.percent * 100);
-			ctx.ui.setStatus(
-				"handoff-warning",
-				`⚠️ Context ${pct}% full (${Math.round(usage.tokens / 1000)}k/${Math.round(usage.limit / 1000)}k) - consider /handoff`,
-			);
-		} else {
-			ctx.ui.setStatus("handoff-warning", undefined);
-		}
-	});
-
 	// --- Auto-handoff on compaction ---
 	// When auto-compaction triggers, offer handoff as an alternative.
-	// Requires compaction.enabled = true in settings (otherwise this hook
-	// never fires). Users who disable auto-compaction can still use
-	// /handoff manually.
-	//
-	// Guard: after we cancel compaction, pi may retry it immediately
-	// (context is still full). The flag prevents the confirm dialog from
-	// appearing a second time while a deferred synthetic handoff is pending.
-
+	// Uses event.preparation (messagesToSummarize, previousSummary) — the
+	// manageable subset Pi already prepared — instead of re-gathering the
+	// full conversation that caused the compaction in the first place.
 	pi.on("session_before_compact", async (event, ctx) => {
-		// Skip if we already handled this (deferred handoff in flight)
-		if (handoffPending) return { cancel: true };
-
 		if (!ctx.hasUI || !ctx.model) return;
 
-		const usage = checkContextUsage(ctx);
-		const pctStr = usage ? `${Math.round(usage.percent * 100)}%` : "high";
+		const usage = ctx.getContextUsage();
+		const pctStr = usage ? `${Math.round(usage.percent)}%` : "high";
 
 		const choice = await ctx.ui.select(
 			`Context is ${pctStr} full. What would you like to do?`,
 			["Handoff to new session", "Compact context", "Continue without either"],
 		);
 
-		if (choice === "Compact context" || choice === undefined) return; // fall through to normal compaction
+		if (choice === "Compact context" || choice === undefined) return;
 		if (choice === "Continue without either") return { cancel: true };
 
-		handoffPending = true;
-		const error = await performHandoff(pi, ctx, "Continue current work", "compactHook");
+		// Build context from preparation data — already the right subset
+		const { preparation } = event;
+		const conversationText = serializeConversation(
+			convertToLlm(preparation.messagesToSummarize),
+		);
+
+		let contextForHandoff = "";
+		if (preparation.previousSummary) {
+			contextForHandoff += `## Previous Context\n\n${preparation.previousSummary}\n\n`;
+		}
+		contextForHandoff += `## Recent Conversation\n\n${conversationText}`;
+
+		const error = await performHandoff(pi, ctx, "Continue current work", "compactHook", contextForHandoff);
 		if (error) {
-			handoffPending = false;
 			ctx.ui.notify(`Handoff failed: ${error}. Compacting instead.`, "warning");
-			return; // fall through to normal compaction
+			return;
 		}
 
 		return { cancel: true };
-	});
-
-	// Clear guard when a real session switch occurs.
-	pi.on("session_switch", async (_event, ctx) => {
-		handoffPending = false;
-		if (ctx.hasUI) {
-			ctx.ui.setStatus("handoff-warning", undefined);
-		}
 	});
 
 	// --- /handoff command ---
@@ -380,28 +326,4 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
-	// --- /context command ---
-	pi.registerCommand("context", {
-		description: "Show current context usage",
-		handler: async (_args, ctx) => {
-			if (!ctx.hasUI) return;
-
-			const usage = checkContextUsage(ctx);
-			if (!usage) {
-				ctx.ui.notify("Context usage unavailable", "warning");
-				return;
-			}
-
-			const pct = Math.round(usage.percent * 100);
-			const tokensK = Math.round(usage.tokens / 1000);
-			const limitK = Math.round(usage.limit / 1000);
-
-			let message = `Context: ${pct}% (${tokensK}k / ${limitK}k tokens)`;
-			if (usage.percent >= CONTEXT_WARNING_THRESHOLD) {
-				message += " - consider /handoff";
-			}
-
-			ctx.ui.notify(message, usage.percent >= CONTEXT_WARNING_THRESHOLD ? "warning" : "info");
-		},
-	});
 }

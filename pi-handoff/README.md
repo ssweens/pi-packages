@@ -6,7 +6,7 @@ Combines the best approaches from [pi-amplike](https://github.com/pasky/pi-ampli
 
 - **User preview/editing** — Review and edit the handoff draft before submission
 - **Agent-callable handoff tool** — The model can initiate handoffs when explicitly asked
-- **Context monitoring** — Automatic warning when context reaches 80% capacity
+- **Auto-handoff on compaction** — Uses Pi's preparation data so summaries won't overflow
 - **Structured format** — Bullet list with code pointers (path:line or path#Symbol)
 - **Parent session query** — `session_query` tool for looking up details from parent sessions
 - **Auto-inject skill** — Detects `Parent session:` references and enables query instructions automatically
@@ -97,17 +97,7 @@ If you choose handoff:
 
 If you decline, normal compaction proceeds as usual.
 
-**Requires `compaction.enabled = true`** (the default). When auto-compaction is disabled, this hook never fires — use `/handoff` manually instead. The status bar warning at 80% context still appears regardless.
-
-### Context Monitoring
-
-A status bar warning appears when context usage exceeds 80%:
-
-```
-⚠️ Context 85% full (170k/200k) - consider /handoff
-```
-
-Use `/context` to check current usage anytime.
+**Requires `compaction.enabled = true`** (the default). When auto-compaction is disabled, this hook never fires — use `/handoff` manually instead.
 
 ### `session_query` Tool — Cross-Session Context
 
@@ -121,16 +111,6 @@ session_query("/path/to/parent/session.jsonl", "What approach was chosen for aut
 **Auto-injection:** When a user message contains a `**Parent session:**` reference, the extension prepends `/skill:pi-session-query` inline with the prompt body (single-submit flow, no extra Enter round-trip). No manual directive needed in handoff prompts.
 
 **Size guard:** Large parent sessions are truncated (keeping the most recent context) to prevent exceeding context limits during the query.
-
-### `/context` — Usage Check
-
-Quick check of current context utilization:
-
-```
-/context
-```
-
-Shows: `Context: 65% (130k / 200k tokens)`
 
 ## Handoff Format
 
@@ -178,7 +158,6 @@ The `/skill:pi-session-query` directive is auto-injected when this prompt is sub
 | `/handoff` command | ✅ | ✅ | ✅ |
 | Agent-callable tool | ✅ | ❌ | ✅ |
 | User preview/edit | ❌ | ✅ | ✅ |
-| Context monitoring | ❌ | ✅ | ✅ |
 | Auto-handoff on compact | ❌ | ❌ | ✅ |
 | Parent query tool | ✅ | ✅ | ✅ |
 | Structured bullets | ❌ | ✅ | ✅ |
@@ -208,7 +187,7 @@ Use pi's built-in `/resume` command to switch between sessions. Handoff creates 
 
 | Component | Type | Description |
 |-----------|------|-------------|
-| [handoff.ts](extensions/handoff.ts) | Extension | `/handoff` command, `handoff` tool, `/context` command, context monitoring, system prompt hints, auto-inject skill |
+| [handoff.ts](extensions/handoff.ts) | Extension | `/handoff` command, `handoff` tool, auto-handoff on compaction, system prompt hints |
 | [session-query.ts](extensions/session-query.ts) | Extension | `session_query` tool for the model (with size guard) |
 | [pi-session-query/SKILL.md](skills/pi-session-query/SKILL.md) | Skill | Instructions for using `session_query` |
 
