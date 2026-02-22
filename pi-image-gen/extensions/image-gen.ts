@@ -18,7 +18,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { getAgentDir, CONFIG_DIR_NAME } from "@mariozechner/pi-coding-agent";
+import { getAgentDir } from "@mariozechner/pi-coding-agent";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { AgentToolResult, AgentToolUpdateCallback } from "@mariozechner/pi-agent-core";
 import { Container, fuzzyFilter, getEditorKeybindings, Input, Spacer, Text } from "@mariozechner/pi-tui";
@@ -91,7 +91,7 @@ function globalConfigPath(): string {
 
 function loadConfig(cwd: string): ExtensionConfig {
   const globalConfig = readJsonFile(globalConfigPath());
-  const projectConfig = readJsonFile(join(cwd, CONFIG_DIR_NAME, "settings", "pi-image-gen.json"));
+  const projectConfig = readJsonFile(join(getAgentDir(), "settings", "pi-image-gen.json"));
   return { ...globalConfig, ...projectConfig } as ExtensionConfig;
 }
 

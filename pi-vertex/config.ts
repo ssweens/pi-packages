@@ -13,7 +13,7 @@
  *   }
  */
 
-import { getAgentDir, CONFIG_DIR_NAME } from "@mariozechner/pi-coding-agent";
+import { getAgentDir } from "@mariozechner/pi-coding-agent";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
@@ -57,19 +57,7 @@ function loadGlobalConfig(): VertexConfig {
   }
 }
 
-/** Load config, merging global settings with project-level overrides.
- *  Project config wins on any key it defines. */
-export function loadConfig(cwd: string = process.cwd()): VertexConfig {
-  const global = loadGlobalConfig();
-  const projectPath = join(cwd, CONFIG_DIR_NAME, "settings", "pi-vertex.json");
-
-  if (!existsSync(projectPath)) return global;
-
-  try {
-    const project = JSON.parse(readFileSync(projectPath, "utf-8")) as VertexConfig;
-    return { ...global, ...project };
-  } catch (err) {
-    console.warn(`[pi-vertex] Failed to parse ${projectPath}: ${err}`);
-    return global;
-  }
+/** Load config from global settings. */
+export function loadConfig(): VertexConfig {
+  return loadGlobalConfig();
 }
