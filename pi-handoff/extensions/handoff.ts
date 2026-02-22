@@ -24,6 +24,10 @@ import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@mariozechner
 import { BorderedLoader, convertToLlm, serializeConversation } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 
+// Store pending handoff text to be set in new session after switch
+// Key: parent session file path, Value: handoff text to set in editor
+const pendingHandoffText = new Map<string, string>();
+
 // Handoff generation system prompt.
 //
 // Combines Pi's structured compaction format (Goal, Progress, Decisions,
@@ -206,6 +210,17 @@ async function performHandoff(
 
 	fullPrompt += result;
 
+	// Prepend session-query skill if parent session present
+	const messageToSend = /\*\*Parent session:\*\*/.test(fullPrompt)
+		? `/skill:pi-session-query ${fullPrompt}`
+		: fullPrompt;
+
+	// Store the handoff text for the session_switch event to pick up
+	// We use the parent session file as key since that's what we pass to newSession
+	if (currentSessionFile) {
+		pendingHandoffText.set(currentSessionFile, messageToSend);
+	}
+
 	// Create new session immediately
 	// Use ctx.newSession if available (command mode), otherwise use sessionManager directly
 	if ("newSession" in ctx && typeof ctx.newSession === "function") {
@@ -214,6 +229,10 @@ async function performHandoff(
 		});
 
 		if (newSessionResult.cancelled) {
+			// Clean up pending text if cancelled
+			if (currentSessionFile) {
+				pendingHandoffText.delete(currentSessionFile);
+			}
 			return "New session cancelled.";
 		}
 	} else {
@@ -224,19 +243,30 @@ async function performHandoff(
 
 	pi.setSessionName(goalToSessionName(goal));
 
-	// Prepend session-query skill if parent session present
-	const messageToSend = /\*\*Parent session:\*\*/.test(fullPrompt)
-		? `/skill:pi-session-query ${fullPrompt}`
-		: fullPrompt;
-
-	// Place in input box - user can edit and press Enter once to send
-	ctx.ui.setEditorText(messageToSend);
-	ctx.ui.notify("Handoff ready - edit if needed and press Enter to send", "info");
-
 	return undefined;
 }
 
 export default function (pi: ExtensionAPI) {
+	// --- Session switch handler ---
+	// When switching to a new session (e.g., after handoff), check if there's
+	// pending handoff text to set in the editor.
+	pi.on("session_switch", async (event, ctx) => {
+		if (event.reason !== "new" || !ctx.hasUI) return;
+
+		// Get the parent session from the session header
+		const header = ctx.sessionManager.getHeader();
+		const parentSession = header?.parentSession;
+		if (!parentSession) return;
+
+		// Check if there's pending handoff text for this parent session
+		const text = pendingHandoffText.get(parentSession);
+		if (text) {
+			ctx.ui.setEditorText(text);
+			ctx.ui.notify("Handoff ready - edit if needed and press Enter to send", "info");
+			pendingHandoffText.delete(parentSession);
+		}
+	});
+
 	// --- System prompt hint ---
 	// Inject handoff awareness into the system prompt so the model
 	// can proactively suggest handoffs at high context usage.
