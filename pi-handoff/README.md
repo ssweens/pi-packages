@@ -1,8 +1,14 @@
 # pi-handoff
 
-Enhanced handoff extension for [pi](https://github.com/badlogic/pi-mono) — context management for agentic coding workflows.
+![pi-handoff command](screenshot.png)
 
-Combines the best approaches from [pi-amplike](https://github.com/pasky/pi-amplike) and [mina](https://github.com/ssweens/mina):
+```bash
+pi install @ssweens/pi-handoff
+```
+
+Context handoff extension for [pi](https://github.com/badlogic/pi-mono). Transfer context to a new session with a structured summary — the agent can trigger handoffs, or they happen automatically on compaction.
+
+## Features
 
 - **User preview/editing** — Review and edit the handoff draft before submission
 - **Agent-callable handoff tool** — The model can initiate handoffs when explicitly asked

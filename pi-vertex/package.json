@@ -13,7 +13,8 @@
     "models/",
     "streaming/",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "screenshot.png"
   ],
   "scripts": {
     "clean": "echo 'nothing to clean'",
@@ -29,9 +30,18 @@
     "@mariozechner/pi-coding-agent": "*"
   },
   "pi": {
-    "extensions": ["./index.ts"]
+    "extensions": [
+      "./index.ts"
+    ]
   },
-  "keywords": ["pi-package", "pi-extension", "vertex-ai", "gemini", "claude", "maas"],
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "vertex-ai",
+    "gemini",
+    "claude",
+    "maas"
+  ],
   "author": "ssweens",
   "license": "MIT"
 }

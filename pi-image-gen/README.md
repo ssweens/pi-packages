@@ -1,8 +1,12 @@
 # pi-image-gen
 
-> Provider-agnostic image generation [Pi package](https://shittycodingagent.ai/packages). Generate images from any provider — OpenAI, Google, OpenRouter — with a single `generate_image` tool.
+![pi-image-gen model selector](screenshot.png)
 
-Mirrors Pi's text model architecture: built-in models discovered at build time, custom models via config, API keys resolved through Pi's ModelRegistry, runtime discovery from OpenRouter with 24h caching.
+```bash
+pi install @ssweens/pi-image-gen
+```
+
+Image generation extension for [pi](https://github.com/badlogic/pi-mono). Adds a `generate_image` tool and `/image-model` selector. Supports OpenAI, Google, and OpenRouter providers, with runtime discovery of new models from OpenRouter.
 
 ## Features
 

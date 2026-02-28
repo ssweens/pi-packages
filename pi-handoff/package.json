@@ -2,7 +2,9 @@
   "name": "@ssweens/pi-handoff",
   "version": "1.0.0",
   "description": "Enhanced handoff extension for pi - context management for agentic coding workflows",
-  "keywords": ["pi-package"],
+  "keywords": [
+    "pi-package"
+  ],
   "type": "module",
   "license": "MIT",
   "author": "ssweens",
@@ -10,11 +12,16 @@
     "extensions/",
     "skills/",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "screenshot.png"
   ],
   "pi": {
-    "extensions": ["extensions"],
-    "skills": ["skills"]
+    "extensions": [
+      "extensions"
+    ],
+    "skills": [
+      "skills"
+    ]
   },
   "peerDependencies": {
     "@mariozechner/pi-ai": "*",

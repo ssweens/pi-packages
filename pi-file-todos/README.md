@@ -1,8 +1,10 @@
 # pi-file-todos
 
-A [pi](https://github.com/mariozechner/pi-coding-agent) skill package that gives your coding agent a **file-based todo tracking system** — structured markdown files in a `todos/` directory with YAML frontmatter, lifecycle management, dependency tracking, and triage workflows.
+```bash
+pi install @ssweens/pi-file-todos
+```
 
-No database. No external service. Just markdown files that live in your repo, tracked by git, readable by humans and agents alike.
+File-based todo tracking skill for [pi](https://github.com/badlogic/pi-mono). Todos are markdown files with YAML frontmatter in a `todos/` directory — version controlled, readable by humans and agents, no external dependencies.
 
 ## Why file-based todos?
 

@@ -3,7 +3,15 @@
 [![npm version](https://img.shields.io/npm/v/@ssweens/pi-vertex)](https://www.npmjs.com/package/@ssweens/pi-vertex)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Google Vertex AI provider extension for [Pi coding agent](https://github.com/nicobailon/pi-coding-agent). Access Gemini, Claude, and 25+ open models through a unified interface — all billed through your existing GCP project.
+![pi-vertex model selector](screenshot.png)
+
+```bash
+pi install @ssweens/pi-vertex
+export GOOGLE_CLOUD_PROJECT=your-project-id
+export GOOGLE_APPLICATION_CREDENTIALS=/path/to/key.json
+```
+
+Set your GCP project and credentials. Vertex AI models (Gemini, Claude, Llama, DeepSeek, Qwen, Mistral, and others) appear in pi's model selector, billed through your GCP project.
 
 ## Features
 

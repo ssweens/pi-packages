@@ -1,8 +1,12 @@
 # pi-plan-mode
 
-> **Safe exploration mode for [pi](https://github.com/nickarino/pi-coding-agent)** — read freely, write only with permission.
+![pi-plan-mode commands](screenshot.png)
 
-Plan Mode gives you a read-only sandbox for code exploration. All read operations work freely while file modifications and destructive commands require explicit approval — so you can explore, analyze, and plan with confidence before committing to changes.
+```bash
+pi install @ssweens/pi-plan-mode
+```
+
+Read-only exploration mode for [pi](https://github.com/badlogic/pi-mono). The agent can read anything freely, but file writes and destructive commands require your approval. Toggle with `/plan` or `Alt+P`.
 
 ## Features
 

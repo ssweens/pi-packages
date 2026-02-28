@@ -3,14 +3,20 @@
   "version": "1.0.0",
   "type": "module",
   "description": "Plan mode for pi - read-only exploration before execution",
-  "keywords": ["pi-package", "plan-mode", "safe-mode", "read-only"],
+  "keywords": [
+    "pi-package",
+    "plan-mode",
+    "safe-mode",
+    "read-only"
+  ],
   "author": "ssweens",
   "license": "MIT",
   "files": [
     "extensions/",
     "skills/",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "screenshot.png"
   ],
   "peerDependencies": {
     "@mariozechner/pi-ai": "*",
@@ -18,7 +24,11 @@
     "@mariozechner/pi-coding-agent": "*"
   },
   "pi": {
-    "extensions": ["./extensions"],
-    "skills": ["./skills"]
+    "extensions": [
+      "./extensions"
+    ],
+    "skills": [
+      "./skills"
+    ]
   }
 }

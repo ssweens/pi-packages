@@ -1,8 +1,10 @@
 # pi-dynamic-models
 
-Dynamic model discovery for Pi coding agent.
+```bash
+pi install @ssweens/pi-dynamic-models
+```
 
-Reads a config file at startup, calls `GET /models` on each configured server, and registers every discovered model — no manual model list maintenance required. Supports any Pi API type: OpenAI-compatible, Anthropic, Google, and custom proxies.
+Dynamic model discovery for [pi](https://github.com/badlogic/pi-mono). Point it at any OpenAI-compatible, Anthropic, or Google API server and it fetches available models at startup — no manual model list needed.
 
 ## Setup
 

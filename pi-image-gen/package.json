@@ -5,19 +5,24 @@
   "description": "Provider-agnostic image generation for Pi coding agent",
   "author": "ssweens",
   "license": "MIT",
-  "keywords": ["pi-package"],
+  "keywords": [
+    "pi-package"
+  ],
   "files": [
     "extensions/",
     "lib/",
     "scripts/",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "screenshot.png"
   ],
   "scripts": {
     "generate-models": "npx tsx scripts/generate-image-models.ts"
   },
   "pi": {
-    "extensions": ["./extensions"]
+    "extensions": [
+      "./extensions"
+    ]
   },
   "peerDependencies": {
     "@mariozechner/pi-ai": "*",
