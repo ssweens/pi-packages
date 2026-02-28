@@ -1,5 +1,7 @@
 # pi-packages
 
+> ⚠️ **Work in progress.** These packages are under active development. Configs, APIs, and formats may change at any time without backward compatibility or deprecation notices.
+
 Extension packages for [pi](https://github.com/badlogic/pi-mono).
 
 ## Packages
