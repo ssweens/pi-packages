@@ -85,8 +85,6 @@ export default function (pi: ExtensionAPI) {
     return;
   }
 
-  console.log(`[pi-vertex] Initializing with project: ${projectId}`);
-
   // Register the provider
   pi.registerProvider("vertex", {
     // Use a placeholder baseUrl (actual URLs built per-request based on model region)
@@ -112,7 +110,20 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  console.log(`[pi-vertex] Registered ${ALL_MODELS.length} models`);
+  // Show startup info as a widget that clears on first user input
+  const vertexStartupLines = [
+    `[pi-vertex] Initializing with project: ${projectId}`,
+    `[pi-vertex] Registered ${ALL_MODELS.length} models`,
+  ];
+  pi.on("session_start", async (_event, ctx) => {
+    ctx.ui.setWidget("pi-vertex-startup", (_tui, theme) => ({
+      render: () => [...vertexStartupLines.map(l => theme.fg("muted", l)), ""],
+      invalidate: () => {},
+    }));
+  });
+  pi.on("input", async (_event, ctx) => {
+    ctx.ui.setWidget("pi-vertex-startup", undefined);
+  });
 }
 
 // Export types and utilities for advanced usage

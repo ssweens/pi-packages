@@ -160,6 +160,8 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   const servers = loadConfig();
   if (servers.length === 0) return;
 
+  const startupLines: string[] = [];
+
   await Promise.all(
     servers.map(async ({ provider, baseUrl, apiKey, api, compat, models: modelOverrides }) => {
       // Fetch remote model IDs — fall back gracefully if unreachable
@@ -169,9 +171,9 @@ export default async function (pi: ExtensionAPI): Promise<void> {
         fetchedIds = fetched.map((m) => m.id);
       } catch (err) {
         if (modelOverrides && Object.keys(modelOverrides).length > 0) {
-          console.warn(`[pi-dynamic-models] Could not reach ${baseUrl}/models (${err}), using configured models only`);
+          startupLines.push(`[pi-dynamic-models] Could not reach ${baseUrl}/models (${err}), using configured models only`);
         } else {
-          console.warn(`[pi-dynamic-models] Could not reach ${baseUrl}/models: ${err}`);
+          startupLines.push(`[pi-dynamic-models] Could not reach ${baseUrl}/models: ${err}`);
           return;
         }
       }
@@ -180,7 +182,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
       const allIds = new Set<string>([...fetchedIds, ...Object.keys(modelOverrides ?? {})]);
 
       if (allIds.size === 0) {
-        console.warn(`[pi-dynamic-models] No models for provider "${provider}"`);
+        startupLines.push(`[pi-dynamic-models] No models for provider "${provider}"`);
         return;
       }
 
@@ -211,9 +213,22 @@ export default async function (pi: ExtensionAPI): Promise<void> {
       const overrideNote = Object.keys(modelOverrides ?? {}).length > 0
         ? `, ${Object.keys(modelOverrides!).length} configured`
         : "";
-      console.log(
+      startupLines.push(
         `[pi-dynamic-models] Provider "${provider}": ${fetchedNote}${overrideNote}, ${allIds.size} total (${api ?? "openai-completions"})`
       );
     })
   );
+
+  // Show startup info as a widget that clears on first user input
+  if (startupLines.length > 0) {
+    pi.on("session_start", async (_event, ctx) => {
+      ctx.ui.setWidget("pi-dynamic-models-startup", (_tui, theme) => ({
+        render: () => [...startupLines.map(l => theme.fg("muted", l)), ""],
+        invalidate: () => {},
+      }));
+    });
+    pi.on("input", async (_event, ctx) => {
+      ctx.ui.setWidget("pi-dynamic-models-startup", undefined);
+    });
+  }
 }
