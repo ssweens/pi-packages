@@ -20,7 +20,7 @@ Add to your Pi agent settings (`~/.pi/agent/settings.json`):
 
 ### 2. Create the config file
 
-Create `~/.pi/agent/config/pi-dynamic-models.json`:
+Create `~/.pi/agent/settings/pi-dynamic-models.json`:
 
 ```json
 [
@@ -116,7 +116,7 @@ Discovered models use conservative defaults (`contextWindow: 128000`, `maxTokens
 
 ## Troubleshooting
 
-**No models appear**: Check that the config file exists at `~/.pi/agent/config/pi-dynamic-models.json` and the server is reachable.
+**No models appear**: Check that the config file exists at `~/.pi/agent/settings/pi-dynamic-models.json` and the server is reachable.
 
 **Wrong API behavior**: Set the correct `api` field for your server type.
 

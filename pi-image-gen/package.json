@@ -1,9 +1,18 @@
 {
   "name": "@ssweens/pi-image-gen",
   "version": "0.2.0",
+  "type": "module",
   "description": "Provider-agnostic image generation for Pi coding agent",
-  "keywords": ["pi-package"],
+  "author": "ssweens",
   "license": "MIT",
+  "keywords": ["pi-package"],
+  "files": [
+    "extensions/",
+    "lib/",
+    "scripts/",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "generate-models": "npx tsx scripts/generate-image-models.ts"
   },

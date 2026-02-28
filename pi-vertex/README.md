@@ -1,11 +1,14 @@
 # pi-vertex
 
-Google Vertex AI provider extension for Pi coding agent. Access Gemini, Claude, and 25+ open models through a unified interface.
+[![npm version](https://img.shields.io/npm/v/@ssweens/pi-vertex)](https://www.npmjs.com/package/@ssweens/pi-vertex)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
+Google Vertex AI provider extension for [Pi coding agent](https://github.com/nicobailon/pi-coding-agent). Access Gemini, Claude, and 25+ open models through a unified interface — all billed through your existing GCP project.
 
 ## Features
 
-- **42 models** across 4 categories:
-  - **Gemini** (7): 2.5 Pro, 2.5 Flash, 2.0 Flash, 3 Pro (preview), etc.
+- **43 models** across 4 categories:
+  - **Gemini** (8): 3.1 Pro, 3 Pro, 3 Flash, 2.5 Pro, 2.5 Flash, 2.0 Flash, and more
   - **Claude** (12): Opus 4.6, Sonnet 4.6, 4.5, 4.1, 4, 3.7 Sonnet, 3.5 Sonnet v2, 3.5 Sonnet, 3 Haiku
   - **Llama** (3): 4 Maverick, 4 Scout, 3.3 70B
   - **Other MaaS** (20): AI21 Jamba, Mistral, DeepSeek, Qwen, OpenAI GPT-OSS, Kimi, MiniMax, GLM
@@ -19,11 +22,11 @@ Google Vertex AI provider extension for Pi coding agent. Access Gemini, Claude, 
 ## Installation
 
 ```bash
-# From the pi-vertex directory
-pi install ../playbook/packages/pi-vertex
+# Via pi (recommended)
+pi install @ssweens/pi-vertex
 
-# Or via path
-pi install /path/to/pi-vertex
+# Or via npm
+npm install @ssweens/pi-vertex
 ```
 
 ## Setup
@@ -48,7 +51,21 @@ export GOOGLE_CLOUD_PROJECT=your-project-id
 export GOOGLE_CLOUD_LOCATION=us-central1
 ```
 
-### 3. Verify setup
+### 3. Configuration file (optional)
+
+For persistent settings, create `~/.pi/agent/settings/pi-vertex.json`:
+
+```json
+{
+  "googleCloudProject": "my-gcp-project",
+  "googleCloudLocation": "us-central1",
+  "googleApplicationCredentials": "/path/to/service-account.json"
+}
+```
+
+Config file values take priority over environment variables.
+
+### 4. Verify setup
 
 ```bash
 pi --provider vertex --model gemini-2.5-pro --version
@@ -90,6 +107,7 @@ alias pil="GOOGLE_CLOUD_PROJECT=your-project pi --provider vertex --model llama-
 
 | Model | Context | Max Tokens | Input | Reasoning | Price (in/out) |
 |-------|---------|------------|-------|-----------|----------------|
+| gemini-3.1-pro | 1M | 64,000 | text, image | ✅ | $2.00/$12.00 |
 | gemini-3-pro | 2M | 8,192 | text, image | ✅ | $1.25/$10.00 |
 | gemini-3-flash | 1M | 8,192 | text, image | ✅ | $0.15/$0.60 |
 | gemini-2.5-pro | 1M | 64,000 | text, image | ✅ | $1.25/$10.00 |

@@ -3,6 +3,18 @@
   "version": "1.0.0",
   "description": "Google Vertex AI provider for Pi coding agent - supports Gemini, Claude, and all MaaS models",
   "type": "module",
+  "main": "index.ts",
+  "files": [
+    "index.ts",
+    "auth.ts",
+    "config.ts",
+    "types.ts",
+    "utils.ts",
+    "models/",
+    "streaming/",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "clean": "echo 'nothing to clean'",
     "build": "echo 'nothing to build'",
@@ -20,6 +32,6 @@
     "extensions": ["./index.ts"]
   },
   "keywords": ["pi-package", "pi-extension", "vertex-ai", "gemini", "claude", "maas"],
-  "author": "",
+  "author": "ssweens",
   "license": "MIT"
 }

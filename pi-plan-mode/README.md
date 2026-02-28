@@ -1,39 +1,44 @@
 # pi-plan-mode
 
-A pi package that provides Plan Mode - a safe exploration mode with permission gates for file modifications, similar to Claude Code's Plan mode.
+> **Safe exploration mode for [pi](https://github.com/nickarino/pi-coding-agent)** — read freely, write only with permission.
+
+Plan Mode gives you a read-only sandbox for code exploration. All read operations work freely while file modifications and destructive commands require explicit approval — so you can explore, analyze, and plan with confidence before committing to changes.
 
 ## Features
 
-- **Permission-gated exploration** - Read-only by default, writes require approval
-- **Just-in-time permissions** - Approve individual edit/write operations during plan mode
-- **Bash allowlist** - Safe commands execute freely, others prompt for permission
-- **Simple toggle** - Enter/exit plan mode with `/plan` or `Alt+P`
-- **Session persistence** - Plan mode state survives session resume
-- **Keyboard shortcut** - Quick toggle with `Alt+P` (Option+P on Mac)
+- **Permission-gated exploration** — read-only by default, writes require approval
+- **Just-in-time permissions** — approve or deny individual edit/write operations inline
+- **Bash allowlist** — safe commands execute freely, destructive ones prompt for permission
+- **Simple toggle** — enter/exit plan mode with `/plan` or `Alt+P` (Option+P on Mac)
+- **CLI flag** — start pi directly in plan mode with `pi --plan`
+- **Session persistence** — plan mode state survives session resume
+- **Agent-aware** — includes a skill that teaches the agent how to behave in plan mode
 
 ## Installation
 
-### Method 1: Local Path (Recommended for development)
-
 ```bash
-# Clone or copy this package to a directory, then:
+# Install from a local path
 pi install /path/to/pi-plan-mode
 
-# Or for project-local installation:
+# Or project-local installation
 pi install -l /path/to/pi-plan-mode
 ```
 
-### Method 2: From Git (if published)
+After installation, your pi settings will include:
 
-```bash
-pi install git:github.com/yourusername/pi-plan-mode
+```json
+{
+  "packages": [
+    "/path/to/pi-plan-mode"
+  ]
+}
 ```
 
 ## Usage
 
 ### Toggle Plan Mode
 
-```bash
+```
 /plan                    # Toggle plan mode on/off
 Alt+P (Option+P on Mac) # Keyboard shortcut
 ```
@@ -46,27 +51,33 @@ pi --plan               # Start pi directly in plan mode
 
 ### Workflow
 
-1. **Enter Plan Mode** - Use `/plan` or `Alt+P` (Option+P on Mac)
-2. **Explore safely** - Read tools work freely; writes prompt for permission
-3. **Exit when ready** - Toggle off plan mode (`/plan` or `Alt+P`) to execute changes
+1. **Enter Plan Mode** — `/plan` or `Alt+P`
+2. **Explore safely** — read, search, and analyze with zero risk
+3. **Approve edits on demand** — if the agent needs to fix something, you approve each operation individually
+4. **Exit when ready** — toggle off to restore full tool access and execute your plan
 
 ## Permission Gates
 
 During plan mode, operations fall into three categories:
 
-### Always Allowed
-- `read` - Read file contents
-- `grep` - Search within files
-- `find` - Find files
-- `ls` - List directories
-- `bash` - Allowlisted safe commands
-- `questionnaire` - Ask clarifying questions
+### ✅ Always Allowed
 
-### Requires Permission
-These operations prompt you for approval:
-- `edit` - File modifications
-- `write` - File creation/overwriting
-- **Non-allowlisted bash commands** - Any command outside the safe list
+| Tool | Description |
+|------|-------------|
+| `read` | Read file contents |
+| `bash` | Allowlisted safe commands only |
+| `grep` | Search within files |
+| `find` | Find files |
+| `ls` | List directories |
+| `questionnaire` | Ask clarifying questions |
+
+### ⚠️ Requires Permission
+
+These operations show a permission dialog before executing:
+
+- **`edit`** — file modifications
+- **`write`** — file creation/overwriting
+- **Non-allowlisted bash commands** — anything outside the safe list
 
 ### Permission Dialog
 
@@ -74,35 +85,32 @@ When a gated operation is attempted, you'll see:
 
 ```
 ┌─────────────────────────────────────────┐
-│ Plan Mode: Write Permission Required    │
+│ ⚠ Plan Mode — edit: /path/to/file.ts   │
 ├─────────────────────────────────────────┤
-│ Allow edit operation on:                │
-│ /path/to/file.ts                        │
-│                                         │
-│ This will modify files outside of plan  │
-│ mode.                                   │
-├─────────────────────────────────────────┤
-│  [Allow]        [Deny]                  │
+│  [Allow]  [Deny]  [Deny with feedback]  │
 └─────────────────────────────────────────┘
 ```
+
+Choose **Deny with feedback** to tell the agent _why_ you denied the operation — the feedback is injected into the conversation so the agent can adjust its approach.
 
 ## Bash Command Categories
 
 ### Safe Commands (No Prompt)
-- `cat`, `head`, `tail`, `less`, `more`
-- `grep`, `find`, `rg`, `fd`
-- `ls`, `pwd`, `tree`
-- `git status`, `git log`, `git diff`, `git branch`
-- `npm list`, `npm outdated`
-- `curl`, `jq`, `uname`, `whoami`
 
-### Require Permission Prompt
-- `rm`, `mv`, `cp`, `mkdir`, `touch`
-- `git add`, `git commit`, `git push`
-- `npm install`, `yarn add`, `pip install`
-- `sudo`, `kill`, `reboot`
-- `>`, `>>` (redirections)
-- Any command not in the safe list
+- **File inspection:** `cat`, `head`, `tail`, `less`, `more`
+- **Search:** `grep`, `find`, `rg`, `fd`
+- **Directory:** `ls`, `pwd`, `tree`
+- **Git (read-only):** `git status`, `git log`, `git diff`, `git branch`
+- **Package info:** `npm list`, `npm outdated`
+- **Utilities:** `curl`, `jq`, `uname`, `whoami`, `date`
+
+### Blocked Commands (Prompt Required)
+
+- **File mutation:** `rm`, `mv`, `cp`, `mkdir`, `touch`
+- **Git writes:** `git add`, `git commit`, `git push`, `git rebase`
+- **Package installs:** `npm install`, `yarn add`, `pip install`
+- **System:** `sudo`, `kill`, `reboot`
+- **Redirections:** `>`, `>>`
 
 ## Architecture
 
@@ -110,39 +118,29 @@ When a gated operation is attempted, you'll see:
 pi-plan-mode/
 ├── package.json          # Package manifest with pi configuration
 ├── extensions/
-│   ├── index.ts         # Main extension logic
+│   ├── index.ts          # Extension: commands, shortcuts, permission gates
 │   └── lib/
-│       └── utils.ts     # Bash command filtering utilities
+│       └── utils.ts      # Bash command classification (safe vs destructive)
 ├── skills/
 │   └── plan-mode/
-│       └── SKILL.md     # Skill documentation for the agent
+│       └── SKILL.md      # Skill: teaches the agent plan mode behavior
+├── LICENSE
 └── README.md
 ```
 
-The package provides:
-- **Extension** - Core functionality, permission gates
-- **Skill** - Documentation that helps the agent understand plan mode
+The package provides two pi primitives:
 
-## Configuration
-
-After installation, your pi settings will include:
-
-```json
-{
-  "packages": [
-    "/path/to/pi-plan-mode"
-  ]
-}
-```
+- **Extension** (`extensions/`) — registers the `/plan` command, `Alt+P` shortcut, permission gates on `tool_call` events, and context injection via `before_agent_start`
+- **Skill** (`skills/`) — documents plan mode behavior so the agent understands its constraints and workflow
 
 ## Development
 
-To modify or extend:
-
-1. Edit files in the package directory
-2. Run `/reload` in pi to hot-reload the extension
-3. Test with `/plan` command
+```bash
+# Edit files in the package directory, then:
+/reload    # Hot-reload the extension in pi
+/plan      # Test plan mode
+```
 
 ## License
 
-MIT
+[MIT](LICENSE)

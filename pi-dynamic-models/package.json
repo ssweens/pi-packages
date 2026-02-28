@@ -15,7 +15,12 @@
   "pi": {
     "extensions": ["./index.ts"]
   },
+  "files": [
+    "index.ts",
+    "README.md",
+    "LICENSE"
+  ],
   "keywords": ["pi-extension", "pi-package", "dynamic-models", "openai-compatible", "local-llm"],
-  "author": "",
+  "author": "ssweens",
   "license": "MIT"
 }

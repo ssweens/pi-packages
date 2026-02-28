@@ -15,22 +15,28 @@ Combines the best approaches from [pi-amplike](https://github.com/pasky/pi-ampli
 
 ## Installation
 
+### From npm
+
+```bash
+pi install @ssweens/pi-handoff
+```
+
 ### From git (global)
 
 ```bash
-pi install git:github.com/ssweens/playbook
+pi install git:github.com/ssweens/pi-handoff
 ```
 
 ### From git (project-local)
 
 ```bash
-pi install -l git:github.com/ssweens/playbook
+pi install -l git:github.com/ssweens/pi-handoff
 ```
 
 ### Try without installing
 
 ```bash
-pi -e git:github.com/ssweens/playbook
+pi -e git:github.com/ssweens/pi-handoff
 ```
 
 ### From local path (development)
@@ -40,7 +46,7 @@ Add to your settings (`~/.pi/agent/settings.json` or `.pi/settings.json`):
 ```json
 {
   "packages": [
-    "/path/to/playbook/packages/pi-handoff"
+    "/path/to/pi-handoff"
   ]
 }
 ```

@@ -1,10 +1,16 @@
 {
   "name": "@ssweens/pi-file-todos",
   "version": "1.0.0",
-  "description": "File-based todo tracking skill package for pi",
-  "keywords": ["pi-package", "todo", "skills", "workflow"],
-  "author": "",
+  "type": "module",
+  "description": "File-based todo tracking skill package for pi — structured markdown todos with lifecycle management, dependency tracking, and agentic workflow integration",
+  "keywords": ["pi-package", "todo", "skills", "workflow", "agentic", "coding-agent", "project-management"],
+  "author": "ssweens",
   "license": "MIT",
+  "files": [
+    "skills/",
+    "README.md",
+    "LICENSE"
+  ],
   "pi": {
     "skills": ["./skills"]
   }

@@ -4,6 +4,14 @@
   "description": "Enhanced handoff extension for pi - context management for agentic coding workflows",
   "keywords": ["pi-package"],
   "type": "module",
+  "license": "MIT",
+  "author": "ssweens",
+  "files": [
+    "extensions/",
+    "skills/",
+    "README.md",
+    "LICENSE"
+  ],
   "pi": {
     "extensions": ["extensions"],
     "skills": ["skills"]
