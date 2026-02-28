@@ -17,6 +17,7 @@ export function streamMaaS(
   const stream = createAssistantMessageEventStream();
 
   (async () => {
+    const originalFetch = globalThis.fetch;
     try {
       // Priority: config file > env var > model region > default
       const location = resolveLocation(model.region);
@@ -27,8 +28,10 @@ export function streamMaaS(
       const endpoint = `${baseUrl}/endpoints/openapi`;
       // Create a model object compatible with pi-ai's OpenAI streaming.
       // Note: baseUrl must point to the OpenAPI root; pi-ai appends /chat/completions.
+      // Use model.id (registered name like "glm-5") so pi can restore sessions correctly.
+      // The actual API model name (apiId like "zai-org/glm-5-maas") is injected via fetch interceptor below.
       const modelForPi: Model<"openai-completions"> = {
-        id: model.apiId, // Use the full API ID with publisher prefix
+        id: model.id,
         name: model.name,
         api: "openai-completions",
         provider: "vertex",
@@ -48,6 +51,21 @@ export function streamMaaS(
         },
       };
 
+      // Intercept fetch to replace model.id with the actual API model name (apiId)
+      // pi-ai's streaming uses model.id in the request body, but Vertex MaaS needs the full publisher-prefixed name
+      globalThis.fetch = async (input: any, init?: any) => {
+        if (init?.body && typeof init.body === "string") {
+          try {
+            const body = JSON.parse(init.body);
+            if (body.model === model.id) {
+              body.model = model.apiId;
+              init = { ...init, body: JSON.stringify(body) };
+            }
+          } catch {}
+        }
+        return originalFetch(input, init);
+      };
+
       // Delegate to pi-ai's built-in OpenAI streaming
       const innerStream = streamSimpleOpenAICompletions(
         modelForPi,
@@ -64,9 +82,11 @@ export function streamMaaS(
       for await (const event of innerStream) {
         stream.push(event);
       }
+      globalThis.fetch = originalFetch;
       stream.end();
 
     } catch (error) {
+      globalThis.fetch = originalFetch;
       stream.push({
         type: "error",
         reason: options?.signal?.aborted ? "aborted" : "error",
