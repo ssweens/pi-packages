@@ -216,6 +216,7 @@ describe("Handoff extension", () => {
 
 			expect(extension.handlers.has("session_switch")).toBe(true);
 			expect(extension.handlers.has("context")).toBe(true);
+			expect(extension.handlers.has("input")).toBe(true);
 			expect(extension.handlers.has("agent_end")).toBe(true);
 			expect(extension.handlers.has("before_agent_start")).toBe(true);
 			expect(extension.handlers.has("session_before_compact")).toBe(true);
@@ -1033,6 +1034,255 @@ describe("Handoff extension", () => {
 
 			// No filtering — returns undefined (pass through)
 			expect(contextResult).toBeUndefined();
+		});
+	});
+
+	// ── Collapsed file markers ──────────────────────────────────────────────
+
+	describe("collapsed file markers", () => {
+		it("shows collapsed markers in editor and expands on input", async () => {
+			const { extension } = loadExtension();
+			const sessionManager = SessionManager.create(tempDir);
+			const { userMsg } = makeMessages();
+
+			// Seed with assistant messages that have tool calls (read + edit)
+			sessionManager.appendMessage(userMsg("Fix the bug"));
+			sessionManager.appendMessage({
+				role: "assistant" as const,
+				content: [
+					{ type: "text" as const, text: "I'll read and fix the files." },
+					{ type: "toolCall", id: "tc1", name: "read", arguments: { path: "src/auth.ts" } },
+					{ type: "toolCall", id: "tc2", name: "read", arguments: { path: "src/db.ts" } },
+					{ type: "toolCall", id: "tc3", name: "read", arguments: { path: "src/utils.ts" } },
+					{ type: "toolCall", id: "tc4", name: "edit", arguments: { path: "src/auth.ts", oldText: "a", newText: "b" } },
+					{ type: "toolCall", id: "tc5", name: "write", arguments: { path: "src/new-file.ts" } },
+				],
+				api: "anthropic-messages" as const,
+				provider: "anthropic",
+				model: "test",
+				usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+				stopReason: "stop" as const,
+				timestamp: Date.now(),
+			});
+
+			let editorText = "";
+			const ui = createMockUI({
+				custom: mock(async () => ({ type: "prompt", text: "## Goal\nFix auth bug" })),
+				setEditorText: mock((text: string) => {
+					editorText = text;
+				}),
+			});
+
+			const ctx: any = {
+				hasUI: true,
+				model: { id: "test-model", contextWindow: 200000 },
+				sessionManager,
+				modelRegistry: { getApiKey: async () => "test-key" },
+				ui,
+				isIdle: () => true,
+				abort: () => {},
+				hasPendingMessages: () => false,
+				shutdown: () => {},
+				getContextUsage: () => ({ tokens: 50000, contextWindow: 200000, percent: 25 }),
+				compact: () => {},
+				getSystemPrompt: () => "",
+				waitForIdle: async () => {},
+				newSession: mock(async (opts?: any) => {
+					sessionManager.newSession(opts);
+					const switchHandlers = extension.handlers.get("session_switch") ?? [];
+					for (const h of switchHandlers) {
+						await h(
+							{ type: "session_switch", reason: "new", previousSessionFile: "old" },
+							{ ...ctx, sessionManager },
+						);
+					}
+					return { cancelled: false };
+				}),
+				fork: async () => ({ cancelled: false }),
+				navigateTree: async () => ({ cancelled: false }),
+				switchSession: async () => ({ cancelled: false }),
+				reload: async () => {},
+			};
+
+			await extension.commands.get("handoff")!.handler("fix auth", ctx);
+
+			// Editor shows collapsed markers, not raw file lists
+			expect(editorText).toContain("[+2 read filenames]");
+			expect(editorText).toContain("[+2 modified filenames]");
+			expect(editorText).not.toContain("<read-files>");
+			expect(editorText).not.toContain("<modified-files>");
+			expect(editorText).not.toContain("src/db.ts");
+
+			// Now simulate the user pressing Enter — input hook expands markers
+			const inputHandlers = extension.handlers.get("input")!;
+			const inputResult = await inputHandlers[0](
+				{ type: "input", text: editorText, source: "editor" },
+				ctx,
+			);
+
+			// Input was transformed with expanded file lists
+			expect(inputResult).toBeDefined();
+			expect(inputResult.action).toBe("transform");
+			expect(inputResult.text).toContain("<read-files>");
+			expect(inputResult.text).toContain("src/db.ts");
+			expect(inputResult.text).toContain("src/utils.ts");
+			expect(inputResult.text).toContain("<modified-files>");
+			expect(inputResult.text).toContain("src/auth.ts");
+			expect(inputResult.text).toContain("src/new-file.ts");
+			// Markers are gone in the expanded text
+			expect(inputResult.text).not.toContain("read filenames]");
+			expect(inputResult.text).not.toContain("modified filenames]");
+		});
+
+		it("input hook is no-op when no markers are active", async () => {
+			const { extension } = loadExtension();
+
+			const ctx: any = {
+				hasUI: true,
+				model: { id: "test" },
+			};
+
+			const inputHandlers = extension.handlers.get("input")!;
+			const result = await inputHandlers[0](
+				{ type: "input", text: "just a normal message", source: "editor" },
+				ctx,
+			);
+
+			// No transformation — returns undefined (pass through)
+			expect(result).toBeUndefined();
+		});
+
+		it("markers are single-use — cleared after first expansion", async () => {
+			const { extension } = loadExtension();
+			const sessionManager = SessionManager.create(tempDir);
+			const { userMsg } = makeMessages();
+
+			sessionManager.appendMessage(userMsg("read stuff"));
+			sessionManager.appendMessage({
+				role: "assistant" as const,
+				content: [
+					{ type: "toolCall", id: "tc1", name: "read", arguments: { path: "a.ts" } },
+					{ type: "toolCall", id: "tc2", name: "read", arguments: { path: "b.ts" } },
+				],
+				api: "anthropic-messages" as const,
+				provider: "anthropic",
+				model: "test",
+				usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+				stopReason: "stop" as const,
+				timestamp: Date.now(),
+			});
+
+			const ui = createMockUI({
+				custom: mock(async () => ({ type: "prompt", text: "## Goal\nStuff" })),
+				setEditorText: mock(() => {}),
+			});
+
+			const ctx: any = {
+				hasUI: true,
+				model: { id: "test-model", contextWindow: 200000 },
+				sessionManager,
+				modelRegistry: { getApiKey: async () => "key" },
+				ui,
+				isIdle: () => true,
+				abort: () => {},
+				hasPendingMessages: () => false,
+				shutdown: () => {},
+				getContextUsage: () => null,
+				compact: () => {},
+				getSystemPrompt: () => "",
+				waitForIdle: async () => {},
+				newSession: mock(async (opts?: any) => {
+					sessionManager.newSession(opts);
+					const switchHandlers = extension.handlers.get("session_switch") ?? [];
+					for (const h of switchHandlers) {
+						await h({ type: "session_switch", reason: "new" }, { ...ctx, sessionManager });
+					}
+					return { cancelled: false };
+				}),
+				fork: async () => ({ cancelled: false }),
+				navigateTree: async () => ({ cancelled: false }),
+				switchSession: async () => ({ cancelled: false }),
+				reload: async () => {},
+			};
+
+			await extension.commands.get("handoff")!.handler("stuff", ctx);
+
+			const inputHandlers = extension.handlers.get("input")!;
+
+			// First call expands
+			const first = await inputHandlers[0](
+				{ type: "input", text: "[+2 read filenames]", source: "editor" },
+				ctx,
+			);
+			expect(first).toBeDefined();
+			expect(first.action).toBe("transform");
+
+			// Second call — markers cleared, no-op
+			const second = await inputHandlers[0](
+				{ type: "input", text: "[+2 read filenames]", source: "editor" },
+				ctx,
+			);
+			expect(second).toBeUndefined();
+		});
+
+		it("singular 'file' for single-file lists", async () => {
+			const { extension } = loadExtension();
+			const sessionManager = SessionManager.create(tempDir);
+			const { userMsg } = makeMessages();
+
+			sessionManager.appendMessage(userMsg("edit one file"));
+			sessionManager.appendMessage({
+				role: "assistant" as const,
+				content: [
+					{ type: "toolCall", id: "tc1", name: "edit", arguments: { path: "src/index.ts", oldText: "x", newText: "y" } },
+				],
+				api: "anthropic-messages" as const,
+				provider: "anthropic",
+				model: "test",
+				usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+				stopReason: "stop" as const,
+				timestamp: Date.now(),
+			});
+
+			let editorText = "";
+			const ui = createMockUI({
+				custom: mock(async () => ({ type: "prompt", text: "## Goal\nEdit" })),
+				setEditorText: mock((text: string) => { editorText = text; }),
+			});
+
+			const ctx: any = {
+				hasUI: true,
+				model: { id: "test-model", contextWindow: 200000 },
+				sessionManager,
+				modelRegistry: { getApiKey: async () => "key" },
+				ui,
+				isIdle: () => true,
+				abort: () => {},
+				hasPendingMessages: () => false,
+				shutdown: () => {},
+				getContextUsage: () => null,
+				compact: () => {},
+				getSystemPrompt: () => "",
+				waitForIdle: async () => {},
+				newSession: mock(async (opts?: any) => {
+					sessionManager.newSession(opts);
+					const switchHandlers = extension.handlers.get("session_switch") ?? [];
+					for (const h of switchHandlers) {
+						await h({ type: "session_switch", reason: "new" }, { ...ctx, sessionManager });
+					}
+					return { cancelled: false };
+				}),
+				fork: async () => ({ cancelled: false }),
+				navigateTree: async () => ({ cancelled: false }),
+				switchSession: async () => ({ cancelled: false }),
+				reload: async () => {},
+			};
+
+			await extension.commands.get("handoff")!.handler("edit", ctx);
+
+			// Singular "file" not "files"
+			expect(editorText).toContain("[+1 modified filename]");
+			expect(editorText).not.toContain("read filename"); // no read-only files
 		});
 	});
 });

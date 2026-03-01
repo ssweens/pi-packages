@@ -114,8 +114,25 @@ function extractFileOpsFromMessage(message: any, fileOps: FileOps): void {
 	}
 }
 
-/** Compute read-only and modified file lists, append to summary as XML tags. */
-function appendFileOperations(summary: string, messages: any[]): string {
+// ---------------------------------------------------------------------------
+// Collapsed file markers
+// ---------------------------------------------------------------------------
+// File lists are shown as compact markers in the editor (e.g. "[📂 12 read files]")
+// and expanded to full XML tags when the user submits via the input event hook.
+
+/** Pending file lists keyed by marker text → expanded XML content. */
+type FileMarkerStore = Map<string, string>;
+
+function createReadMarker(count: number): string {
+	return `[+${count} read filename${count === 1 ? "" : "s"}]`;
+}
+
+function createModifiedMarker(count: number): string {
+	return `[+${count} modified filename${count === 1 ? "" : "s"}]`;
+}
+
+/** Build collapsed markers + expansion map from tool-call messages. */
+function buildFileOperations(messages: any[]): { markers: string; expansions: FileMarkerStore } | null {
 	const fileOps = createFileOps();
 	for (const msg of messages) extractFileOpsFromMessage(msg, fileOps);
 
@@ -123,15 +140,32 @@ function appendFileOperations(summary: string, messages: any[]): string {
 	const readFiles = [...fileOps.read].filter((f) => !modified.has(f)).sort();
 	const modifiedFiles = [...modified].sort();
 
-	const sections: string[] = [];
+	if (readFiles.length === 0 && modifiedFiles.length === 0) return null;
+
+	const expansions: FileMarkerStore = new Map();
+	const markerLines: string[] = [];
+
 	if (readFiles.length > 0) {
-		sections.push(`<read-files>\n${readFiles.join("\n")}\n</read-files>`);
+		const marker = createReadMarker(readFiles.length);
+		expansions.set(marker, `<read-files>\n${readFiles.join("\n")}\n</read-files>`);
+		markerLines.push(marker);
 	}
 	if (modifiedFiles.length > 0) {
-		sections.push(`<modified-files>\n${modifiedFiles.join("\n")}\n</modified-files>`);
+		const marker = createModifiedMarker(modifiedFiles.length);
+		expansions.set(marker, `<modified-files>\n${modifiedFiles.join("\n")}\n</modified-files>`);
+		markerLines.push(marker);
 	}
 
-	return sections.length > 0 ? `${summary}\n\n${sections.join("\n\n")}` : summary;
+	return { markers: markerLines.join("\n"), expansions };
+}
+
+/** Expand all file markers in text using the stored expansions. */
+function expandFileMarkers(text: string, store: FileMarkerStore): string {
+	let result = text;
+	for (const [marker, expanded] of store) {
+		result = result.replaceAll(marker, expanded);
+	}
+	return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -308,6 +342,10 @@ export default function (pi: ExtensionAPI) {
 	// Store prompt keyed by parent session for the session_switch handler.
 	const pendingHandoffText = new Map<string, string>();
 
+	// -- Collapsed file marker expansion state --------------------------------
+	// Stores marker→XML mappings so the input hook can expand them on submit.
+	let activeFileMarkers: FileMarkerStore = new Map();
+
 	// ── session_switch ──────────────────────────────────────────────────────
 	// Set editor text for command-path handoffs + clear context filter.
 	pi.on("session_switch", async (event, ctx) => {
@@ -339,6 +377,26 @@ export default function (pi: ExtensionAPI) {
 		if (newMessages.length > 0) {
 			return { messages: newMessages };
 		}
+	});
+
+	// ── input: expand collapsed file markers before LLM sees the text ───────
+	pi.on("input", (event) => {
+		if (activeFileMarkers.size === 0) return;
+
+		// Check if any markers are present in the input text
+		let hasMarkers = false;
+		for (const marker of activeFileMarkers.keys()) {
+			if (event.text.includes(marker)) {
+				hasMarkers = true;
+				break;
+			}
+		}
+		if (!hasMarkers) return;
+
+		const expanded = expandFileMarkers(event.text, activeFileMarkers);
+		// Clear after first expansion — markers are single-use (one handoff prompt)
+		activeFileMarkers = new Map();
+		return { action: "transform" as const, text: expanded, images: event.images };
 	});
 
 	// ── agent_end: deferred session switch for tool path ────────────────────
@@ -404,8 +462,11 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
-		// Append programmatic file tracking from the messages being summarized
-		let prompt = appendFileOperations(handoffResult.text, preparation.messagesToSummarize);
+		// Build collapsed file markers from the messages being summarized
+		const fileOps = buildFileOperations(preparation.messagesToSummarize);
+		let prompt = fileOps
+			? `${handoffResult.text}\n\n${fileOps.markers}`
+			: handoffResult.text;
 
 		// Switch session via raw sessionManager (safe — no agent loop running)
 		const currentSessionFile = ctx.sessionManager.getSessionFile();
@@ -425,6 +486,8 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
+		// Activate markers for input hook expansion, then set editor text
+		if (fileOps) activeFileMarkers = fileOps.expansions;
 		ctx.ui.setEditorText(prompt);
 		ctx.ui.notify("Handoff ready — edit if needed, press Enter to send", "info");
 
@@ -462,8 +525,11 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			// Append programmatic file tracking (read/modified from tool calls)
-			let prompt = appendFileOperations(result.text, conv.messages);
+			// Build collapsed file markers from tool calls
+			const fileOps = buildFileOperations(conv.messages);
+			let prompt = fileOps
+				? `${result.text}\n\n${fileOps.markers}`
+				: result.text;
 
 			const currentSessionFile = ctx.sessionManager.getSessionFile();
 
@@ -473,6 +539,8 @@ export default function (pi: ExtensionAPI) {
 			if (currentSessionFile) {
 				pendingHandoffText.set(currentSessionFile, prompt);
 			}
+			// Stage markers — they'll be activated in session_switch after editor text is set
+			const pendingMarkers = fileOps?.expansions;
 
 			const sessionResult = await ctx.newSession({ parentSession: currentSessionFile ?? undefined });
 
@@ -481,6 +549,9 @@ export default function (pi: ExtensionAPI) {
 				ctx.ui.notify("New session cancelled.", "info");
 				return;
 			}
+
+			// Activate markers for the new session's input hook
+			if (pendingMarkers) activeFileMarkers = pendingMarkers;
 		},
 	});
 
@@ -515,10 +586,16 @@ export default function (pi: ExtensionAPI) {
 				return { content: [{ type: "text" as const, text: `Handoff failed: ${result.message}` }] };
 			}
 
-			let prompt = appendFileOperations(result.text, conv.messages);
+			const fileOps = buildFileOperations(conv.messages);
+			let prompt = fileOps
+				? `${result.text}\n\n${fileOps.markers}`
+				: result.text;
 
 			const currentSessionFile = ctx.sessionManager.getSessionFile();
 			prompt = wrapWithParentSession(prompt, currentSessionFile ?? null);
+
+			// Stage markers for activation after session switch
+			if (fileOps) activeFileMarkers = fileOps.expansions;
 
 			// Defer session switch to agent_end
 			pendingHandoff = {
