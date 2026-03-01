@@ -1,13 +1,15 @@
 {
-  "name": "@ssweens/pi-plan-mode",
+  "name": "@ssweens/pi-huddle",
   "version": "1.0.0",
   "type": "module",
-  "description": "Plan mode for pi - read-only exploration before execution",
+  "description": "Huddle mode for pi - safe exploration and structured elicitation before execution",
   "keywords": [
     "pi-package",
+    "huddle-mode",
     "plan-mode",
     "safe-mode",
-    "read-only"
+    "read-only",
+    "ask-user"
   ],
   "author": "ssweens",
   "license": "MIT",
