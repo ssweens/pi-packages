@@ -330,6 +330,207 @@ describe("Handoff extension", () => {
 			// Should have shown an error
 			expect(ui.notify).toHaveBeenCalled();
 		});
+
+		it("shows error when LLM returns context_length_exceeded", async () => {
+			const { extension } = loadExtension();
+			const sessionManager = SessionManager.create(tempDir);
+			const ui = createMockUI({
+				custom: mock(async () => ({
+					type: "error",
+					message: 'Codex error: {"type":"error","error":{"type":"invalid_request_error","code":"context_length_exceeded","message":"Your input exceeds the context window of this model."}}',
+				})),
+			});
+
+			const ctx: any = {
+				hasUI: true,
+				model: { id: "test-model", contextWindow: 200000 },
+				sessionManager,
+				modelRegistry: { getApiKey: async () => "test-key" },
+				ui,
+				isIdle: () => true,
+				abort: () => {},
+				hasPendingMessages: () => false,
+				shutdown: () => {},
+				getContextUsage: () => ({ tokens: 50000, contextWindow: 200000, percent: 25 }),
+				compact: () => {},
+				getSystemPrompt: () => "",
+				waitForIdle: async () => {},
+				newSession: mock(async () => ({ cancelled: false })),
+				fork: async () => ({ cancelled: false }),
+				navigateTree: async () => ({ cancelled: false }),
+				switchSession: async () => ({ cancelled: false }),
+				reload: async () => {},
+			};
+
+			const { userMsg, assistantMsg } = makeMessages();
+			sessionManager.appendMessage(userMsg("Some big conversation"));
+			sessionManager.appendMessage(assistantMsg("Some big reply"));
+
+			await extension.commands.get("handoff")!.handler("continue work", ctx);
+
+			// newSession should NOT have been called
+			expect(ctx.newSession).not.toHaveBeenCalled();
+			// Error notification with the failure message
+			expect(ui.notify).toHaveBeenCalled();
+			const notifyCall = (ui.notify as any).mock.calls[0];
+			expect(notifyCall[0]).toContain("Handoff failed");
+			expect(notifyCall[0]).toContain("context_length_exceeded");
+			expect(notifyCall[1]).toBe("error");
+		});
+
+		it("shows error when LLM returns empty response", async () => {
+			const { extension } = loadExtension();
+			const sessionManager = SessionManager.create(tempDir);
+			const ui = createMockUI({
+				custom: mock(async () => ({ type: "error", message: "LLM returned empty response" })),
+			});
+
+			const ctx: any = {
+				hasUI: true,
+				model: { id: "test-model", contextWindow: 200000 },
+				sessionManager,
+				modelRegistry: { getApiKey: async () => "test-key" },
+				ui,
+				isIdle: () => true,
+				abort: () => {},
+				hasPendingMessages: () => false,
+				shutdown: () => {},
+				getContextUsage: () => ({ tokens: 50000, contextWindow: 200000, percent: 25 }),
+				compact: () => {},
+				getSystemPrompt: () => "",
+				waitForIdle: async () => {},
+				newSession: mock(async () => ({ cancelled: false })),
+				fork: async () => ({ cancelled: false }),
+				navigateTree: async () => ({ cancelled: false }),
+				switchSession: async () => ({ cancelled: false }),
+				reload: async () => {},
+			};
+
+			const { userMsg, assistantMsg } = makeMessages();
+			sessionManager.appendMessage(userMsg("Hello"));
+			sessionManager.appendMessage(assistantMsg("Hi"));
+
+			await extension.commands.get("handoff")!.handler("do something", ctx);
+
+			expect(ctx.newSession).not.toHaveBeenCalled();
+			expect(ui.notify).toHaveBeenCalled();
+			const notifyCall = (ui.notify as any).mock.calls[0];
+			expect(notifyCall[0]).toContain("Handoff failed");
+			expect(notifyCall[0]).toContain("empty response");
+			expect(notifyCall[1]).toBe("error");
+		});
+
+		it("shows error when prompt generation throws", async () => {
+			const { extension } = loadExtension();
+			const sessionManager = SessionManager.create(tempDir);
+			const ui = createMockUI({
+				// In real code, errors inside the BorderedLoader's run() are caught
+				// and returned as { type: "error" }. The mock simulates that outcome.
+				custom: mock(async () => ({ type: "error", message: "Network timeout" })),
+			});
+
+			const ctx: any = {
+				hasUI: true,
+				model: { id: "test-model", contextWindow: 200000 },
+				sessionManager,
+				modelRegistry: { getApiKey: async () => "test-key" },
+				ui,
+				isIdle: () => true,
+				abort: () => {},
+				hasPendingMessages: () => false,
+				shutdown: () => {},
+				getContextUsage: () => ({ tokens: 50000, contextWindow: 200000, percent: 25 }),
+				compact: () => {},
+				getSystemPrompt: () => "",
+				waitForIdle: async () => {},
+				newSession: mock(async () => ({ cancelled: false })),
+				fork: async () => ({ cancelled: false }),
+				navigateTree: async () => ({ cancelled: false }),
+				switchSession: async () => ({ cancelled: false }),
+				reload: async () => {},
+			};
+
+			const { userMsg, assistantMsg } = makeMessages();
+			sessionManager.appendMessage(userMsg("Hello"));
+			sessionManager.appendMessage(assistantMsg("Hi"));
+
+			await extension.commands.get("handoff")!.handler("do something", ctx);
+
+			expect(ctx.newSession).not.toHaveBeenCalled();
+			expect(ui.notify).toHaveBeenCalled();
+			const notifyCall = (ui.notify as any).mock.calls[0];
+			expect(notifyCall[0]).toContain("Handoff failed");
+			expect(notifyCall[0]).toContain("Network timeout");
+			expect(notifyCall[1]).toBe("error");
+		});
+
+		it("shows error when no model is selected", async () => {
+			const { extension } = loadExtension();
+			const sessionManager = SessionManager.create(tempDir);
+			const ui = createMockUI();
+
+			const ctx: any = {
+				hasUI: true,
+				model: null,
+				sessionManager,
+				ui,
+				isIdle: () => true,
+				abort: () => {},
+				hasPendingMessages: () => false,
+				shutdown: () => {},
+				getContextUsage: () => null,
+				compact: () => {},
+				getSystemPrompt: () => "",
+				waitForIdle: async () => {},
+				newSession: mock(async () => ({ cancelled: false })),
+				fork: async () => ({ cancelled: false }),
+				navigateTree: async () => ({ cancelled: false }),
+				switchSession: async () => ({ cancelled: false }),
+				reload: async () => {},
+			};
+
+			await extension.commands.get("handoff")!.handler("some goal", ctx);
+
+			expect(ctx.newSession).not.toHaveBeenCalled();
+			expect(ui.notify).toHaveBeenCalled();
+			const notifyCall = (ui.notify as any).mock.calls[0];
+			expect(notifyCall[0]).toContain("No model selected");
+			expect(notifyCall[1]).toBe("error");
+		});
+
+		it("shows usage error when no goal provided", async () => {
+			const { extension } = loadExtension();
+			const sessionManager = SessionManager.create(tempDir);
+			const ui = createMockUI();
+
+			const ctx: any = {
+				hasUI: true,
+				model: { id: "test-model" },
+				sessionManager,
+				ui,
+				isIdle: () => true,
+				abort: () => {},
+				hasPendingMessages: () => false,
+				shutdown: () => {},
+				getContextUsage: () => null,
+				compact: () => {},
+				getSystemPrompt: () => "",
+				waitForIdle: async () => {},
+				newSession: mock(async () => ({ cancelled: false })),
+				fork: async () => ({ cancelled: false }),
+				navigateTree: async () => ({ cancelled: false }),
+				switchSession: async () => ({ cancelled: false }),
+				reload: async () => {},
+			};
+
+			await extension.commands.get("handoff")!.handler("", ctx);
+
+			expect(ctx.newSession).not.toHaveBeenCalled();
+			expect(ui.notify).toHaveBeenCalled();
+			const notifyCall = (ui.notify as any).mock.calls[0];
+			expect(notifyCall[0]).toContain("Usage:");
+			expect(notifyCall[1]).toBe("error");
+		});
 	});
 
 	// ── Compact hook flow ───────────────────────────────────────────────────
@@ -487,6 +688,105 @@ describe("Handoff extension", () => {
 			// Warning shown
 			expect(ui.notify).toHaveBeenCalled();
 		});
+
+		it("falls back to compaction when LLM returns context_length_exceeded", async () => {
+			const { extension } = loadExtension();
+			const sessionManager = SessionManager.create(tempDir);
+
+			const ui = createMockUI({
+				select: mock(async () => "Handoff to new session"),
+				custom: mock(async () => ({
+					type: "error",
+					message: 'Codex error: {"type":"error","error":{"type":"invalid_request_error","code":"context_length_exceeded","message":"Your input exceeds the context window of this model."}}',
+				})),
+			});
+
+			const ctx: any = {
+				hasUI: true,
+				model: { id: "test" },
+				sessionManager,
+				modelRegistry: { getApiKey: async () => "key" },
+				ui,
+				isIdle: () => true,
+				abort: () => {},
+				hasPendingMessages: () => false,
+				shutdown: () => {},
+				getContextUsage: () => ({ tokens: 180000, contextWindow: 200000, percent: 90 }),
+				compact: () => {},
+				getSystemPrompt: () => "",
+			};
+
+			const originalSessionFile = sessionManager.getSessionFile();
+
+			const result = await extension.handlers.get("session_before_compact")![0](
+				{
+					type: "session_before_compact",
+					preparation: { messagesToSummarize: [{ role: "user", content: "big msg", timestamp: Date.now() }], previousSummary: undefined, turnPrefixMessages: [], isSplitTurn: false, tokensBefore: 180000, firstKeptEntryId: "x", fileOps: { read: new Set(), edited: new Set() }, settings: { enabled: true, reserveTokens: 16384, keepRecentTokens: 20000 } },
+					branchEntries: [],
+					signal: new AbortController().signal,
+				},
+				ctx,
+			);
+
+			// Falls back to compaction (returns undefined)
+			expect(result).toBeUndefined();
+			// Session did NOT change
+			expect(sessionManager.getSessionFile()).toBe(originalSessionFile);
+			// Warning notification with failure message
+			expect(ui.notify).toHaveBeenCalled();
+			const notifyCall = (ui.notify as any).mock.calls[0];
+			expect(notifyCall[0]).toContain("Handoff failed");
+			expect(notifyCall[0]).toContain("context_length_exceeded");
+			expect(notifyCall[0]).toContain("Compacting instead");
+			expect(notifyCall[1]).toBe("warning");
+		});
+
+		it("falls back to compaction when prompt generation throws", async () => {
+			const { extension } = loadExtension();
+			const sessionManager = SessionManager.create(tempDir);
+
+			const ui = createMockUI({
+				select: mock(async () => "Handoff to new session"),
+				custom: mock(async () => ({ type: "error", message: "API request failed: 529 overloaded" })),
+			});
+
+			const ctx: any = {
+				hasUI: true,
+				model: { id: "test" },
+				sessionManager,
+				modelRegistry: { getApiKey: async () => "key" },
+				ui,
+				isIdle: () => true,
+				abort: () => {},
+				hasPendingMessages: () => false,
+				shutdown: () => {},
+				getContextUsage: () => ({ tokens: 180000, contextWindow: 200000, percent: 90 }),
+				compact: () => {},
+				getSystemPrompt: () => "",
+			};
+
+			const originalSessionFile = sessionManager.getSessionFile();
+
+			const result = await extension.handlers.get("session_before_compact")![0](
+				{
+					type: "session_before_compact",
+					preparation: { messagesToSummarize: [{ role: "user", content: "msg", timestamp: Date.now() }], previousSummary: undefined, turnPrefixMessages: [], isSplitTurn: false, tokensBefore: 180000, firstKeptEntryId: "x", fileOps: { read: new Set(), edited: new Set() }, settings: { enabled: true, reserveTokens: 16384, keepRecentTokens: 20000 } },
+					branchEntries: [],
+					signal: new AbortController().signal,
+				},
+				ctx,
+			);
+
+			// Falls back to compaction
+			expect(result).toBeUndefined();
+			expect(sessionManager.getSessionFile()).toBe(originalSessionFile);
+			expect(ui.notify).toHaveBeenCalled();
+			const notifyCall = (ui.notify as any).mock.calls[0];
+			expect(notifyCall[0]).toContain("Handoff failed");
+			expect(notifyCall[0]).toContain("overloaded");
+			expect(notifyCall[0]).toContain("Compacting instead");
+			expect(notifyCall[1]).toBe("warning");
+		});
 	});
 
 	// ── Tool → agent_end flow ───────────────────────────────────────────────
@@ -549,6 +849,83 @@ describe("Handoff extension", () => {
 
 			expect(editorText.length).toBeGreaterThan(0);
 			expect(editorText).toContain("Context");
+		});
+
+		it("returns error message when LLM returns context_length_exceeded", async () => {
+			const { extension } = loadExtension();
+			const sessionManager = SessionManager.create(tempDir);
+			const ui = createMockUI({
+				custom: mock(async () => ({
+					type: "error",
+					message: 'Codex error: {"type":"error","error":{"type":"invalid_request_error","code":"context_length_exceeded","message":"Your input exceeds the context window of this model."}}',
+				})),
+			});
+
+			const { userMsg, assistantMsg } = makeMessages();
+			sessionManager.appendMessage(userMsg("Big conversation"));
+			sessionManager.appendMessage(assistantMsg("Big reply"));
+
+			const ctx: any = {
+				hasUI: true,
+				model: { id: "test-model" },
+				sessionManager,
+				modelRegistry: { getApiKey: async () => "key" },
+				ui,
+				isIdle: () => true,
+				abort: () => {},
+				hasPendingMessages: () => false,
+				shutdown: () => {},
+				getContextUsage: () => ({ tokens: 180000, contextWindow: 200000, percent: 90 }),
+				compact: () => {},
+				getSystemPrompt: () => "",
+			};
+
+			const toolDef = extension.tools.get("handoff")!.definition;
+			const result = await toolDef.execute("tc1", { goal: "continue" }, undefined, undefined, ctx);
+
+			// Returns error message to the agent
+			expect(result.content[0].text).toContain("Handoff failed");
+			expect(result.content[0].text).toContain("context_length_exceeded");
+
+			// No pending handoff — agent_end should be a no-op
+			const agentEndHandlers = extension.handlers.get("agent_end")!;
+			await agentEndHandlers[0]({ type: "agent_end", messages: [] }, ctx);
+
+			// Session should NOT have switched
+			expect(sessionManager.getSessionFile()).toBe(sessionManager.getSessionFile());
+		});
+
+		it("returns error message when prompt generation throws", async () => {
+			const { extension } = loadExtension();
+			const sessionManager = SessionManager.create(tempDir);
+			const ui = createMockUI({
+				custom: mock(async () => ({ type: "error", message: "Connection refused" })),
+			});
+
+			const { userMsg, assistantMsg } = makeMessages();
+			sessionManager.appendMessage(userMsg("Something"));
+			sessionManager.appendMessage(assistantMsg("Reply"));
+
+			const ctx: any = {
+				hasUI: true,
+				model: { id: "test-model" },
+				sessionManager,
+				modelRegistry: { getApiKey: async () => "key" },
+				ui,
+				isIdle: () => true,
+				abort: () => {},
+				hasPendingMessages: () => false,
+				shutdown: () => {},
+				getContextUsage: () => ({ tokens: 50000, contextWindow: 200000, percent: 25 }),
+				compact: () => {},
+				getSystemPrompt: () => "",
+			};
+
+			const toolDef = extension.tools.get("handoff")!.definition;
+			const result = await toolDef.execute("tc1", { goal: "continue" }, undefined, undefined, ctx);
+
+			expect(result.content[0].text).toContain("Handoff failed");
+			expect(result.content[0].text).toContain("Connection refused");
 		});
 	});
 
@@ -862,7 +1239,7 @@ describe.skipIf(!API_KEY)("Handoff e2e (real LLM)", () => {
 		});
 
 		// Build conversation
-		await session.prompt("What is 2+2? Reply with just the number.");
+		await session.prompt("I'm building an OAuth2 authentication module in src/auth.ts. I've implemented the token exchange flow and refresh logic. The next step is adding PKCE support for public clients. Keep replies brief.");
 		await session.agent.waitForIdle();
 
 		const originalSessionFile = sessionManager.getSessionFile();
@@ -891,7 +1268,7 @@ describe.skipIf(!API_KEY)("Handoff e2e (real LLM)", () => {
 						systemPrompt: SYSTEM_PROMPT,
 						messages: [{
 							role: "user",
-							content: [{ type: "text", text: `## Conversation History\n\n${text}\n\n## User's Goal for New Thread\n\nContinue work` }],
+							content: [{ type: "text", text: `## Conversation History\n\n${text}\n\n## User's Goal for New Thread\n\nContinue implementing PKCE support for the OAuth2 module` }],
 							timestamp: Date.now(),
 						}],
 					},
