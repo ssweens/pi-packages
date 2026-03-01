@@ -12,7 +12,7 @@ Extension packages for [pi](https://github.com/badlogic/pi-mono).
 | **pi-handoff** | Context management for agentic coding workflows |
 | **pi-image-gen** | Provider-agnostic image generation |
 | **pi-dynamic-models** | Dynamic model discovery from any configured API server at startup |
-| **pi-plan-mode** | Plan mode — read-only exploration before execution |
+| **pi-huddle** | Huddle mode — read-only exploration + `ask_user` structured elicitation |
 | **pi-file-todos** | File-based todo tracking skill |
 
 ## Installation
@@ -22,7 +22,7 @@ pi install @ssweens/pi-vertex
 pi install @ssweens/pi-handoff
 pi install @ssweens/pi-image-gen
 pi install @ssweens/pi-dynamic-models
-pi install @ssweens/pi-plan-mode
+pi install @ssweens/pi-huddle
 pi install @ssweens/pi-file-todos
 ```
 
