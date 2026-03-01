@@ -203,6 +203,16 @@ function gatherConversation(ctx: ExtensionContext): { text: string; messages: an
 	return { text: serializeConversation(convertToLlm(messages)), messages };
 }
 
+/**
+ * Wrap a handoff prompt with the parent session reference and session-query skill.
+ * Enables the new session to query the old one for details not in the summary.
+ */
+function wrapWithParentSession(prompt: string, parentSessionFile: string | null): string {
+	if (!parentSessionFile) return prompt;
+
+	return `/skill:pi-session-query\n\n**Parent session:** \`${parentSessionFile}\`\n\n${prompt}`;
+}
+
 // ---------------------------------------------------------------------------
 // Extension
 // ---------------------------------------------------------------------------
@@ -337,6 +347,9 @@ export default function (pi: ExtensionAPI) {
 		// Switch session via raw sessionManager (safe — no agent loop running)
 		const currentSessionFile = ctx.sessionManager.getSessionFile();
 
+		// Wrap with parent session reference + session-query skill
+		prompt = wrapWithParentSession(prompt, currentSessionFile ?? null);
+
 		try {
 			handoffTimestamp = Date.now();
 			(ctx.sessionManager as any).newSession({ parentSession: currentSessionFile });
@@ -387,6 +400,9 @@ export default function (pi: ExtensionAPI) {
 
 			const currentSessionFile = ctx.sessionManager.getSessionFile();
 
+			// Wrap with parent session reference + session-query skill
+			prompt = wrapWithParentSession(prompt, currentSessionFile ?? null);
+
 			if (currentSessionFile) {
 				pendingHandoffText.set(currentSessionFile, prompt);
 			}
@@ -431,10 +447,13 @@ export default function (pi: ExtensionAPI) {
 
 			prompt = appendFileOperations(prompt, conv.messages);
 
+			const currentSessionFile = ctx.sessionManager.getSessionFile();
+			prompt = wrapWithParentSession(prompt, currentSessionFile ?? null);
+
 			// Defer session switch to agent_end
 			pendingHandoff = {
 				prompt,
-				parentSession: ctx.sessionManager.getSessionFile() ?? undefined,
+				parentSession: currentSessionFile ?? undefined,
 			};
 
 			return {
