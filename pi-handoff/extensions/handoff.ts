@@ -170,11 +170,21 @@ async function generateHandoffPrompt(
 			);
 
 			if (response.stopReason === "aborted") return null;
+			if (response.stopReason === "error") {
+				throw new Error(
+					"errorMessage" in response && typeof (response as any).errorMessage === "string"
+						? (response as any).errorMessage
+						: "Handoff generation failed",
+				);
+			}
 
-			return response.content
+			const text = response.content
 				.filter((c): c is { type: "text"; text: string } => c.type === "text")
 				.map((c) => c.text)
-				.join("\n");
+				.join("\n")
+				.trim();
+
+			return text.length > 0 ? text : null;
 		};
 
 		run()
@@ -336,7 +346,7 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
-		if (prompt === null) {
+		if (!prompt) {
 			ctx.ui.notify("Handoff cancelled. Compacting instead.", "warning");
 			return;
 		}
@@ -390,7 +400,7 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			let prompt = await generateHandoffPrompt(conv.text, goal, ctx);
-			if (prompt === null) {
+			if (!prompt) {
 				ctx.ui.notify("Handoff cancelled.", "info");
 				return;
 			}
@@ -441,7 +451,7 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			let prompt = await generateHandoffPrompt(conv.text, params.goal, ctx);
-			if (prompt === null) {
+			if (!prompt) {
 				return { content: [{ type: "text" as const, text: "Handoff cancelled." }] };
 			}
 
