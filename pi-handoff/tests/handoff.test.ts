@@ -31,8 +31,8 @@ import {
 	SettingsManager,
 } from "@mariozechner/pi-coding-agent";
 
-// Import the real extension
-import handoffExtension from "../extensions/handoff.ts";
+// Import the real extension and its system prompt
+import handoffExtension, { SYSTEM_PROMPT } from "../extensions/handoff.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -723,21 +723,21 @@ describe.skipIf(!API_KEY)("Handoff e2e (real LLM)", () => {
 				// We can't run the real BorderedLoader in tests,
 				// but we CAN call complete() directly
 				const { complete: realComplete } = await import("@mariozechner/pi-ai");
-				const { convertToLlm, serializeConversation } = await import("@mariozechner/pi-coding-agent");
+				const { buildSessionContext, convertToLlm, serializeConversation } = await import("@mariozechner/pi-coding-agent");
 
+				// Use buildSessionContext (compaction-aware) — same as the real extension
 				const branch = sessionManager.getBranch();
-				const msgs = branch
-					.filter((e: any) => e.type === "message")
-					.map((e: any) => e.message);
+				const leafId = sessionManager.getLeafId();
+				const { messages: msgs } = buildSessionContext(branch, leafId);
 				const text = serializeConversation(convertToLlm(msgs));
 
 				const response = await realComplete(
 					model,
 					{
-						systemPrompt: "Generate a brief handoff summary.",
+						systemPrompt: SYSTEM_PROMPT,
 						messages: [{
 							role: "user",
-							content: [{ type: "text", text: `Conversation:\n${text}\n\nGoal: Continue work` }],
+							content: [{ type: "text", text: `## Conversation History\n\n${text}\n\n## User's Goal for New Thread\n\nContinue work` }],
 							timestamp: Date.now(),
 						}],
 					},
@@ -794,8 +794,21 @@ describe.skipIf(!API_KEY)("Handoff e2e (real LLM)", () => {
 		// Session switched
 		expect(sessionManager.getSessionFile()).not.toBe(originalSessionFile);
 
-		// Editor has real LLM-generated content
+		// Editor has real LLM-generated content with expected handoff sections
 		expect(editorText.length).toBeGreaterThan(20);
+
+		// Validate the LLM returned structured handoff format, not gibberish
+		expect(editorText).toContain("## Goal");
+		expect(editorText).toContain("## Next Steps");
+
+		// Should contain at least 3 of the expected sections
+		const expectedSections = ["## Goal", "## Constraints & Preferences", "## Progress", "## Key Decisions", "## Next Steps", "## Critical Context"];
+		const foundSections = expectedSections.filter((s) => editorText.includes(s));
+		expect(foundSections.length).toBeGreaterThanOrEqual(3);
+
+		// Should reference the parent session
+		expect(editorText).toContain("Parent session:");
+		expect(editorText).toContain("/skill:pi-session-query");
 	}, 120000);
 });
 

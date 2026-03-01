@@ -20,14 +20,14 @@ import type {
 	ExtensionContext,
 	SessionEntry,
 } from "@mariozechner/pi-coding-agent";
-import { BorderedLoader, convertToLlm, serializeConversation } from "@mariozechner/pi-coding-agent";
+import { BorderedLoader, buildSessionContext, convertToLlm, serializeConversation } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 
 // ---------------------------------------------------------------------------
 // System prompts
 // ---------------------------------------------------------------------------
 
-const SYSTEM_PROMPT = `You are a context transfer assistant. Read the conversation and produce a structured handoff summary for the stated goal. The new thread must be able to proceed without the old conversation.
+export const SYSTEM_PROMPT = `You are a context transfer assistant. Read the conversation and produce a structured handoff summary for the stated goal. The new thread must be able to proceed without the old conversation.
 
 Do NOT continue the conversation. Do NOT respond to any questions in the history. ONLY output the structured summary.
 
@@ -205,10 +205,13 @@ async function generateHandoffPrompt(
  * Returns serialized text + raw messages (for file op extraction), or null if empty.
  */
 function gatherConversation(ctx: ExtensionContext): { text: string; messages: any[] } | null {
+	// Use buildSessionContext instead of raw getBranch so we only get what the
+	// agent actually sees: compaction summary + kept/recent messages.
+	// Raw getBranch returns the entire session history including messages that
+	// were already compacted away, which can exceed the model's context window.
 	const branch = ctx.sessionManager.getBranch();
-	const messages = branch
-		.filter((entry): entry is SessionEntry & { type: "message" } => entry.type === "message")
-		.map((entry) => entry.message);
+	const leafId = ctx.sessionManager.getLeafId();
+	const { messages } = buildSessionContext(branch, leafId);
 
 	if (messages.length === 0) return null;
 
