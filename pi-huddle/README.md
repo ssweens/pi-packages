@@ -44,7 +44,8 @@ Alt+H (Option+H)     # keyboard shortcut
 ### Start in Huddle Mode
 
 ```bash
-pi --plan            # start pi directly in huddle mode
+pi --huddle          # start pi directly in huddle mode
+pi --plan            # alias (backward compat)
 ```
 
 ### Workflow

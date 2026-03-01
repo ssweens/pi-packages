@@ -26,8 +26,14 @@ const NORMAL_MODE_TOOLS = ["read", "bash", "edit", "write", "ask_user"];
 export default function huddleExtension(pi: ExtensionAPI): void {
 	let huddleEnabled = false;
 
-	pi.registerFlag("plan", {
+	pi.registerFlag("huddle", {
 		description: "Start in huddle mode (read-only exploration)",
+		type: "boolean",
+		default: false,
+	});
+
+	pi.registerFlag("plan", {
+		description: "Start in huddle mode (alias for --huddle)",
 		type: "boolean",
 		default: false,
 	});
@@ -297,7 +303,7 @@ Do NOT execute the plan. Only plan and analyze. When you are ready to execute, a
 
 	// Restore state on session start/resume
 	pi.on("session_start", async (_event, ctx) => {
-		if (pi.getFlag("plan") === true) {
+		if (pi.getFlag("huddle") === true || pi.getFlag("plan") === true) {
 			huddleEnabled = true;
 		}
 
