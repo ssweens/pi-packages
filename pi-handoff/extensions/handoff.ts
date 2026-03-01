@@ -20,13 +20,23 @@
  */
 
 import { complete, type Message } from "@mariozechner/pi-ai";
-import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@mariozechner/pi-coding-agent";
+import type {
+	ExtensionAPI,
+	ExtensionCommandContext,
+	ExtensionContext,
+	SessionEntry,
+} from "@mariozechner/pi-coding-agent";
 import { BorderedLoader, convertToLlm, serializeConversation } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 
 // Store pending handoff text to be set in new session after switch
 // Key: parent session file path, Value: handoff text to set in editor
 const pendingHandoffText = new Map<string, string>();
+
+/** @internal Test-only: clear all pending handoff state between tests. */
+export function __clearPendingHandoffText(): void {
+	pendingHandoffText.clear();
+}
 
 // Handoff generation system prompt.
 //
@@ -81,7 +91,7 @@ Rules:
 
 // System prompt fragment injected via before_agent_start.
 // Teaches the model about handoffs so it can suggest them proactively.
-const HANDOFF_SYSTEM_HINT = `
+export const HANDOFF_SYSTEM_HINT = `
 ## Handoff
 
 Use \`/handoff <goal>\` to transfer context to a new focused session.
@@ -89,9 +99,10 @@ Handoffs are especially effective after planning — clear the context and start
 At high context usage, suggest a handoff rather than losing important context.`;
 
 /**
- * Generate a session name from the goal (slug format)
+ * Generate a session name from the goal (slug format).
+ * Exported for testing.
  */
-function goalToSessionName(goal: string): string {
+export function goalToSessionName(goal: string): string {
 	return goal
 		.toLowerCase()
 		.replace(/[^a-z0-9\s-]/g, "")
@@ -101,12 +112,37 @@ function goalToSessionName(goal: string): string {
 }
 
 /**
+ * Build the full handoff prompt from goal, session file, and generated summary.
+ * Includes parent session reference and skill prefix when applicable.
+ * Exported for testing.
+ */
+export function buildFullPrompt(
+	goal: string,
+	currentSessionFile: string | null,
+	summary: string,
+): string {
+	let fullPrompt = `# ${goal}\n\n`;
+
+	if (currentSessionFile) {
+		fullPrompt += `**Parent session:** \`${currentSessionFile}\`\n\n`;
+	}
+
+	fullPrompt += summary;
+
+	// Prepend session-query skill if parent session present
+	return /\*\*Parent session:\*\*/.test(fullPrompt)
+		? `/skill:pi-session-query ${fullPrompt}`
+		: fullPrompt;
+}
+
+/**
  * Handoff modes:
  * - "command": User-initiated via /handoff
  * - "tool": Agent-initiated via handoff tool
  * - "compactHook": Triggered from session_before_compact
  *
- * All modes follow the same flow: generate summary → editor review → new session → input box → user sends
+ * Command mode has ExtensionCommandContext (with newSession).
+ * Tool and compactHook modes have ExtensionContext (ReadonlySessionManager, no newSession).
  */
 type HandoffMode = "command" | "tool" | "compactHook";
 
@@ -115,6 +151,13 @@ type HandoffMode = "command" | "tool" | "compactHook";
  * and the auto-handoff compaction hook.
  *
  * Returns an error string on failure, or undefined on success.
+ *
+ * Session creation behavior:
+ * - "command" mode: ctx has newSession() — creates new session immediately.
+ * - "tool"/"compactHook" mode: ctx is ReadonlySessionManager — cannot create
+ *   sessions. Instead, pre-fills the editor with the generated prompt and notifies
+ *   the user. The session_switch handler picks up pendingHandoffText when they
+ *   manually start a new session.
  */
 async function performHandoff(
 	pi: ExtensionAPI,
@@ -201,47 +244,45 @@ async function performHandoff(
 		return "Handoff cancelled.";
 	}
 
-	// Build the full prompt with parent reference
-	let fullPrompt = `# ${goal}\n\n`;
+	const messageToSend = buildFullPrompt(goal, currentSessionFile ?? null, result);
 
-	if (currentSessionFile) {
-		fullPrompt += `**Parent session:** \`${currentSessionFile}\`\n\n`;
-	}
-
-	fullPrompt += result;
-
-	// Prepend session-query skill if parent session present
-	const messageToSend = /\*\*Parent session:\*\*/.test(fullPrompt)
-		? `/skill:pi-session-query ${fullPrompt}`
-		: fullPrompt;
-
-	// Store the handoff text for the session_switch event to pick up
-	// We use the parent session file as key since that's what we pass to newSession
+	// Store the handoff text for the session_switch event to pick up.
+	// Key: parent session file (passed to newSession as parentSession).
 	if (currentSessionFile) {
 		pendingHandoffText.set(currentSessionFile, messageToSend);
 	}
 
-	// Create new session immediately
-	// Use ctx.newSession if available (command mode), otherwise use sessionManager directly
-	if ("newSession" in ctx && typeof ctx.newSession === "function") {
-		const newSessionResult = await ctx.newSession({
-			parentSession: currentSessionFile,
+	// Session creation: only possible with ExtensionCommandContext (command mode).
+	// Hook and tool modes have ReadonlySessionManager — newSession() does not exist.
+	// In those modes, pre-fill the editor so the user can start a new session manually.
+	const hasNewSession =
+		"newSession" in ctx && typeof (ctx as ExtensionCommandContext).newSession === "function";
+
+	if (hasNewSession) {
+		const cmdCtx = ctx as ExtensionCommandContext;
+		const newSessionResult = await cmdCtx.newSession({
+			parentSession: currentSessionFile ?? undefined,
 		});
 
 		if (newSessionResult.cancelled) {
-			// Clean up pending text if cancelled
+			// Clean up pending text if session creation was cancelled
 			if (currentSessionFile) {
 				pendingHandoffText.delete(currentSessionFile);
 			}
 			return "New session cancelled.";
 		}
-	} else {
-		// Tool/hook contexts: create session directly via session manager
-		const sessionManager = ctx.sessionManager as any;
-		sessionManager.newSession({ parentSession: currentSessionFile });
-	}
 
-	pi.setSessionName(goalToSessionName(goal));
+		pi.setSessionName(goalToSessionName(goal));
+	} else {
+		// Hook / tool mode: set editor text so the user can see the generated prompt.
+		// The session_switch handler will auto-set it in the new session when they
+		// start one (Ctrl+N or equivalent).
+		ctx.ui.setEditorText(messageToSend);
+		ctx.ui.notify(
+			"Handoff ready! Start a new session to automatically send the generated prompt.",
+			"info",
+		);
+	}
 
 	return undefined;
 }
@@ -291,7 +332,7 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		const usage = ctx.getContextUsage();
-		const pctStr = usage ? `${Math.round(usage.percent)}%` : "high";
+		const pctStr = usage?.percent != null ? `${Math.round(usage.percent)}%` : "high";
 
 		const choice = await ctx.ui.select(
 			`Context is ${pctStr} full. What would you like to do?`,
@@ -313,9 +354,23 @@ export default function (pi: ExtensionAPI) {
 		}
 		contextForHandoff += `## Recent Conversation\n\n${conversationText}`;
 
-		const error = await performHandoff(pi, ctx, "Continue current work", "compactHook", contextForHandoff);
-		if (error) {
-			ctx.ui.notify(`Handoff failed: ${error}. Compacting instead.`, "warning");
+		try {
+			const error = await performHandoff(
+				pi,
+				ctx,
+				"Continue current work",
+				"compactHook",
+				contextForHandoff,
+			);
+			if (error) {
+				ctx.ui.notify(`Handoff failed: ${error}. Compacting instead.`, "warning");
+				return;
+			}
+		} catch (err) {
+			ctx.ui.notify(
+				`Handoff error: ${err instanceof Error ? err.message : String(err)}. Compacting instead.`,
+				"warning",
+			);
 			return;
 		}
 
@@ -355,11 +410,12 @@ export default function (pi: ExtensionAPI) {
 				content: [
 					{
 						type: "text" as const,
-						text: error ?? "Handoff queued. Switching to a new session with the generated prompt.",
+						text:
+							error ??
+							"Handoff queued. The generated prompt has been placed in the editor — start a new session to send it.",
 					},
 				],
 			};
 		},
 	});
-
 }

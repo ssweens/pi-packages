@@ -1,6 +1,10 @@
 {
   "name": "@ssweens/pi-handoff",
-  "version": "1.0.0",
+  "version": "1.0.1",
+  "scripts": {
+    "test": "bun test tests/",
+    "test:watch": "bun test --watch tests/"
+  },
   "description": "Enhanced handoff extension for pi - context management for agentic coding workflows",
   "keywords": [
     "pi-package"
