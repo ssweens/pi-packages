@@ -660,6 +660,160 @@ describe("Handoff extension", () => {
 	});
 });
 
+// ── Ancestry chain ──────────────────────────────────────────────────────────
+
+describe("Ancestry chain in handoff prompt", () => {
+	let tempDir: string;
+
+	beforeEach(() => {
+		tempDir = join(tmpdir(), `pi-handoff-ancestry-${Date.now()}`);
+		mkdirSync(tempDir, { recursive: true });
+	});
+
+	afterEach(() => {
+		if (tempDir && existsSync(tempDir)) {
+			rmSync(tempDir, { recursive: true });
+		}
+	});
+
+	it("includes grandparent and ancestor sessions in the prompt", async () => {
+		const { extension } = loadExtension();
+		const { userMsg, assistantMsg } = makeMessages();
+
+		// Create a chain: grandparent → parent → current
+		// Each session needs messages so the file gets flushed to disk
+		const grandparentSession = SessionManager.create(tempDir);
+		grandparentSession.appendMessage(userMsg("grandparent msg"));
+		grandparentSession.appendMessage(assistantMsg("grandparent reply"));
+		const grandparentFile = grandparentSession.getSessionFile();
+
+		const parentSession = SessionManager.create(tempDir);
+		parentSession.newSession({ parentSession: grandparentFile });
+		parentSession.appendMessage(userMsg("parent msg"));
+		parentSession.appendMessage(assistantMsg("parent reply"));
+		const parentFile = parentSession.getSessionFile();
+
+		const currentSession = SessionManager.create(tempDir);
+		currentSession.newSession({ parentSession: parentFile });
+
+		let editorText = "";
+		const ui = createMockUI({
+			custom: mock(async () => ({ type: "prompt", text: "## Goal\nContinue work" })),
+			setEditorText: mock((text: string) => {
+				editorText = text;
+			}),
+		});
+
+		const ctx: any = {
+			hasUI: true,
+			model: { id: "test-model", contextWindow: 200000 },
+			sessionManager: currentSession,
+			modelRegistry: { getApiKey: async () => "test-key" },
+			ui,
+			isIdle: () => true,
+			abort: () => {},
+			hasPendingMessages: () => false,
+			shutdown: () => {},
+			getContextUsage: () => ({ tokens: 50000, contextWindow: 200000, percent: 25 }),
+			compact: () => {},
+			getSystemPrompt: () => "",
+			waitForIdle: async () => {},
+			newSession: mock(async (opts?: any) => {
+				currentSession.newSession(opts);
+				const switchHandlers = extension.handlers.get("session_switch") ?? [];
+				for (const h of switchHandlers) {
+					await h(
+						{ type: "session_switch", reason: "new", previousSessionFile: parentFile },
+						{ ...ctx, sessionManager: currentSession },
+					);
+				}
+				return { cancelled: false };
+			}),
+			fork: async () => ({ cancelled: false }),
+			navigateTree: async () => ({ cancelled: false }),
+			switchSession: async () => ({ cancelled: false }),
+			reload: async () => {},
+		};
+
+		// Seed messages in current session
+		currentSession.appendMessage(userMsg("Build the feature"));
+		currentSession.appendMessage(assistantMsg("On it."));
+
+		await extension.commands.get("handoff")!.handler("continue", ctx);
+
+		// Parent session is listed
+		expect(editorText).toContain("Parent session:");
+		expect(editorText).toContain(parentFile!);
+
+		// Grandparent is listed under ancestor sessions
+		expect(editorText).toContain("Ancestor sessions:");
+		expect(editorText).toContain(grandparentFile!);
+	});
+
+	it("handles single parent with no grandparent (no ancestor section)", async () => {
+		const { extension } = loadExtension();
+		const { userMsg, assistantMsg } = makeMessages();
+
+		// Create a single session (no parent) and handoff from it.
+		// The handoff wraps currentSessionFile as the parent of the new session.
+		// Since the current session has no parentSession in its header,
+		// the ancestry chain is just [currentSessionFile] — no ancestors.
+		const currentSession = SessionManager.create(tempDir);
+
+		let editorText = "";
+		const ui = createMockUI({
+			custom: mock(async () => ({ type: "prompt", text: "## Goal\nDo stuff" })),
+			setEditorText: mock((text: string) => {
+				editorText = text;
+			}),
+		});
+
+		const ctx: any = {
+			hasUI: true,
+			model: { id: "test-model", contextWindow: 200000 },
+			sessionManager: currentSession,
+			modelRegistry: { getApiKey: async () => "test-key" },
+			ui,
+			isIdle: () => true,
+			abort: () => {},
+			hasPendingMessages: () => false,
+			shutdown: () => {},
+			getContextUsage: () => ({ tokens: 50000, contextWindow: 200000, percent: 25 }),
+			compact: () => {},
+			getSystemPrompt: () => "",
+			waitForIdle: async () => {},
+			newSession: mock(async (opts?: any) => {
+				currentSession.newSession(opts);
+				const switchHandlers = extension.handlers.get("session_switch") ?? [];
+				for (const h of switchHandlers) {
+					await h(
+						{ type: "session_switch", reason: "new", previousSessionFile: currentSessionFile },
+						{ ...ctx, sessionManager: currentSession },
+					);
+				}
+				return { cancelled: false };
+			}),
+			fork: async () => ({ cancelled: false }),
+			navigateTree: async () => ({ cancelled: false }),
+			switchSession: async () => ({ cancelled: false }),
+			reload: async () => {},
+		};
+
+		currentSession.appendMessage(userMsg("Hello"));
+		currentSession.appendMessage(assistantMsg("Hi"));
+
+		const currentSessionFile = currentSession.getSessionFile();
+		await extension.commands.get("handoff")!.handler("do stuff", ctx);
+
+		// Parent listed (the current session becomes the parent of the new session)
+		expect(editorText).toContain("Parent session:");
+		expect(editorText).toContain(currentSessionFile!);
+
+		// No ancestor section when the parent has no parent of its own
+		expect(editorText).not.toContain("Ancestor sessions:");
+	});
+});
+
 // ── E2E with real LLM ───────────────────────────────────────────────────────
 
 describe.skipIf(!API_KEY)("Handoff e2e (real LLM)", () => {

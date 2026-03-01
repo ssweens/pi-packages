@@ -12,9 +12,9 @@ This skill is automatically invoked in handed-off sessions when you need to look
 
 ## When to Use
 
-- When the handoff summary references a "Parent session" path
+- When the handoff summary references a "Parent session" or "Ancestor sessions" path
 - When you need specific details not included in the handoff summary
-- When you need to verify a decision or approach from the parent session
+- When you need to verify a decision or approach from the parent or an ancestor session
 - When you need file paths or code snippets from earlier work
 
 ## Usage
@@ -51,6 +51,7 @@ session_query("/path/to/session.jsonl", "Summarize the key decisions made")
 2. **Reference code** - Ask about specific files or functions when relevant
 3. **Verify before assuming** - If the handoff summary seems incomplete, query for details
 4. **Don't over-query** - The handoff summary should have most context; query only when needed
+5. **Check ancestors** - If the parent session doesn't have the info, try ancestor sessions listed in the handoff
 
 ## How It Works
 

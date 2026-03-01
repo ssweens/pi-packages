@@ -13,12 +13,14 @@
  * User presses Enter to send it.
  */
 
+import { existsSync, readFileSync } from "node:fs";
 import { complete, type Message } from "@mariozechner/pi-ai";
 import type {
 	ExtensionAPI,
 	ExtensionCommandContext,
 	ExtensionContext,
 	SessionEntry,
+	SessionHeader,
 } from "@mariozechner/pi-coding-agent";
 import { BorderedLoader, buildSessionContext, convertToLlm, serializeConversation } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
@@ -219,13 +221,64 @@ function gatherConversation(ctx: ExtensionContext): { text: string; messages: an
 }
 
 /**
+ * Read a session file's header to extract parentSession.
+ * Only reads the first line (the header is always line 1 in a .jsonl session file).
+ */
+function getSessionHeader(sessionFile: string): SessionHeader | null {
+	try {
+		if (!existsSync(sessionFile)) return null;
+		const content = readFileSync(sessionFile, "utf-8");
+		const firstLine = content.slice(0, content.indexOf("\n")).trim();
+		if (!firstLine) return null;
+		const parsed = JSON.parse(firstLine);
+		return parsed.type === "session" ? parsed : null;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Walk the session ancestry chain (parent → grandparent → …).
+ * Returns an ordered list of session file paths, starting with the immediate parent.
+ * Stops at the first missing/unreadable file or when there's no parentSession.
+ * Guards against cycles with a visited set.
+ */
+function getSessionAncestry(parentSessionFile: string): string[] {
+	const ancestry: string[] = [];
+	const visited = new Set<string>();
+	let current: string | undefined = parentSessionFile;
+
+	while (current && !visited.has(current)) {
+		visited.add(current);
+		ancestry.push(current);
+		const header = getSessionHeader(current);
+		current = header?.parentSession;
+	}
+
+	return ancestry;
+}
+
+/**
  * Wrap a handoff prompt with the parent session reference and session-query skill.
- * Enables the new session to query the old one for details not in the summary.
+ * Includes the full ancestry chain so the new session can query any ancestor.
  */
 function wrapWithParentSession(prompt: string, parentSessionFile: string | null): string {
 	if (!parentSessionFile) return prompt;
 
-	return `/skill:pi-session-query\n\n**Parent session:** \`${parentSessionFile}\`\n\n${prompt}`;
+	const ancestry = getSessionAncestry(parentSessionFile);
+
+	const lines = [`/skill:pi-session-query`, ""];
+	lines.push(`**Parent session:** \`${ancestry[0]}\``);
+	if (ancestry.length > 1) {
+		lines.push("");
+		lines.push(`**Ancestor sessions:**`);
+		for (let i = 1; i < ancestry.length; i++) {
+			lines.push(`- \`${ancestry[i]}\``);
+		}
+	}
+	lines.push("");
+
+	return `${lines.join("\n")}${prompt}`;
 }
 
 // ---------------------------------------------------------------------------
