@@ -27,27 +27,45 @@ import { Type } from "@sinclair/typebox";
 // System prompts
 // ---------------------------------------------------------------------------
 
-const SYSTEM_PROMPT = `You are a context transfer assistant. Given a conversation history and the user's goal for a new thread, generate a focused prompt that:
+const SYSTEM_PROMPT = `You are a context transfer assistant. Read the conversation and produce a structured handoff summary for the stated goal. The new thread must be able to proceed without the old conversation.
 
-1. Summarizes relevant context from the conversation (decisions made, approaches taken, key findings)
-2. Lists any relevant files that were discussed or modified
-3. Clearly states the next task based on the user's goal
-4. Is self-contained - the new thread should be able to proceed without the old conversation
+Do NOT continue the conversation. Do NOT respond to any questions in the history. ONLY output the structured summary.
 
-Format your response as a prompt the user can send to start the new thread. Be concise but include all necessary context. Do not include any preamble like "Here's the prompt" - just output the prompt itself.
+Use this EXACT format:
 
-Example output format:
-## Context
-We've been working on X. Key decisions:
-- Decision 1
-- Decision 2
+## Goal
+[The user's goal for the new thread — what they want to accomplish.]
 
-Files involved:
-- path/to/file1.ts
-- path/to/file2.ts
+## Constraints & Preferences
+- [Any requirements, constraints, or preferences the user stated]
+- [Or "(none)" if none were mentioned]
 
-## Task
-[Clear description of what to do next based on user's goal]`;
+## Progress
+### Done
+- [x] [Completed work relevant to the goal]
+
+### In Progress
+- [ ] [Partially completed work]
+
+### Blocked
+- [Open issues or blockers, if any]
+
+## Key Decisions
+- **[Decision]**: [Brief rationale]
+- Use code pointers (path/to/file.ts:42 or path/to/file.ts#functionName) where relevant
+
+## Next Steps
+1. [Ordered list of what should happen next, filtered by the stated goal]
+
+## Critical Context
+- [Any data, examples, or references needed to continue]
+- [Or "(none)" if not applicable]
+
+Rules:
+- Be concise. Every bullet earns its place.
+- Preserve exact file paths, function names, and error messages.
+- Only include information relevant to the stated goal — discard unrelated context.
+- Output the formatted content only. No preamble, no filler.`;
 
 export const HANDOFF_SYSTEM_HINT = `
 ## Handoff
@@ -55,6 +73,64 @@ export const HANDOFF_SYSTEM_HINT = `
 Use \`/handoff <goal>\` to transfer context to a new focused session.
 Handoffs are especially effective after planning — clear the context and start a new session with the plan you just created.
 At high context usage, suggest a handoff rather than losing important context.`;
+
+// ---------------------------------------------------------------------------
+// File operation tracking (mirrors pi's compaction/utils.ts approach)
+// ---------------------------------------------------------------------------
+
+interface FileOps {
+	read: Set<string>;
+	written: Set<string>;
+	edited: Set<string>;
+}
+
+function createFileOps(): FileOps {
+	return { read: new Set(), written: new Set(), edited: new Set() };
+}
+
+/** Extract file paths from tool calls in assistant messages. */
+function extractFileOpsFromMessage(message: any, fileOps: FileOps): void {
+	if (message.role !== "assistant") return;
+	if (!Array.isArray(message.content)) return;
+
+	for (const block of message.content) {
+		if (block?.type !== "toolCall" || !block.arguments || !block.name) continue;
+		const path = typeof block.arguments.path === "string" ? block.arguments.path : undefined;
+		if (!path) continue;
+
+		switch (block.name) {
+			case "read":
+				fileOps.read.add(path);
+				break;
+			case "write":
+				fileOps.written.add(path);
+				break;
+			case "edit":
+				fileOps.edited.add(path);
+				break;
+		}
+	}
+}
+
+/** Compute read-only and modified file lists, append to summary as XML tags. */
+function appendFileOperations(summary: string, messages: any[]): string {
+	const fileOps = createFileOps();
+	for (const msg of messages) extractFileOpsFromMessage(msg, fileOps);
+
+	const modified = new Set([...fileOps.edited, ...fileOps.written]);
+	const readFiles = [...fileOps.read].filter((f) => !modified.has(f)).sort();
+	const modifiedFiles = [...modified].sort();
+
+	const sections: string[] = [];
+	if (readFiles.length > 0) {
+		sections.push(`<read-files>\n${readFiles.join("\n")}\n</read-files>`);
+	}
+	if (modifiedFiles.length > 0) {
+		sections.push(`<modified-files>\n${modifiedFiles.join("\n")}\n</modified-files>`);
+	}
+
+	return sections.length > 0 ? `${summary}\n\n${sections.join("\n\n")}` : summary;
+}
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -113,10 +189,10 @@ async function generateHandoffPrompt(
 }
 
 /**
- * Gather conversation text from the current branch.
- * Returns the serialized text, or null if no messages.
+ * Gather conversation from the current branch.
+ * Returns serialized text + raw messages (for file op extraction), or null if empty.
  */
-function gatherConversation(ctx: ExtensionContext): string | null {
+function gatherConversation(ctx: ExtensionContext): { text: string; messages: any[] } | null {
 	const branch = ctx.sessionManager.getBranch();
 	const messages = branch
 		.filter((entry): entry is SessionEntry & { type: "message" } => entry.type === "message")
@@ -124,7 +200,7 @@ function gatherConversation(ctx: ExtensionContext): string | null {
 
 	if (messages.length === 0) return null;
 
-	return serializeConversation(convertToLlm(messages));
+	return { text: serializeConversation(convertToLlm(messages)), messages };
 }
 
 // ---------------------------------------------------------------------------
@@ -255,6 +331,9 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
+		// Append programmatic file tracking from the messages being summarized
+		prompt = appendFileOperations(prompt, preparation.messagesToSummarize);
+
 		// Switch session via raw sessionManager (safe — no agent loop running)
 		const currentSessionFile = ctx.sessionManager.getSessionFile();
 
@@ -291,17 +370,20 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			const conversationText = gatherConversation(ctx);
-			if (!conversationText) {
+			const conv = gatherConversation(ctx);
+			if (!conv) {
 				ctx.ui.notify("No conversation to hand off.", "error");
 				return;
 			}
 
-			const prompt = await generateHandoffPrompt(conversationText, goal, ctx);
+			let prompt = await generateHandoffPrompt(conv.text, goal, ctx);
 			if (prompt === null) {
 				ctx.ui.notify("Handoff cancelled.", "info");
 				return;
 			}
+
+			// Append programmatic file tracking (read/modified from tool calls)
+			prompt = appendFileOperations(prompt, conv.messages);
 
 			const currentSessionFile = ctx.sessionManager.getSessionFile();
 
@@ -337,15 +419,17 @@ export default function (pi: ExtensionAPI) {
 				return { content: [{ type: "text" as const, text: "No model selected." }] };
 			}
 
-			const conversationText = gatherConversation(ctx);
-			if (!conversationText) {
+			const conv = gatherConversation(ctx);
+			if (!conv) {
 				return { content: [{ type: "text" as const, text: "No conversation to hand off." }] };
 			}
 
-			const prompt = await generateHandoffPrompt(conversationText, params.goal, ctx);
+			let prompt = await generateHandoffPrompt(conv.text, params.goal, ctx);
 			if (prompt === null) {
 				return { content: [{ type: "text" as const, text: "Handoff cancelled." }] };
 			}
+
+			prompt = appendFileOperations(prompt, conv.messages);
 
 			// Defer session switch to agent_end
 			pendingHandoff = {
