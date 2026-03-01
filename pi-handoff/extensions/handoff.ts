@@ -136,16 +136,18 @@ function appendFileOperations(summary: string, messages: any[]): string {
 // Shared helpers
 // ---------------------------------------------------------------------------
 
+type HandoffResult = { type: "prompt"; text: string } | { type: "error"; message: string } | null;
+
 /**
  * Generate a handoff prompt via LLM with a loader UI.
- * Returns the prompt text, or null if cancelled/failed.
+ * Returns { type: "prompt", text } on success, { type: "error", message } on failure, or null if user cancelled.
  */
 async function generateHandoffPrompt(
 	conversationText: string,
 	goal: string,
 	ctx: ExtensionContext,
-): Promise<string | null> {
-	return ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
+): Promise<HandoffResult> {
+	return ctx.ui.custom<HandoffResult>((tui, theme, _kb, done) => {
 		const loader = new BorderedLoader(tui, theme, "Generating handoff prompt...");
 		loader.onAbort = () => done(null);
 
@@ -171,11 +173,11 @@ async function generateHandoffPrompt(
 
 			if (response.stopReason === "aborted") return null;
 			if (response.stopReason === "error") {
-				throw new Error(
+				const msg =
 					"errorMessage" in response && typeof (response as any).errorMessage === "string"
 						? (response as any).errorMessage
-						: "Handoff generation failed",
-				);
+						: "LLM request failed";
+				return { type: "error" as const, message: msg };
 			}
 
 			const text = response.content
@@ -184,14 +186,14 @@ async function generateHandoffPrompt(
 				.join("\n")
 				.trim();
 
-			return text.length > 0 ? text : null;
+			return text.length > 0 ? { type: "prompt" as const, text } : { type: "error" as const, message: "LLM returned empty response" };
 		};
 
 		run()
 			.then(done)
 			.catch((err) => {
-				console.error("Handoff generation failed:", err);
-				done(null);
+				const message = err instanceof Error ? err.message : String(err);
+				done({ type: "error" as const, message });
 			});
 
 		return loader;
@@ -335,24 +337,19 @@ export default function (pi: ExtensionAPI) {
 		contextForHandoff += `## Recent Conversation\n\n${conversationText}`;
 
 		// Generate handoff prompt
-		let prompt: string | null;
-		try {
-			prompt = await generateHandoffPrompt(contextForHandoff, "Continue current work", ctx);
-		} catch (err) {
-			ctx.ui.notify(
-				`Handoff failed: ${err instanceof Error ? err.message : String(err)}. Compacting instead.`,
-				"warning",
-			);
+		const handoffResult = await generateHandoffPrompt(contextForHandoff, "Continue current work", ctx);
+
+		if (!handoffResult) {
+			ctx.ui.notify("Handoff cancelled. Compacting instead.", "warning");
 			return;
 		}
-
-		if (!prompt) {
-			ctx.ui.notify("Handoff cancelled. Compacting instead.", "warning");
+		if (handoffResult.type === "error") {
+			ctx.ui.notify(`Handoff failed: ${handoffResult.message}. Compacting instead.`, "warning");
 			return;
 		}
 
 		// Append programmatic file tracking from the messages being summarized
-		prompt = appendFileOperations(prompt, preparation.messagesToSummarize);
+		let prompt = appendFileOperations(handoffResult.text, preparation.messagesToSummarize);
 
 		// Switch session via raw sessionManager (safe — no agent loop running)
 		const currentSessionFile = ctx.sessionManager.getSessionFile();
@@ -399,14 +396,18 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			let prompt = await generateHandoffPrompt(conv.text, goal, ctx);
-			if (!prompt) {
+			const result = await generateHandoffPrompt(conv.text, goal, ctx);
+			if (!result) {
 				ctx.ui.notify("Handoff cancelled.", "info");
+				return;
+			}
+			if (result.type === "error") {
+				ctx.ui.notify(`Handoff failed: ${result.message}`, "error");
 				return;
 			}
 
 			// Append programmatic file tracking (read/modified from tool calls)
-			prompt = appendFileOperations(prompt, conv.messages);
+			let prompt = appendFileOperations(result.text, conv.messages);
 
 			const currentSessionFile = ctx.sessionManager.getSessionFile();
 
@@ -417,9 +418,9 @@ export default function (pi: ExtensionAPI) {
 				pendingHandoffText.set(currentSessionFile, prompt);
 			}
 
-			const result = await ctx.newSession({ parentSession: currentSessionFile ?? undefined });
+			const sessionResult = await ctx.newSession({ parentSession: currentSessionFile ?? undefined });
 
-			if (result.cancelled) {
+			if (sessionResult.cancelled) {
 				if (currentSessionFile) pendingHandoffText.delete(currentSessionFile);
 				ctx.ui.notify("New session cancelled.", "info");
 				return;
@@ -450,12 +451,15 @@ export default function (pi: ExtensionAPI) {
 				return { content: [{ type: "text" as const, text: "No conversation to hand off." }] };
 			}
 
-			let prompt = await generateHandoffPrompt(conv.text, params.goal, ctx);
-			if (!prompt) {
+			const result = await generateHandoffPrompt(conv.text, params.goal, ctx);
+			if (!result) {
 				return { content: [{ type: "text" as const, text: "Handoff cancelled." }] };
 			}
+			if (result.type === "error") {
+				return { content: [{ type: "text" as const, text: `Handoff failed: ${result.message}` }] };
+			}
 
-			prompt = appendFileOperations(prompt, conv.messages);
+			let prompt = appendFileOperations(result.text, conv.messages);
 
 			const currentSessionFile = ctx.sessionManager.getSessionFile();
 			prompt = wrapWithParentSession(prompt, currentSessionFile ?? null);

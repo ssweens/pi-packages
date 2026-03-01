@@ -238,7 +238,7 @@ describe("Handoff extension", () => {
 			let editorText = "";
 			const ui = createMockUI({
 				// Simulate LLM generating a summary
-				custom: mock(async () => "## Context\nWe discussed auth.\n\n## Task\nImplement OAuth"),
+				custom: mock(async () => ({ type: "prompt", text: "## Context\nWe discussed auth.\n\n## Task\nImplement OAuth" })),
 				setEditorText: mock((text: string) => {
 					editorText = text;
 				}),
@@ -344,7 +344,7 @@ describe("Handoff extension", () => {
 			let editorText = "";
 			const ui = createMockUI({
 				select: mock(async () => "Handoff to new session"),
-				custom: mock(async () => "## Context\nWorking on tests.\n\n## Task\nContinue"),
+				custom: mock(async () => ({ type: "prompt", text: "## Context\nWorking on tests.\n\n## Task\nContinue" })),
 				setEditorText: mock((text: string) => {
 					editorText = text;
 				}),
@@ -499,7 +499,7 @@ describe("Handoff extension", () => {
 
 			let editorText = "";
 			const ui = createMockUI({
-				custom: mock(async () => "## Context\nTool handoff.\n\n## Task\nContinue"),
+				custom: mock(async () => ({ type: "prompt", text: "## Context\nTool handoff.\n\n## Task\nContinue" })),
 				setEditorText: mock((text: string) => {
 					editorText = text;
 				}),
@@ -562,7 +562,7 @@ describe("Handoff extension", () => {
 
 			const ui = createMockUI({
 				select: mock(async () => "Handoff to new session"),
-				custom: mock(async () => "## Summary\nDone."),
+				custom: mock(async () => ({ type: "prompt", text: "## Summary\nDone." })),
 			});
 
 			const ctx: any = {
@@ -613,7 +613,7 @@ describe("Handoff extension", () => {
 
 			const ui = createMockUI({
 				select: mock(async () => "Handoff to new session"),
-				custom: mock(async () => "## Summary"),
+				custom: mock(async () => ({ type: "prompt", text: "## Summary" })),
 			});
 
 			const ctx: any = {
@@ -744,10 +744,11 @@ describe.skipIf(!API_KEY)("Handoff e2e (real LLM)", () => {
 					{ apiKey: API_KEY! },
 				);
 
-				return response.content
+				const promptText = response.content
 					.filter((c: any) => c.type === "text")
 					.map((c: any) => c.text)
 					.join("\n");
+				return { type: "prompt", text: promptText };
 			}),
 			setEditorText: mock((text: string) => {
 				editorText = text;
