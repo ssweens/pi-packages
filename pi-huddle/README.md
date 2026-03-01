@@ -1,5 +1,9 @@
 # pi-huddle
 
+![Huddle mode — permission-gated exploration](screenshot.png)
+
+![ask_user — structured multi-question elicitation](ask-user-screenshot.png)
+
 ```bash
 pi install @ssweens/pi-huddle
 ```

@@ -18,7 +18,8 @@
     "skills/",
     "README.md",
     "LICENSE",
-    "screenshot.png"
+    "screenshot.png",
+    "ask-user-screenshot.png"
   ],
   "peerDependencies": {
     "@mariozechner/pi-ai": "*",
