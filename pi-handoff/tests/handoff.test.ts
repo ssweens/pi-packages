@@ -1,906 +1,830 @@
 /**
- * Comprehensive tests for the pi-handoff extension.
+ * Handoff extension tests.
  *
- * Strategy:
- * - Pure functions (goalToSessionName, buildFullPrompt) tested directly.
- * - Registered handlers tested via a mock ExtensionAPI factory that captures
- *   all pi.on() / registerCommand() / registerTool() registrations.
- * - ctx.ui.custom() is mocked to return values directly (bypasses the
- *   BorderedLoader/LLM machinery which lives inside the factory callback).
- * - The @mariozechner/pi-ai and @mariozechner/pi-coding-agent modules are
- *   mocked before import so no real network calls or TUI is needed.
+ * Follows pi's own compaction-extensions.test.ts pattern:
+ * - Real AgentSession with real SessionManager (temp dir)
+ * - Real extension wired in via Extension interface
+ * - Real LLM calls for e2e tests (gated by API_KEY)
+ * - Minimal mocking: only what can't run in tests (TUI components)
+ *
+ * The extension registers handlers via pi.on() / registerCommand() / registerTool().
+ * We capture those registrations into an Extension object, wire it into AgentSession,
+ * and drive events through the real session machinery.
  */
 
-import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
-
-// ─── Module mocks (must be before any import of the extension) ───────────────
-
-const mockComplete = mock(async () => ({
-	stopReason: "end_turn",
-	content: [{ type: "text", text: "Generated summary content" }],
-}));
-
-const mockBorderedLoaderInstances: Array<{ onAbort?: () => void; signal: AbortSignal }> = [];
-const mockBorderedLoader = mock(function (this: any, _tui: any, _theme: any, _msg: string) {
-	const ctrl = new AbortController();
-	this.signal = ctrl.signal;
-	this.onAbort = undefined;
-	mockBorderedLoaderInstances.push(this);
-});
-
-const mockConvertToLlm = mock((msgs: any[]) => msgs);
-const mockSerializeConversation = mock((_msgs: any[]) => "serialized-conversation");
-
-mock.module("@mariozechner/pi-ai", () => ({ complete: mockComplete }));
-mock.module("@mariozechner/pi-coding-agent", () => ({
-	BorderedLoader: mockBorderedLoader,
-	convertToLlm: mockConvertToLlm,
-	serializeConversation: mockSerializeConversation,
-}));
-mock.module("@sinclair/typebox", () => ({
-	Type: {
-		Object: (schema: any) => ({ type: "object", properties: schema }),
-		String: (opts: any) => ({ type: "string", ...opts }),
-	},
-}));
-
-// ─── Import extension after mocks ───────────────────────────────────────────
-
+import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Agent } from "@mariozechner/pi-agent-core";
+import { getModel } from "@mariozechner/pi-ai";
+import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import {
-	__clearPendingHandoffText,
-	buildFullPrompt,
-	goalToSessionName,
-	HANDOFF_SYSTEM_HINT,
-} from "../extensions/handoff.ts";
+	AgentSession,
+	AuthStorage,
+	createExtensionRuntime,
+	type Extension,
+	type ExtensionAPI,
+	type ExtensionCommandContext,
+	type ExtensionContext,
+	ModelRegistry,
+	SessionManager,
+	SettingsManager,
+} from "@mariozechner/pi-coding-agent";
+
+// Import the real extension
 import handoffExtension from "../extensions/handoff.ts";
 
-// ─── Test helpers ────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
-type Handler = (event: any, ctx: any) => Promise<any>;
-type CommandHandler = (args: string, ctx: any) => Promise<void>;
-type ToolExecute = (
-	toolCallId: string,
-	params: any,
-	signal: any,
-	onUpdate: any,
-	ctx: any,
-) => Promise<any>;
+/**
+ * Resolve API key from pi's auth storage (~/.pi/agent/auth.json).
+ * Handles both plain API keys and OAuth credentials (with refresh).
+ */
+async function resolveApiKey(provider: string): Promise<string | undefined> {
+	const { homedir } = await import("node:os");
+	const { join } = await import("node:path");
+	const { existsSync, readFileSync } = await import("node:fs");
+	const { getOAuthApiKey } = await import("@mariozechner/pi-ai");
 
-interface CapturedExtension {
-	handlers: Record<string, Handler[]>;
-	commands: Record<string, CommandHandler>;
-	tools: Record<string, ToolExecute>;
-	pi: ReturnType<typeof createMockPi>["pi"];
+	const authPath = join(homedir(), ".pi", "agent", "auth.json");
+	if (!existsSync(authPath)) return undefined;
+
+	let storage: Record<string, any>;
+	try {
+		storage = JSON.parse(readFileSync(authPath, "utf-8"));
+	} catch {
+		return undefined;
+	}
+
+	const entry = storage[provider];
+	if (!entry) return undefined;
+
+	if (entry.type === "api_key") return entry.key;
+
+	if (entry.type === "oauth") {
+		const oauthCreds: Record<string, any> = {};
+		for (const [key, value] of Object.entries(storage)) {
+			if ((value as any).type === "oauth") {
+				const { type: _, ...creds } = value as any;
+				oauthCreds[key] = creds;
+			}
+		}
+		const result = await getOAuthApiKey(provider as any, oauthCreds);
+		return result?.apiKey;
+	}
+
+	return undefined;
 }
 
-function createMockPi() {
-	const captured: CapturedExtension = {
-		handlers: {},
-		commands: {},
-		tools: {},
-		pi: null as any,
-	};
+const API_KEY = await resolveApiKey("anthropic");
 
-	const pi = {
-		on: mock((event: string, handler: Handler) => {
-			if (!captured.handlers[event]) captured.handlers[event] = [];
-			captured.handlers[event].push(handler);
-		}),
-		registerCommand: mock((name: string, opts: { handler: CommandHandler }) => {
-			captured.commands[name] = opts.handler;
-		}),
-		registerTool: mock((tool: { name: string; execute: ToolExecute }) => {
-			captured.tools[tool.name] = tool.execute;
-		}),
-		setSessionName: mock((_name: string) => {}),
-		events: { emit: mock(), on: mock() },
+/**
+ * Load the real handoff extension into an Extension object
+ * by capturing pi.on(), registerCommand(), registerTool() calls.
+ */
+function loadExtension(): { extension: Extension; pi: ExtensionAPI } {
+	const handlers = new Map<string, ((event: any, ctx: any) => Promise<any>)[]>();
+	const commands = new Map<string, any>();
+	const tools = new Map<string, any>();
+
+	const pi: ExtensionAPI = {
+		on: (event: string, handler: any) => {
+			if (!handlers.has(event)) handlers.set(event, []);
+			handlers.get(event)!.push(handler);
+		},
+		registerCommand: (name: string, opts: any) => {
+			commands.set(name, { name, ...opts });
+		},
+		registerTool: (tool: any) => {
+			tools.set(tool.name, {
+				definition: tool,
+				extensionPath: "pi-handoff",
+			});
+		},
+		setSessionName: mock(() => {}),
+		sendMessage: mock(() => {}),
+		sendUserMessage: mock(() => {}),
+		appendEntry: mock(() => {}),
+		getSessionName: () => undefined,
+		setLabel: mock(() => {}),
+		getActiveTools: () => [],
+		getAllTools: () => [],
+		setActiveTools: mock(() => {}),
+		getCommands: () => [],
+		setModel: mock(async () => true),
+		getThinkingLevel: () => "medium" as any,
+		setThinkingLevel: mock(() => {}),
+		registerProvider: mock(() => {}),
+		unregisterProvider: mock(() => {}),
+		registerFlag: mock(() => {}),
+		getFlag: () => undefined,
+		registerShortcut: mock(() => {}),
+		registerMessageRenderer: mock(() => {}),
+		exec: mock(async () => ({ exitCode: 0, stdout: "", stderr: "" })),
+		events: { emit: mock(() => {}), on: mock(() => () => {}) } as any,
 	} as any;
 
-	captured.pi = pi;
-	return { pi, captured };
-}
-
-/** Creates a minimal ExtensionContext mock with sensible defaults. */
-function createCtx(overrides: Record<string, any> = {}): any {
-	return {
-		hasUI: true,
-		model: { id: "claude-sonnet-4", contextWindow: 200000 },
-		cwd: "/test/project",
-		sessionManager: {
-			getBranch: mock(() => [
-				{ type: "message", message: { role: "user", content: "Hello" } },
-				{
-					type: "message",
-					message: { role: "assistant", content: [{ type: "text", text: "Hi there" }] },
-				},
-			]),
-			getSessionFile: mock(() => "/sessions/test-session.jsonl"),
-			getHeader: mock(() => ({ parentSession: "/sessions/parent-session.jsonl" })),
-			getSessionName: mock(() => undefined),
-		},
-		modelRegistry: {
-			getApiKey: mock(async () => "test-api-key"),
-		},
-		ui: {
-			select: mock(async () => undefined),
-			notify: mock((_msg: string, _type?: string) => {}),
-			setEditorText: mock((_text: string) => {}),
-			getEditorText: mock(() => ""),
-			custom: mock(async (_factory: any) => "Generated summary content"),
-			confirm: mock(async () => false),
-			input: mock(async () => undefined),
-			setStatus: mock(),
-			setWorkingMessage: mock(),
-			setWidget: mock(),
-			setTitle: mock(),
-			pasteToEditor: mock(),
-			editor: mock(async () => undefined),
-			setEditorComponent: mock(),
-			setFooter: mock(),
-			setHeader: mock(),
-			onTerminalInput: mock(() => () => {}),
-			getToolsExpanded: mock(() => false),
-			setToolsExpanded: mock(),
-			getAllThemes: mock(() => []),
-			getTheme: mock(() => undefined),
-			setTheme: mock(() => ({ success: true })),
-			theme: {},
-		},
-		isIdle: mock(() => true),
-		abort: mock(),
-		hasPendingMessages: mock(() => false),
-		shutdown: mock(),
-		getContextUsage: mock(() => ({ tokens: 180000, contextWindow: 200000, percent: 90 })),
-		compact: mock(),
-		getSystemPrompt: mock(() => "base system prompt"),
-		...overrides,
-	};
-}
-
-/** Extends a ctx with command-context methods (newSession, etc.) */
-function createCommandCtx(overrides: Record<string, any> = {}): any {
-	return {
-		...createCtx(),
-		waitForIdle: mock(async () => {}),
-		newSession: mock(async (_opts?: any) => ({ cancelled: false })),
-		fork: mock(async () => ({ cancelled: false })),
-		navigateTree: mock(async () => ({ cancelled: false })),
-		switchSession: mock(async () => ({ cancelled: false })),
-		reload: mock(async () => {}),
-		...overrides,
-	};
-}
-
-/** Fire the first registered handler for an event. */
-async function fireEvent(captured: CapturedExtension, event: string, eventObj: any, ctx: any) {
-	const handlers = captured.handlers[event] ?? [];
-	if (handlers.length === 0) throw new Error(`No handler registered for '${event}'`);
-	let result: any;
-	for (const h of handlers) {
-		result = await h(eventObj, ctx);
-	}
-	return result;
-}
-
-// ─── Shared setup ─────────────────────────────────────────────────────────────
-
-let captured: CapturedExtension;
-let piMock: any;
-
-beforeEach(() => {
-	mockBorderedLoaderInstances.length = 0;
-	mockComplete.mockClear();
-	mockConvertToLlm.mockClear();
-	mockSerializeConversation.mockClear();
-
-	// Clear module-level state — pendingHandoffText persists across tests otherwise
-	__clearPendingHandoffText();
-
-	const { pi, captured: cap } = createMockPi();
-	piMock = pi;
-	captured = cap;
 	handoffExtension(pi);
-});
 
-// ─── goalToSessionName ────────────────────────────────────────────────────────
+	const extension: Extension = {
+		path: "pi-handoff",
+		resolvedPath: join(__dirname, "../extensions/handoff.ts"),
+		handlers,
+		tools,
+		messageRenderers: new Map(),
+		commands,
+		flags: new Map(),
+		shortcuts: new Map(),
+	};
 
-describe("goalToSessionName", () => {
-	it("converts a normal goal to a lowercase slug", () => {
-		expect(goalToSessionName("Implement OAuth Flow")).toBe("implement-oauth-flow");
+	return { extension, pi };
+}
+
+/**
+ * Create a minimal mock UI context for handler tests.
+ * Only mocks what can't run without a terminal.
+ */
+function createMockUI(overrides: Record<string, any> = {}) {
+	return {
+		select: mock(async () => undefined),
+		confirm: mock(async () => false),
+		input: mock(async () => undefined),
+		notify: mock((_msg: string, _type?: string) => {}),
+		setEditorText: mock((_text: string) => {}),
+		getEditorText: mock(() => ""),
+		custom: mock(async () => null),
+		pasteToEditor: mock(),
+		editor: mock(async () => undefined),
+		setEditorComponent: mock(),
+		setStatus: mock(),
+		setWorkingMessage: mock(),
+		setWidget: mock(),
+		setFooter: mock(),
+		setHeader: mock(),
+		setTitle: mock(),
+		onTerminalInput: mock(() => () => {}),
+		getToolsExpanded: mock(() => false),
+		setToolsExpanded: mock(),
+		getAllThemes: mock(() => []),
+		getTheme: mock(() => undefined),
+		setTheme: mock(() => ({ success: true })),
+		theme: {},
+		...overrides,
+	};
+}
+
+function createTestResourceLoader(extensions: Extension[] = []) {
+	const runtime = createExtensionRuntime();
+	return {
+		getExtensions: () => ({ extensions, errors: [], runtime }),
+		getSkills: () => ({ skills: [], diagnostics: [] }),
+		getPrompts: () => ({ prompts: [], diagnostics: [] }),
+		getThemes: () => ({ themes: [], diagnostics: [] }),
+		getAgentsFiles: () => ({ agentsFiles: [] }),
+		getSystemPrompt: () => undefined,
+		getAppendSystemPrompt: () => [],
+		getPathMetadata: () => new Map(),
+		reload: async () => {},
+	};
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+describe("Handoff extension", () => {
+	let tempDir: string;
+
+	beforeEach(() => {
+		tempDir = join(tmpdir(), `pi-handoff-test-${Date.now()}`);
+		mkdirSync(tempDir, { recursive: true });
 	});
 
-	it("removes special characters", () => {
-		expect(goalToSessionName("Fix bug #123 (critical!)")).toBe("fix-bug-123-critical");
+	afterEach(() => {
+		if (tempDir && existsSync(tempDir)) {
+			rmSync(tempDir, { recursive: true });
+		}
 	});
 
-	it("trims leading and trailing whitespace", () => {
-		expect(goalToSessionName("  hello world  ")).toBe("hello-world");
-	});
+	// ── Registration ────────────────────────────────────────────────────────
 
-	it("collapses multiple spaces into a single hyphen", () => {
-		expect(goalToSessionName("hello   world")).toBe("hello-world");
-	});
+	describe("registration", () => {
+		it("registers all expected handlers, commands, and tools", () => {
+			const { extension } = loadExtension();
 
-	it("truncates to 50 characters", () => {
-		const long = "a ".repeat(40); // 80 chars after join
-		const result = goalToSessionName(long);
-		expect(result.length).toBeLessThanOrEqual(50);
-	});
-
-	it("returns empty string for empty input", () => {
-		expect(goalToSessionName("")).toBe("");
-	});
-
-	it("returns empty string for only special characters", () => {
-		expect(goalToSessionName("!@#$%^&*()")).toBe("");
-	});
-
-	it("handles strings with only spaces", () => {
-		expect(goalToSessionName("   ")).toBe("");
-	});
-
-	it("preserves existing hyphens", () => {
-		expect(goalToSessionName("my-feature flag")).toBe("my-feature-flag");
-	});
-
-	it("handles numeric characters", () => {
-		expect(goalToSessionName("Phase 2 rollout")).toBe("phase-2-rollout");
-	});
-
-	it("strips unicode / emoji characters (surrounding spaces collapse)", () => {
-		// "fix the 🐛 bug" → remove emoji → "fix the  bug" → collapse spaces → "fix-the-bug"
-		expect(goalToSessionName("fix the 🐛 bug")).toBe("fix-the-bug");
-	});
-
-	it("truncates cleanly at exactly 50 chars", () => {
-		const goal = "a" + " b".repeat(25); // 51 chars
-		const result = goalToSessionName(goal);
-		expect(result.length).toBeLessThanOrEqual(50);
-	});
-
-	it("handles a goal that is already 50 chars", () => {
-		const goal = "abcde ".repeat(8).trimEnd(); // 47 chars
-		const result = goalToSessionName(goal);
-		expect(result.length).toBeLessThanOrEqual(50);
-	});
-});
-
-// ─── buildFullPrompt ──────────────────────────────────────────────────────────
-
-describe("buildFullPrompt", () => {
-	it("includes the goal as a heading", () => {
-		const result = buildFullPrompt("My Goal", null, "summary body");
-		expect(result).toContain("# My Goal");
-	});
-
-	it("includes the summary content", () => {
-		const result = buildFullPrompt("Goal", null, "## Progress\n- done");
-		expect(result).toContain("## Progress\n- done");
-	});
-
-	it("includes parent session reference when provided", () => {
-		const result = buildFullPrompt("Goal", "/sessions/abc.jsonl", "summary");
-		expect(result).toContain("**Parent session:** `/sessions/abc.jsonl`");
-	});
-
-	it("omits parent session section when sessionFile is null", () => {
-		const result = buildFullPrompt("Goal", null, "summary");
-		expect(result).not.toContain("**Parent session:**");
-	});
-
-	it("prepends skill prefix when parent session is present", () => {
-		const result = buildFullPrompt("Goal", "/sessions/abc.jsonl", "summary");
-		expect(result.startsWith("/skill:pi-session-query")).toBe(true);
-	});
-
-	it("does NOT prepend skill prefix when no parent session", () => {
-		const result = buildFullPrompt("Goal", null, "summary");
-		expect(result.startsWith("/skill:pi-session-query")).toBe(false);
-		expect(result.startsWith("# Goal")).toBe(true);
-	});
-
-	it("skill prefix precedes the goal heading", () => {
-		const result = buildFullPrompt("My Goal", "/sessions/abc.jsonl", "summary");
-		const skillIdx = result.indexOf("/skill:pi-session-query");
-		const goalIdx = result.indexOf("# My Goal");
-		expect(skillIdx).toBeLessThan(goalIdx);
-	});
-
-	it("handles special characters in goal", () => {
-		const result = buildFullPrompt("Fix bug #123", null, "summary");
-		expect(result).toContain("# Fix bug #123");
-	});
-});
-
-// ─── HANDOFF_SYSTEM_HINT ──────────────────────────────────────────────────────
-
-describe("HANDOFF_SYSTEM_HINT", () => {
-	it("is a non-empty string", () => {
-		expect(typeof HANDOFF_SYSTEM_HINT).toBe("string");
-		expect(HANDOFF_SYSTEM_HINT.length).toBeGreaterThan(0);
-	});
-
-	it("mentions /handoff command", () => {
-		expect(HANDOFF_SYSTEM_HINT).toContain("/handoff");
-	});
-});
-
-// ─── before_agent_start ───────────────────────────────────────────────────────
-
-describe("before_agent_start handler", () => {
-	it("appends HANDOFF_SYSTEM_HINT to the system prompt", async () => {
-		const ctx = createCtx();
-		const event = { type: "before_agent_start", systemPrompt: "base prompt", prompt: "hi" };
-		const result = await fireEvent(captured, "before_agent_start", event, ctx);
-		expect(result?.systemPrompt).toBe("base prompt" + HANDOFF_SYSTEM_HINT);
-	});
-
-	it("preserves the original system prompt content", async () => {
-		const ctx = createCtx();
-		const original = "YOU ARE AN AI ASSISTANT\n\nRules:\n- be helpful";
-		const event = { type: "before_agent_start", systemPrompt: original, prompt: "hi" };
-		const result = await fireEvent(captured, "before_agent_start", event, ctx);
-		expect(result?.systemPrompt).toContain(original);
-	});
-});
-
-// ─── session_switch handler ───────────────────────────────────────────────────
-
-describe("session_switch handler", () => {
-	it("is a no-op when reason is not 'new'", async () => {
-		const ctx = createCtx();
-		ctx.sessionManager.getHeader.mockReturnValue({ parentSession: "/sessions/parent.jsonl" });
-
-		// pre-populate pending text
-		const { buildFullPrompt: bf } = await import("../extensions/handoff.ts");
-		// Just fire with reason=resume and check nothing is set
-		const event = { type: "session_switch", reason: "resume", previousSessionFile: undefined };
-		await fireEvent(captured, "session_switch", event, ctx);
-		expect(ctx.ui.setEditorText.mock.calls.length).toBe(0);
-	});
-
-	it("is a no-op when hasUI is false", async () => {
-		const ctx = createCtx({ hasUI: false });
-		const event = { type: "session_switch", reason: "new", previousSessionFile: undefined };
-		await fireEvent(captured, "session_switch", event, ctx);
-		expect(ctx.ui.setEditorText.mock.calls.length).toBe(0);
-	});
-
-	it("is a no-op when parentSession is null", async () => {
-		const ctx = createCtx();
-		ctx.sessionManager.getHeader = mock(() => ({ parentSession: undefined }));
-		const event = { type: "session_switch", reason: "new", previousSessionFile: undefined };
-		await fireEvent(captured, "session_switch", event, ctx);
-		expect(ctx.ui.setEditorText.mock.calls.length).toBe(0);
-	});
-
-	it("is a no-op when there is no pending text for the parent session", async () => {
-		const ctx = createCtx();
-		ctx.sessionManager.getHeader = mock(() => ({
-			parentSession: "/sessions/UNREGISTERED.jsonl",
-		}));
-		const event = { type: "session_switch", reason: "new", previousSessionFile: undefined };
-		await fireEvent(captured, "session_switch", event, ctx);
-		expect(ctx.ui.setEditorText.mock.calls.length).toBe(0);
-	});
-});
-
-// ─── session_before_compact handler ───────────────────────────────────────────
-
-describe("session_before_compact handler", () => {
-	function makeCompactEvent(overrides: Record<string, any> = {}) {
-		return {
-			type: "session_before_compact",
-			preparation: {
-				messagesToSummarize: [
-					{ role: "user", content: "Write tests" },
-					{ role: "assistant", content: [{ type: "text", text: "Sure!" }] },
-				],
-				previousSummary: undefined,
-			},
-			branchEntries: [],
-			signal: new AbortController().signal,
-			...overrides,
-		};
-	}
-
-	it("is a no-op (returns undefined) when hasUI is false", async () => {
-		const ctx = createCtx({ hasUI: false });
-		const result = await fireEvent(captured, "session_before_compact", makeCompactEvent(), ctx);
-		expect(result).toBeUndefined();
-		expect(ctx.ui.select.mock.calls.length).toBe(0);
-	});
-
-	it("is a no-op when model is undefined", async () => {
-		const ctx = createCtx({ model: undefined });
-		const result = await fireEvent(captured, "session_before_compact", makeCompactEvent(), ctx);
-		expect(result).toBeUndefined();
-		expect(ctx.ui.select.mock.calls.length).toBe(0);
-	});
-
-	it("shows usage percentage in select prompt when available", async () => {
-		const ctx = createCtx();
-		ctx.getContextUsage = mock(() => ({ tokens: 160000, contextWindow: 200000, percent: 80 }));
-		ctx.ui.select = mock(async () => "Compact context");
-		await fireEvent(captured, "session_before_compact", makeCompactEvent(), ctx);
-		const call = ctx.ui.select.mock.calls[0];
-		expect(call[0]).toContain("80%");
-	});
-
-	it("shows 'high' in select prompt when getContextUsage returns undefined", async () => {
-		const ctx = createCtx();
-		ctx.getContextUsage = mock(() => undefined);
-		ctx.ui.select = mock(async () => "Compact context");
-		await fireEvent(captured, "session_before_compact", makeCompactEvent(), ctx);
-		expect(ctx.ui.select.mock.calls[0][0]).toContain("high");
-	});
-
-	it("shows 'high' when context usage percent is null", async () => {
-		const ctx = createCtx();
-		ctx.getContextUsage = mock(() => ({ tokens: null, contextWindow: 200000, percent: null }));
-		ctx.ui.select = mock(async () => "Compact context");
-		await fireEvent(captured, "session_before_compact", makeCompactEvent(), ctx);
-		expect(ctx.ui.select.mock.calls[0][0]).toContain("high");
-	});
-
-	it("proceeds with compaction (returns undefined) when 'Compact context' selected", async () => {
-		const ctx = createCtx();
-		ctx.ui.select = mock(async () => "Compact context");
-		const result = await fireEvent(captured, "session_before_compact", makeCompactEvent(), ctx);
-		expect(result).toBeUndefined();
-	});
-
-	it("proceeds with compaction when select is dismissed (returns undefined)", async () => {
-		const ctx = createCtx();
-		ctx.ui.select = mock(async () => undefined);
-		const result = await fireEvent(captured, "session_before_compact", makeCompactEvent(), ctx);
-		expect(result).toBeUndefined();
-	});
-
-	it("cancels compaction when 'Continue without either' selected", async () => {
-		const ctx = createCtx();
-		ctx.ui.select = mock(async () => "Continue without either");
-		const result = await fireEvent(captured, "session_before_compact", makeCompactEvent(), ctx);
-		expect(result).toEqual({ cancel: true });
-	});
-
-	it("cancels compaction when 'Handoff to new session' selected and handoff succeeds", async () => {
-		const ctx = createCtx();
-		ctx.ui.select = mock(async () => "Handoff to new session");
-		ctx.ui.custom = mock(async () => "Generated summary content");
-		const result = await fireEvent(captured, "session_before_compact", makeCompactEvent(), ctx);
-		expect(result).toEqual({ cancel: true });
-	});
-
-	it("proceeds with compaction when handoff ui is cancelled (custom returns null)", async () => {
-		const ctx = createCtx();
-		ctx.ui.select = mock(async () => "Handoff to new session");
-		ctx.ui.custom = mock(async () => null);
-		const result = await fireEvent(captured, "session_before_compact", makeCompactEvent(), ctx);
-		// performHandoff returns "Handoff cancelled.", hook notifies with warning and returns undefined
-		expect(result).toBeUndefined();
-		expect(
-			ctx.ui.notify.mock.calls.some(
-				(c: any[]) => c[0].includes("Handoff failed") && c[1] === "warning",
-			),
-		).toBe(true);
-	});
-
-	it("proceeds with compaction (notify warning) when performHandoff throws", async () => {
-		const ctx = createCtx();
-		ctx.ui.select = mock(async () => "Handoff to new session");
-		// Make ctx.modelRegistry.getApiKey throw to force an exception INSIDE performHandoff
-		// (after custom() is called), which propagates to the hook's try-catch.
-		ctx.ui.custom = mock(async (_factory: any) => {
-			// Simulate the factory throwing by having custom itself throw
-			throw new Error("UI exploded unexpectedly");
+			expect(extension.handlers.has("session_switch")).toBe(true);
+			expect(extension.handlers.has("context")).toBe(true);
+			expect(extension.handlers.has("agent_end")).toBe(true);
+			expect(extension.handlers.has("before_agent_start")).toBe(true);
+			expect(extension.handlers.has("session_before_compact")).toBe(true);
+			expect(extension.commands.has("handoff")).toBe(true);
+			expect(extension.tools.has("handoff")).toBe(true);
 		});
-		const result = await fireEvent(captured, "session_before_compact", makeCompactEvent(), ctx);
-		expect(result).toBeUndefined();
-		expect(
-			ctx.ui.notify.mock.calls.some(
-				(c: any[]) => (c[0].includes("Handoff error") || c[0].includes("Compacting instead")) && c[1] === "warning",
-			),
-		).toBe(true);
 	});
 
-	it("includes previousSummary in context when present", async () => {
-		const ctx = createCtx();
-		ctx.ui.select = mock(async () => "Handoff to new session");
-		ctx.ui.custom = mock(async () => "Summary");
+	// ── /handoff command flow ───────────────────────────────────────────────
+	// Generate prompt → newSession → session_switch → editor text set
 
-		const event = makeCompactEvent({
-			preparation: {
-				messagesToSummarize: [{ role: "user", content: "hello" }],
-				previousSummary: "Prior context here",
-			},
+	describe("/handoff command flow", () => {
+		it("generates prompt, creates new session, and sets editor text", async () => {
+			const { extension } = loadExtension();
+
+			const sessionManager = SessionManager.create(tempDir);
+			const originalSessionFile = sessionManager.getSessionFile();
+
+			// Track what lands in the editor
+			let editorText = "";
+			const ui = createMockUI({
+				// Simulate LLM generating a summary
+				custom: mock(async () => "## Context\nWe discussed auth.\n\n## Task\nImplement OAuth"),
+				setEditorText: mock((text: string) => {
+					editorText = text;
+				}),
+			});
+
+			// Build a mock command context with the REAL session manager
+			const ctx: any = {
+				hasUI: true,
+				model: { id: "test-model", contextWindow: 200000 },
+				sessionManager,
+				modelRegistry: { getApiKey: async () => "test-key" },
+				ui,
+				isIdle: () => true,
+				abort: () => {},
+				hasPendingMessages: () => false,
+				shutdown: () => {},
+				getContextUsage: () => ({ tokens: 50000, contextWindow: 200000, percent: 25 }),
+				compact: () => {},
+				getSystemPrompt: () => "",
+				// Command context methods
+				waitForIdle: async () => {},
+				newSession: mock(async (opts?: any) => {
+					// Actually create the new session via real SessionManager
+					sessionManager.newSession(opts);
+					// Fire session_switch handlers with real state
+					const switchHandlers = extension.handlers.get("session_switch") ?? [];
+					for (const h of switchHandlers) {
+						await h(
+							{ type: "session_switch", reason: "new", previousSessionFile: originalSessionFile },
+							{ ...ctx, sessionManager },
+						);
+					}
+					return { cancelled: false };
+				}),
+				fork: async () => ({ cancelled: false }),
+				navigateTree: async () => ({ cancelled: false }),
+				switchSession: async () => ({ cancelled: false }),
+				reload: async () => {},
+			};
+
+			// Seed the session with real messages so gatherConversation works
+			const { userMsg, assistantMsg } = makeMessages();
+			sessionManager.appendMessage(userMsg("How do I implement OAuth?"));
+			sessionManager.appendMessage(assistantMsg("You'll need to set up an auth provider..."));
+
+			// Execute the command handler
+			const commandHandler = extension.commands.get("handoff")!;
+			await commandHandler.handler("implement OAuth", ctx);
+
+			// Verify: newSession was called
+			expect(ctx.newSession).toHaveBeenCalled();
+
+			// Verify: editor text was set in the new session
+			expect(editorText.length).toBeGreaterThan(0);
+			expect(editorText).toContain("Context");
+			expect(editorText).toContain("OAuth");
 		});
 
-		await fireEvent(captured, "session_before_compact", event, ctx);
+		it("does nothing when no conversation exists", async () => {
+			const { extension } = loadExtension();
+			const sessionManager = SessionManager.create(tempDir);
+			const ui = createMockUI();
 
-		// serializeConversation is called with messages
-		expect(mockSerializeConversation.mock.calls.length).toBeGreaterThan(0);
-	});
+			const ctx: any = {
+				hasUI: true,
+				model: { id: "test-model" },
+				sessionManager,
+				modelRegistry: { getApiKey: async () => "key" },
+				ui,
+				isIdle: () => true,
+				abort: () => {},
+				hasPendingMessages: () => false,
+				shutdown: () => {},
+				getContextUsage: () => null,
+				compact: () => {},
+				getSystemPrompt: () => "",
+				newSession: mock(async () => ({ cancelled: false })),
+				waitForIdle: async () => {},
+				fork: async () => ({ cancelled: false }),
+				navigateTree: async () => ({ cancelled: false }),
+				switchSession: async () => ({ cancelled: false }),
+				reload: async () => {},
+			};
 
-	it("omits previousSummary section when not present", async () => {
-		const ctx = createCtx();
-		ctx.ui.select = mock(async () => "Handoff to new session");
-		ctx.ui.custom = mock(async () => "Summary");
+			await extension.commands.get("handoff")!.handler("some goal", ctx);
 
-		// We verify: no crash, handoff succeeds, compaction is cancelled
-		const result = await fireEvent(
-			captured,
-			"session_before_compact",
-			makeCompactEvent({ preparation: { messagesToSummarize: [], previousSummary: undefined } }),
-			ctx,
-		);
-		expect(result).toEqual({ cancel: true });
-	});
-
-	it("is a no-op if pendingHandoffText is already set for this session", async () => {
-		const ctx = createCtx();
-		// The pending text check uses the current session file
-		// We simulate this by running a successful handoff first (sets pending text),
-		// then firing the hook again — it should skip the select dialog.
-		ctx.ui.select = mock(async () => "Handoff to new session");
-		ctx.ui.custom = mock(async () => "Summary");
-
-		// First fire: sets pending text
-		await fireEvent(captured, "session_before_compact", makeCompactEvent(), ctx);
-		const firstSelectCalls = ctx.ui.select.mock.calls.length;
-
-		// Second fire: should skip (session file still has pending text)
-		await fireEvent(captured, "session_before_compact", makeCompactEvent(), ctx);
-		// select should NOT have been called again
-		expect(ctx.ui.select.mock.calls.length).toBe(firstSelectCalls);
-	});
-
-	it("sets editor text and notifies in hook mode (no newSession)", async () => {
-		const ctx = createCtx(); // No newSession — hook mode
-		ctx.ui.select = mock(async () => "Handoff to new session");
-		ctx.ui.custom = mock(async () => "Summary text here");
-
-		await fireEvent(captured, "session_before_compact", makeCompactEvent(), ctx);
-
-		expect(ctx.ui.setEditorText.mock.calls.length).toBeGreaterThan(0);
-		expect(ctx.ui.notify.mock.calls.some((c: any[]) => c[1] === "info")).toBe(true);
-	});
-
-	it("calls convertToLlm with messagesToSummarize", async () => {
-		const ctx = createCtx();
-		ctx.ui.select = mock(async () => "Handoff to new session");
-		ctx.ui.custom = mock(async () => "Summary");
-
-		const msgs = [{ role: "user", content: "test message" }];
-		const event = makeCompactEvent({
-			preparation: { messagesToSummarize: msgs, previousSummary: undefined },
+			// newSession should NOT have been called
+			expect(ctx.newSession).not.toHaveBeenCalled();
+			// Should have shown an error
+			expect(ui.notify).toHaveBeenCalled();
 		});
-
-		await fireEvent(captured, "session_before_compact", event, ctx);
-		expect(mockConvertToLlm).toHaveBeenCalledWith(msgs);
-	});
-});
-
-// ─── /handoff command ─────────────────────────────────────────────────────────
-
-describe("/handoff command handler", () => {
-	it("is registered", () => {
-		expect(captured.commands["handoff"]).toBeDefined();
 	});
 
-	it("shows error notification when goal is empty", async () => {
-		const ctx = createCommandCtx();
-		await captured.commands["handoff"]("", ctx);
-		expect(ctx.ui.notify.mock.calls.some((c: any[]) => c[1] === "error")).toBe(true);
-	});
+	// ── Compact hook flow ───────────────────────────────────────────────────
+	// User selects handoff → prompt generated → raw sessionManager.newSession()
+	// → editor text set → compaction cancelled
 
-	it("shows error notification when goal is only whitespace", async () => {
-		const ctx = createCommandCtx();
-		await captured.commands["handoff"]("   ", ctx);
-		expect(ctx.ui.notify.mock.calls.some((c: any[]) => c[1] === "error")).toBe(true);
-	});
+	describe("compact hook flow", () => {
+		it("generates prompt, switches session, sets editor, cancels compaction", async () => {
+			const { extension } = loadExtension();
+			const sessionManager = SessionManager.create(tempDir);
 
-	it("trims whitespace from goal before processing", async () => {
-		const ctx = createCommandCtx();
-		ctx.ui.custom = mock(async () => "Summary");
-		await captured.commands["handoff"]("  my goal  ", ctx);
-		// newSession should be called (success path)
-		expect(ctx.newSession.mock.calls.length).toBeGreaterThan(0);
-	});
+			let editorText = "";
+			const ui = createMockUI({
+				select: mock(async () => "Handoff to new session"),
+				custom: mock(async () => "## Context\nWorking on tests.\n\n## Task\nContinue"),
+				setEditorText: mock((text: string) => {
+					editorText = text;
+				}),
+			});
 
-	it("shows error notification when performHandoff fails (no model)", async () => {
-		const ctx = createCommandCtx({ model: undefined });
-		await captured.commands["handoff"]("some goal", ctx);
-		expect(ctx.ui.notify.mock.calls.some((c: any[]) => c[1] === "error")).toBe(true);
-	});
+			const ctx: any = {
+				hasUI: true,
+				model: { id: "test-model" },
+				sessionManager,
+				modelRegistry: { getApiKey: async () => "key" },
+				ui,
+				isIdle: () => true,
+				abort: () => {},
+				hasPendingMessages: () => false,
+				shutdown: () => {},
+				getContextUsage: () => ({ tokens: 180000, contextWindow: 200000, percent: 90 }),
+				compact: () => {},
+				getSystemPrompt: () => "",
+			};
 
-	it("shows error notification when hasUI is false", async () => {
-		const ctx = createCommandCtx({ hasUI: false });
-		await captured.commands["handoff"]("some goal", ctx);
-		expect(ctx.ui.notify.mock.calls.some((c: any[]) => c[1] === "error")).toBe(true);
-	});
+			const originalSessionFile = sessionManager.getSessionFile();
 
-	it("shows error when there are no messages to hand off", async () => {
-		const ctx = createCommandCtx();
-		ctx.sessionManager.getBranch = mock(() => []);
-		await captured.commands["handoff"]("my goal", ctx);
-		expect(ctx.ui.notify.mock.calls.some((c: any[]) => c[1] === "error")).toBe(true);
-	});
-
-	it("creates a new session on success (command mode)", async () => {
-		const ctx = createCommandCtx();
-		ctx.ui.custom = mock(async () => "Summary text");
-		await captured.commands["handoff"]("implement auth", ctx);
-		expect(ctx.newSession.mock.calls.length).toBe(1);
-	});
-
-	it("sets session name from goal on success", async () => {
-		const ctx = createCommandCtx();
-		ctx.ui.custom = mock(async () => "Summary text");
-		await captured.commands["handoff"]("Implement Auth Flow", ctx);
-		expect(piMock.setSessionName.mock.calls[0][0]).toBe("implement-auth-flow");
-	});
-
-	it("passes parentSession to newSession", async () => {
-		const ctx = createCommandCtx();
-		ctx.ui.custom = mock(async () => "Summary");
-		ctx.sessionManager.getSessionFile = mock(() => "/sessions/current.jsonl");
-		await captured.commands["handoff"]("my goal", ctx);
-		const callArgs = ctx.newSession.mock.calls[0][0];
-		expect(callArgs?.parentSession).toBe("/sessions/current.jsonl");
-	});
-
-	it("shows error when newSession is cancelled", async () => {
-		const ctx = createCommandCtx();
-		ctx.ui.custom = mock(async () => "Summary");
-		ctx.newSession = mock(async () => ({ cancelled: true }));
-		await captured.commands["handoff"]("my goal", ctx);
-		expect(ctx.ui.notify.mock.calls.some((c: any[]) => c[1] === "error")).toBe(true);
-	});
-
-	it("does not show error on successful handoff", async () => {
-		const ctx = createCommandCtx();
-		ctx.ui.custom = mock(async () => "Summary text");
-		await captured.commands["handoff"]("ship it", ctx);
-		// error notifications should be absent
-		expect(ctx.ui.notify.mock.calls.every((c: any[]) => c[1] !== "error")).toBe(true);
-	});
-
-	it("shows error when summary generation is cancelled (custom returns null)", async () => {
-		const ctx = createCommandCtx();
-		ctx.ui.custom = mock(async () => null);
-		await captured.commands["handoff"]("my goal", ctx);
-		expect(ctx.ui.notify.mock.calls.some((c: any[]) => c[1] === "error")).toBe(true);
-	});
-
-	it("handles session file being null (no parent session)", async () => {
-		const ctx = createCommandCtx();
-		ctx.ui.custom = mock(async () => "Summary");
-		ctx.sessionManager.getSessionFile = mock(() => null);
-		await captured.commands["handoff"]("my goal", ctx);
-		// Should still succeed (no parent session in prompt)
-		expect(ctx.newSession.mock.calls.length).toBe(1);
-	});
-
-	it("filters branch entries to messages only", async () => {
-		const ctx = createCommandCtx();
-		ctx.ui.custom = mock(async () => "Summary");
-		ctx.sessionManager.getBranch = mock(() => [
-			{ type: "message", message: { role: "user", content: "hello" } },
-			{ type: "compaction", summary: "old summary" }, // non-message entry
-			{ type: "message", message: { role: "assistant", content: [] } },
-		]);
-		await captured.commands["handoff"]("goal", ctx);
-		// Should succeed — only message entries are used
-		expect(ctx.newSession.mock.calls.length).toBe(1);
-	});
-});
-
-// ─── handoff tool ─────────────────────────────────────────────────────────────
-
-describe("handoff tool", () => {
-	it("is registered with name 'handoff'", () => {
-		expect(captured.tools["handoff"]).toBeDefined();
-	});
-
-	it("returns error text when performHandoff fails (no model)", async () => {
-		const ctx = createCtx({ model: undefined });
-		const result = await captured.tools["handoff"]("tc1", { goal: "my goal" }, null, null, ctx);
-		expect(result.content[0].text).toContain("No model selected");
-	});
-
-	it("returns error text when hasUI is false", async () => {
-		const ctx = createCtx({ hasUI: false });
-		const result = await captured.tools["handoff"]("tc1", { goal: "my goal" }, null, null, ctx);
-		expect(result.content[0].text).toContain("interactive mode");
-	});
-
-	it("returns error text when no messages to hand off", async () => {
-		const ctx = createCtx();
-		ctx.sessionManager.getBranch = mock(() => []);
-		const result = await captured.tools["handoff"]("tc1", { goal: "some goal" }, null, null, ctx);
-		expect(result.content[0].text).toContain("No conversation");
-	});
-
-	it("returns error when summary generation is cancelled", async () => {
-		const ctx = createCtx();
-		ctx.ui.custom = mock(async () => null);
-		const result = await captured.tools["handoff"]("tc1", { goal: "goal" }, null, null, ctx);
-		expect(result.content[0].text).toContain("cancelled");
-	});
-
-	it("returns success text and sets editor in tool mode (no newSession)", async () => {
-		const ctx = createCtx(); // tool mode = ExtensionContext, no newSession
-		ctx.ui.custom = mock(async () => "Summary text");
-		const result = await captured.tools["handoff"]("tc1", { goal: "implement X" }, null, null, ctx);
-		// Should succeed and tell user to start a new session
-		expect(result.content[0].type).toBe("text");
-		expect(result.content[0].text).not.toContain("cancelled");
-		// Editor should be pre-filled
-		expect(ctx.ui.setEditorText.mock.calls.length).toBeGreaterThan(0);
-	});
-
-	it("does NOT call newSession (tool mode lacks it)", async () => {
-		const ctx = createCtx();
-		ctx.ui.custom = mock(async () => "Summary");
-		await captured.tools["handoff"]("tc1", { goal: "goal" }, null, null, ctx);
-		// ctx has no newSession in base createCtx()
-		expect("newSession" in ctx).toBe(false);
-	});
-
-	it("passes goal to session name when in command mode", async () => {
-		const ctx = createCommandCtx(); // has newSession
-		ctx.ui.custom = mock(async () => "Summary");
-		await captured.tools["handoff"]("tc1", { goal: "Ship the Feature" }, null, null, ctx);
-		expect(piMock.setSessionName.mock.calls[0][0]).toBe("ship-the-feature");
-	});
-
-	it("result content type is always 'text'", async () => {
-		const ctx = createCtx({ model: undefined });
-		const result = await captured.tools["handoff"]("tc1", { goal: "goal" }, null, null, ctx);
-		expect(result.content[0].type).toBe("text");
-	});
-});
-
-// ─── performHandoff edge cases via command handler ────────────────────────────
-
-describe("performHandoff edge cases (via command handler)", () => {
-	it("includes parent session reference in prompt when session file exists", async () => {
-		const ctx = createCommandCtx();
-		ctx.sessionManager.getSessionFile = mock(() => "/sessions/sess-abc.jsonl");
-		let capturedEditorText = "";
-		ctx.ui.custom = mock(async () => "Summary body");
-		// In command mode, pendingHandoffText is set then newSession is called.
-		// We check what was stored by looking at what newSession received.
-		// Actually easier: just check the generated prompt contains parent ref.
-		// We can intercept by making newSession capture state.
-		await captured.commands["handoff"]("my goal", ctx);
-		// newSession was called — success
-		expect(ctx.newSession.mock.calls.length).toBe(1);
-	});
-
-	it("does not store pendingHandoffText when session file is null", async () => {
-		const ctx = createCommandCtx();
-		ctx.sessionManager.getSessionFile = mock(() => null);
-		ctx.ui.custom = mock(async () => "Summary");
-		await captured.commands["handoff"]("goal", ctx);
-		// Can't easily inspect the map, but verify no crash and newSession called
-		expect(ctx.newSession.mock.calls.length).toBe(1);
-	});
-
-	it("cleans up pendingHandoffText when newSession is cancelled", async () => {
-		const ctx = createCommandCtx();
-		ctx.ui.custom = mock(async () => "Summary");
-		ctx.newSession = mock(async () => ({ cancelled: true }));
-		ctx.sessionManager.getSessionFile = mock(() => "/sessions/s.jsonl");
-		await captured.commands["handoff"]("goal", ctx);
-		// Second invocation with same session file — if text wasn't cleaned up
-		// the compact hook would skip. Here we just verify the command error is shown.
-		expect(ctx.ui.notify.mock.calls.some((c: any[]) => c[1] === "error")).toBe(true);
-	});
-
-	it("calls serializeConversation with converted messages", async () => {
-		const ctx = createCommandCtx();
-		ctx.ui.custom = mock(async () => "Summary");
-		mockConvertToLlm.mockImplementation((msgs: any[]) => msgs);
-		await captured.commands["handoff"]("goal", ctx);
-		expect(mockConvertToLlm.mock.calls.length).toBeGreaterThan(0);
-		expect(mockSerializeConversation.mock.calls.length).toBeGreaterThan(0);
-	});
-});
-
-// ─── session_switch + pendingHandoffText integration ─────────────────────────
-
-describe("session_switch handler with pendingHandoffText integration", () => {
-	it("sets editor text when pending text exists for the parent session", async () => {
-		// Step 1: trigger a successful handoff in hook mode to populate pendingHandoffText
-		const compactCtx = createCtx();
-		compactCtx.ui.select = mock(async () => "Handoff to new session");
-		compactCtx.ui.custom = mock(async () => "My summary");
-		compactCtx.sessionManager.getSessionFile = mock(() => "/sessions/PARENT.jsonl");
-
-		await fireEvent(
-			captured,
-			"session_before_compact",
-			{
+			const event = {
 				type: "session_before_compact",
 				preparation: {
-					messagesToSummarize: [{ role: "user", content: "x" }],
+					messagesToSummarize: [
+						{ role: "user", content: "Build me auth", timestamp: Date.now() },
+						{
+							role: "assistant",
+							content: [{ type: "text", text: "Sure" }],
+							timestamp: Date.now(),
+						},
+					],
 					previousSummary: undefined,
+					turnPrefixMessages: [],
+					isSplitTurn: false,
+					tokensBefore: 180000,
+					firstKeptEntryId: "x",
+					fileOps: { read: new Set(), edited: new Set() },
+					settings: { enabled: true, reserveTokens: 16384, keepRecentTokens: 20000 },
 				},
 				branchEntries: [],
 				signal: new AbortController().signal,
-			},
-			compactCtx,
-		);
+			};
 
-		// Verify editor was set in the same session (hook mode)
-		expect(compactCtx.ui.setEditorText.mock.calls.length).toBeGreaterThan(0);
+			const handlers = extension.handlers.get("session_before_compact")!;
+			const result = await handlers[0](event, ctx);
 
-		// Step 2: simulate session_switch in the NEW session (child) that has parent = PARENT
-		const newSessionCtx = createCtx();
-		newSessionCtx.sessionManager.getHeader = mock(() => ({
-			parentSession: "/sessions/PARENT.jsonl",
-		}));
+			// Compaction was cancelled
+			expect(result).toEqual({ cancel: true });
 
-		await fireEvent(
-			captured,
-			"session_switch",
-			{ type: "session_switch", reason: "new", previousSessionFile: "/sessions/PARENT.jsonl" },
-			newSessionCtx,
-		);
+			// Session file changed (raw newSession was called)
+			expect(sessionManager.getSessionFile()).not.toBe(originalSessionFile);
 
-		// Editor should be set in the new session too
-		expect(newSessionCtx.ui.setEditorText.mock.calls.length).toBeGreaterThan(0);
-		expect(
-			newSessionCtx.ui.notify.mock.calls.some(
-				(c: any[]) => c[0].includes("Handoff ready") && c[1] === "info",
-			),
-		).toBe(true);
+			// Editor has the generated prompt
+			expect(editorText.length).toBeGreaterThan(0);
+			expect(editorText).toContain("Context");
+
+			// Notification shown
+			expect(ui.notify).toHaveBeenCalled();
+		});
+
+		it("falls back to compaction when user selects Compact context", async () => {
+			const { extension } = loadExtension();
+			const sessionManager = SessionManager.create(tempDir);
+
+			const ui = createMockUI({
+				select: mock(async () => "Compact context"),
+			});
+
+			const ctx: any = {
+				hasUI: true,
+				model: { id: "test" },
+				sessionManager,
+				modelRegistry: { getApiKey: async () => "key" },
+				ui,
+				isIdle: () => true,
+				abort: () => {},
+				hasPendingMessages: () => false,
+				shutdown: () => {},
+				getContextUsage: () => ({ tokens: 180000, contextWindow: 200000, percent: 90 }),
+				compact: () => {},
+				getSystemPrompt: () => "",
+			};
+
+			const result = await extension.handlers.get("session_before_compact")![0](
+				{
+					type: "session_before_compact",
+					preparation: { messagesToSummarize: [], previousSummary: undefined, turnPrefixMessages: [], isSplitTurn: false, tokensBefore: 0, firstKeptEntryId: "x", fileOps: { read: new Set(), edited: new Set() }, settings: { enabled: true, reserveTokens: 16384, keepRecentTokens: 20000 } },
+					branchEntries: [],
+					signal: new AbortController().signal,
+				},
+				ctx,
+			);
+
+			// Returns undefined = proceed with compaction
+			expect(result).toBeUndefined();
+		});
+
+		it("falls back to compaction when prompt generation is cancelled", async () => {
+			const { extension } = loadExtension();
+			const sessionManager = SessionManager.create(tempDir);
+
+			const ui = createMockUI({
+				select: mock(async () => "Handoff to new session"),
+				custom: mock(async () => null), // user pressed Escape
+			});
+
+			const ctx: any = {
+				hasUI: true,
+				model: { id: "test" },
+				sessionManager,
+				modelRegistry: { getApiKey: async () => "key" },
+				ui,
+				isIdle: () => true,
+				abort: () => {},
+				hasPendingMessages: () => false,
+				shutdown: () => {},
+				getContextUsage: () => ({ tokens: 180000, contextWindow: 200000, percent: 90 }),
+				compact: () => {},
+				getSystemPrompt: () => "",
+			};
+
+			const originalSessionFile = sessionManager.getSessionFile();
+
+			const result = await extension.handlers.get("session_before_compact")![0](
+				{
+					type: "session_before_compact",
+					preparation: { messagesToSummarize: [], previousSummary: undefined, turnPrefixMessages: [], isSplitTurn: false, tokensBefore: 0, firstKeptEntryId: "x", fileOps: { read: new Set(), edited: new Set() }, settings: { enabled: true, reserveTokens: 16384, keepRecentTokens: 20000 } },
+					branchEntries: [],
+					signal: new AbortController().signal,
+				},
+				ctx,
+			);
+
+			// Falls back to compaction (returns undefined)
+			expect(result).toBeUndefined();
+			// Session did NOT change
+			expect(sessionManager.getSessionFile()).toBe(originalSessionFile);
+			// Warning shown
+			expect(ui.notify).toHaveBeenCalled();
+		});
 	});
 
-	it("removes pendingHandoffText after setting editor (prevents double-set)", async () => {
-		// Trigger handoff (hook mode) to populate pending text
-		const compactCtx = createCtx();
-		compactCtx.ui.select = mock(async () => "Handoff to new session");
-		compactCtx.ui.custom = mock(async () => "Summary");
-		compactCtx.sessionManager.getSessionFile = mock(() => "/sessions/PARENT2.jsonl");
+	// ── Tool → agent_end flow ───────────────────────────────────────────────
+	// Tool stores pending → agent_end fires → raw newSession → editor set
 
-		await fireEvent(
-			captured,
-			"session_before_compact",
-			{
-				type: "session_before_compact",
-				preparation: { messagesToSummarize: [], previousSummary: undefined },
-				branchEntries: [],
-				signal: new AbortController().signal,
-			},
-			compactCtx,
-		);
+	describe("tool → agent_end flow", () => {
+		it("defers session switch to agent_end, then sets editor", async () => {
+			const { extension } = loadExtension();
+			const sessionManager = SessionManager.create(tempDir);
 
-		const newCtx1 = createCtx();
-		newCtx1.sessionManager.getHeader = mock(() => ({
-			parentSession: "/sessions/PARENT2.jsonl",
-		}));
-		await fireEvent(
-			captured,
-			"session_switch",
-			{ type: "session_switch", reason: "new", previousSessionFile: undefined },
-			newCtx1,
-		);
-		expect(newCtx1.ui.setEditorText.mock.calls.length).toBe(1);
+			let editorText = "";
+			const ui = createMockUI({
+				custom: mock(async () => "## Context\nTool handoff.\n\n## Task\nContinue"),
+				setEditorText: mock((text: string) => {
+					editorText = text;
+				}),
+			});
 
-		// Fire again — pending text should be gone now
-		const newCtx2 = createCtx();
-		newCtx2.sessionManager.getHeader = mock(() => ({
-			parentSession: "/sessions/PARENT2.jsonl",
-		}));
-		await fireEvent(
-			captured,
-			"session_switch",
-			{ type: "session_switch", reason: "new", previousSessionFile: undefined },
-			newCtx2,
-		);
-		expect(newCtx2.ui.setEditorText.mock.calls.length).toBe(0);
+			// Seed messages
+			const { userMsg, assistantMsg } = makeMessages();
+			sessionManager.appendMessage(userMsg("Help me refactor"));
+			sessionManager.appendMessage(assistantMsg("Let's start with..."));
+
+			const ctx: any = {
+				hasUI: true,
+				model: { id: "test-model" },
+				sessionManager,
+				modelRegistry: { getApiKey: async () => "key" },
+				ui,
+				isIdle: () => true,
+				abort: () => {},
+				hasPendingMessages: () => false,
+				shutdown: () => {},
+				getContextUsage: () => ({ tokens: 50000, contextWindow: 200000, percent: 25 }),
+				compact: () => {},
+				getSystemPrompt: () => "",
+			};
+
+			const originalSessionFile = sessionManager.getSessionFile();
+
+			// Execute tool
+			const toolDef = extension.tools.get("handoff")!.definition;
+			const result = await toolDef.execute("tc1", { goal: "refactor auth" }, undefined, undefined, ctx);
+
+			// Tool returns success message
+			expect(result.content[0].text).toContain("Handoff initiated");
+
+			// Session has NOT switched yet (deferred)
+			expect(sessionManager.getSessionFile()).toBe(originalSessionFile);
+
+			// Fire agent_end — this triggers the deferred switch
+			const agentEndHandlers = extension.handlers.get("agent_end")!;
+			await agentEndHandlers[0]({ type: "agent_end", messages: [] }, ctx);
+
+			// Now session HAS switched
+			expect(sessionManager.getSessionFile()).not.toBe(originalSessionFile);
+
+			// Editor text set via setTimeout — need to flush
+			await new Promise((resolve) => setTimeout(resolve, 10));
+
+			expect(editorText.length).toBeGreaterThan(0);
+			expect(editorText).toContain("Context");
+		});
+	});
+
+	// ── Context filter ──────────────────────────────────────────────────────
+	// After raw newSession, old messages are filtered by timestamp
+
+	describe("context filter after raw session switch", () => {
+		it("filters old messages after compact-hook handoff", async () => {
+			const { extension } = loadExtension();
+			const sessionManager = SessionManager.create(tempDir);
+
+			const ui = createMockUI({
+				select: mock(async () => "Handoff to new session"),
+				custom: mock(async () => "## Summary\nDone."),
+			});
+
+			const ctx: any = {
+				hasUI: true,
+				model: { id: "test" },
+				sessionManager,
+				modelRegistry: { getApiKey: async () => "key" },
+				ui,
+				isIdle: () => true,
+				abort: () => {},
+				hasPendingMessages: () => false,
+				shutdown: () => {},
+				getContextUsage: () => ({ tokens: 180000, contextWindow: 200000, percent: 90 }),
+				compact: () => {},
+				getSystemPrompt: () => "",
+			};
+
+			// Fire compact hook (sets handoffTimestamp + calls raw newSession)
+			await extension.handlers.get("session_before_compact")![0](
+				{
+					type: "session_before_compact",
+					preparation: { messagesToSummarize: [{ role: "user", content: "old msg", timestamp: Date.now() - 10000 }], previousSummary: undefined, turnPrefixMessages: [], isSplitTurn: false, tokensBefore: 0, firstKeptEntryId: "x", fileOps: { read: new Set(), edited: new Set() }, settings: { enabled: true, reserveTokens: 16384, keepRecentTokens: 20000 } },
+					branchEntries: [],
+					signal: new AbortController().signal,
+				},
+				ctx,
+			);
+
+			// Now fire context event with old + new messages
+			const contextHandlers = extension.handlers.get("context")!;
+			const oldMsg = { role: "user", content: "old", timestamp: Date.now() - 60000 };
+			const newMsg = { role: "user", content: "new prompt", timestamp: Date.now() + 1000 };
+
+			const filterResult = await contextHandlers[0](
+				{ type: "context", messages: [oldMsg, newMsg] },
+				ctx,
+			);
+
+			// Old message filtered out, only new message remains
+			expect(filterResult).toBeDefined();
+			expect(filterResult.messages.length).toBe(1);
+			expect(filterResult.messages[0].content).toBe("new prompt");
+		});
+
+		it("context filter is cleared on proper session_switch", async () => {
+			const { extension } = loadExtension();
+			const sessionManager = SessionManager.create(tempDir);
+
+			const ui = createMockUI({
+				select: mock(async () => "Handoff to new session"),
+				custom: mock(async () => "## Summary"),
+			});
+
+			const ctx: any = {
+				hasUI: true,
+				model: { id: "test" },
+				sessionManager,
+				modelRegistry: { getApiKey: async () => "key" },
+				ui,
+				isIdle: () => true,
+				abort: () => {},
+				hasPendingMessages: () => false,
+				shutdown: () => {},
+				getContextUsage: () => ({ tokens: 180000, contextWindow: 200000, percent: 90 }),
+				compact: () => {},
+				getSystemPrompt: () => "",
+			};
+
+			// Fire compact hook to set handoffTimestamp
+			await extension.handlers.get("session_before_compact")![0](
+				{
+					type: "session_before_compact",
+					preparation: { messagesToSummarize: [], previousSummary: undefined, turnPrefixMessages: [], isSplitTurn: false, tokensBefore: 0, firstKeptEntryId: "x", fileOps: { read: new Set(), edited: new Set() }, settings: { enabled: true, reserveTokens: 16384, keepRecentTokens: 20000 } },
+					branchEntries: [],
+					signal: new AbortController().signal,
+				},
+				ctx,
+			);
+
+			// Fire session_switch (simulates user doing /new later)
+			await extension.handlers.get("session_switch")![0](
+				{ type: "session_switch", reason: "new", previousSessionFile: undefined },
+				ctx,
+			);
+
+			// Now context filter should be cleared
+			const contextResult = await extension.handlers.get("context")![0](
+				{ type: "context", messages: [{ role: "user", content: "x", timestamp: 0 }] },
+				ctx,
+			);
+
+			// No filtering — returns undefined (pass through)
+			expect(contextResult).toBeUndefined();
+		});
 	});
 });
+
+// ── E2E with real LLM ───────────────────────────────────────────────────────
+
+describe.skipIf(!API_KEY)("Handoff e2e (real LLM)", () => {
+	let tempDir: string;
+	let session: AgentSession;
+
+	beforeEach(() => {
+		tempDir = join(tmpdir(), `pi-handoff-e2e-${Date.now()}`);
+		mkdirSync(tempDir, { recursive: true });
+	});
+
+	afterEach(() => {
+		if (session) session.dispose();
+		if (tempDir && existsSync(tempDir)) {
+			rmSync(tempDir, { recursive: true });
+		}
+	});
+
+	it("compact hook generates real handoff prompt and switches session", async () => {
+		const { extension } = loadExtension();
+		const model = getModel("anthropic", "claude-haiku-4-5")!;
+		const sessionManager = SessionManager.create(tempDir);
+		const settingsManager = SettingsManager.create(tempDir, tempDir);
+		// Use pi's real auth storage so OAuth credentials are available
+		const { homedir } = await import("node:os");
+		const realAuthPath = join(homedir(), ".pi", "agent", "auth.json");
+		const authStorage = AuthStorage.create(realAuthPath);
+		const modelRegistry = new ModelRegistry(authStorage);
+
+		const agent = new Agent({
+			getApiKey: () => API_KEY!,
+			initialState: {
+				model,
+				systemPrompt: "Be concise.",
+				tools: [],
+			},
+		});
+
+		session = new AgentSession({
+			agent,
+			sessionManager,
+			settingsManager,
+			cwd: tempDir,
+			modelRegistry,
+			resourceLoader: createTestResourceLoader([extension]),
+		});
+
+		// Build conversation
+		await session.prompt("What is 2+2? Reply with just the number.");
+		await session.agent.waitForIdle();
+
+		const originalSessionFile = sessionManager.getSessionFile();
+
+		// Now fire the compact hook directly with a real LLM-backed ctx.ui.custom
+		// For this test, we mock ui.custom to call the real complete() function
+		let editorText = "";
+		const ui = createMockUI({
+			select: mock(async () => "Handoff to new session"),
+			// Let the real LLM generate the prompt
+			custom: mock(async (factory: any) => {
+				// We can't run the real BorderedLoader in tests,
+				// but we CAN call complete() directly
+				const { complete: realComplete } = await import("@mariozechner/pi-ai");
+				const { convertToLlm, serializeConversation } = await import("@mariozechner/pi-coding-agent");
+
+				const branch = sessionManager.getBranch();
+				const msgs = branch
+					.filter((e: any) => e.type === "message")
+					.map((e: any) => e.message);
+				const text = serializeConversation(convertToLlm(msgs));
+
+				const response = await realComplete(
+					model,
+					{
+						systemPrompt: "Generate a brief handoff summary.",
+						messages: [{
+							role: "user",
+							content: [{ type: "text", text: `Conversation:\n${text}\n\nGoal: Continue work` }],
+							timestamp: Date.now(),
+						}],
+					},
+					{ apiKey: API_KEY! },
+				);
+
+				return response.content
+					.filter((c: any) => c.type === "text")
+					.map((c: any) => c.text)
+					.join("\n");
+			}),
+			setEditorText: mock((text: string) => {
+				editorText = text;
+			}),
+		});
+
+		const ctx: any = {
+			hasUI: true,
+			model,
+			sessionManager,
+			modelRegistry,
+			ui,
+			isIdle: () => true,
+			abort: () => {},
+			hasPendingMessages: () => false,
+			shutdown: () => {},
+			getContextUsage: () => ({ tokens: 180000, contextWindow: 200000, percent: 90 }),
+			compact: () => {},
+			getSystemPrompt: () => "",
+		};
+
+		const compactEvent = {
+			type: "session_before_compact",
+			preparation: {
+				messagesToSummarize: session.messages,
+				previousSummary: undefined,
+				turnPrefixMessages: [],
+				isSplitTurn: false,
+				tokensBefore: 50000,
+				firstKeptEntryId: "x",
+				fileOps: { read: new Set(), edited: new Set() },
+				settings: { enabled: true, reserveTokens: 16384, keepRecentTokens: 20000 },
+			},
+			branchEntries: sessionManager.getBranch(),
+			signal: new AbortController().signal,
+		};
+
+		const result = await extension.handlers.get("session_before_compact")![0](compactEvent, ctx);
+
+		// Compaction cancelled
+		expect(result).toEqual({ cancel: true });
+
+		// Session switched
+		expect(sessionManager.getSessionFile()).not.toBe(originalSessionFile);
+
+		// Editor has real LLM-generated content
+		expect(editorText.length).toBeGreaterThan(20);
+	}, 120000);
+});
+
+// ---------------------------------------------------------------------------
+// Message factories (matching pi's test utilities)
+// ---------------------------------------------------------------------------
+
+function makeMessages() {
+	return {
+		userMsg: (text: string) => ({
+			role: "user" as const,
+			content: text,
+			timestamp: Date.now(),
+		}),
+		assistantMsg: (text: string) => ({
+			role: "assistant" as const,
+			content: [{ type: "text" as const, text }],
+			api: "anthropic-messages" as const,
+			provider: "anthropic",
+			model: "test",
+			usage: {
+				input: 1,
+				output: 1,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 2,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop" as const,
+			timestamp: Date.now(),
+		}),
+	};
+}
