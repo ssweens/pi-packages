@@ -136,27 +136,23 @@ export function convertToGeminiMessages(messages: Message[], modelId: string): a
           const toolCallBlock = block as ToolCall;
           const thoughtSig = resolveThoughtSignature(isSameProviderAndModel, toolCallBlock.thoughtSignature);
 
-          if (isGemini3 && !thoughtSig) {
-            // Gemini 3 requires thought signatures on function calls from the same session.
-            // Unsigned tool calls from other providers are converted to text to avoid
-            // API validation errors (matches pi-mono behavior).
-            const argsStr = JSON.stringify(toolCallBlock.arguments ?? {}, null, 2);
-            parts.push({
-              text: `[Historical context: a different model called tool "${toolCallBlock.name}" with arguments: ${argsStr}. Do not mimic this format - use proper function calling.]`,
-            });
-          } else {
-            const part: any = {
-              functionCall: {
-                name: toolCallBlock.name,
-                args: toolCallBlock.arguments ?? {},
-                ...(requiresToolCallId(modelId) ? { id: toolCallBlock.id } : {}),
-              },
-            };
-            if (thoughtSig) {
-              part.thoughtSignature = thoughtSig;
-            }
-            parts.push(part);
+          const part: any = {
+            functionCall: {
+              name: toolCallBlock.name,
+              args: toolCallBlock.arguments ?? {},
+              ...(requiresToolCallId(modelId) ? { id: toolCallBlock.id } : {}),
+            },
+          };
+          if (thoughtSig) {
+            part.thoughtSignature = thoughtSig;
+          } else if (isGemini3) {
+            // Gemini 3 requires thoughtSignature on all functionCall parts.
+            // For cross-provider tool calls (or rare same-provider calls without signatures),
+            // use the documented escape hatch to bypass validation.
+            // See: https://docs.cloud.google.com/vertex-ai/generative-ai/docs/thought-signatures
+            part.thoughtSignature = "skip_thought_signature_validator";
           }
+          parts.push(part);
         }
       }
 
