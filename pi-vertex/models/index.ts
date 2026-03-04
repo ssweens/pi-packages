@@ -11,7 +11,7 @@ export const ALL_MODELS: VertexModelConfig[] = [
   ...GEMINI_MODELS,
   ...CLAUDE_MODELS,
   ...MAAS_MODELS,
-];
+].sort((a, b) => a.name.localeCompare(b.name));
 
 export function getModelById(id: string): VertexModelConfig | undefined {
   return ALL_MODELS.find((m) => m.id === id);
