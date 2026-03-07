@@ -95,6 +95,22 @@ const SAFE_PATTERNS = [
 	/^\s*exa\b/,
 ];
 
+// Redirections that are safe in read-only huddle mode (suppress output only)
+const SAFE_REDIRECTION_PATTERNS = [
+	/\b\d*>\s*\/dev\/null\b/g,
+	/\b\d*>>\s*\/dev\/null\b/g,
+	/\b\d*>\s*&\d+\b/g,
+	/\b\d*>>\s*&\d+\b/g,
+];
+
+function stripSafeRedirections(command: string): string {
+	let sanitized = command;
+	for (const pattern of SAFE_REDIRECTION_PATTERNS) {
+		sanitized = sanitized.replace(pattern, "");
+	}
+	return sanitized;
+}
+
 /**
  * Split command into parts respecting quoted strings.
  * Handles: &&, ;, | (but not inside quotes)
@@ -146,8 +162,11 @@ function splitCommandRespectingQuotes(command: string): string[] {
 }
 
 export function isSafeCommand(command: string): boolean {
+	// Allow benign output-suppression redirections before destructive checks.
+	const commandForDestructiveCheck = stripSafeRedirections(command);
+
 	// Check for destructive patterns anywhere in the command
-	const isDestructive = DESTRUCTIVE_PATTERNS.some((p) => p.test(command));
+	const isDestructive = DESTRUCTIVE_PATTERNS.some((p) => p.test(commandForDestructiveCheck));
 	if (isDestructive) return false;
 
 	// Split compound commands and check each part

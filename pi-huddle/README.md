@@ -188,6 +188,8 @@ Enter to select · Tab/↑↓ to navigate · Esc to cancel
 `cat`, `head`, `tail`, `grep`, `find`, `rg`, `fd`, `ls`, `pwd`, `tree`,
 `git status`, `git log`, `git diff`, `git branch`, `npm list`, `curl`, `jq`
 
+Benign output redirections like `2>/dev/null` and `2>&1` are also allowed.
+
 ### Blocked Bash Commands (Prompt Required)
 
 `rm`, `mv`, `cp`, `mkdir`, `touch`, `git add`, `git commit`, `git push`,

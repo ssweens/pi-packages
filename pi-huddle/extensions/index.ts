@@ -52,7 +52,7 @@ export default function huddleExtension(pi: ExtensionAPI): void {
 
 		if (huddleEnabled) {
 			pi.setActiveTools(HUDDLE_MODE_TOOLS);
-			ctx.ui.notify(`Huddle mode enabled. Tools: ${HUDDLE_MODE_TOOLS.join(", ")}. Safe: cd, rg, fd, cat, git status/log/diff`);
+			ctx.ui.notify(`Huddle mode enabled. Tools: ${HUDDLE_MODE_TOOLS.join(", ")}. Safe: cd, rg, fd, head, tail, cat, grep, find, git status/log/diff`);
 		} else {
 			pi.setActiveTools(NORMAL_MODE_TOOLS);
 			ctx.ui.notify("Huddle mode disabled. Full access restored.");

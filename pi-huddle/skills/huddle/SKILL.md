@@ -153,7 +153,7 @@ The `ask_user` tool is available in **both huddle mode and normal mode**. It pre
 - Git writes: `git add`, `git commit`, `git push`
 - Package installs: `npm install`, `yarn add`, `pip install`
 - System: `sudo`, `kill`, `reboot`
-- Redirections: `>`, `>>`
+- Redirections: `>`, `>>` (except benign output suppression like `2>/dev/null` or `2>&1`)
 
 ## Tips
 
