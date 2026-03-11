@@ -171,9 +171,9 @@ export default async function (pi: ExtensionAPI): Promise<void> {
         fetchedIds = fetched.map((m) => m.id);
       } catch (err) {
         if (modelOverrides && Object.keys(modelOverrides).length > 0) {
-          startupLines.push(`[pi-dynamic-models] Could not reach ${baseUrl}/models (${err}), using configured models only`);
+          startupLines.push(`   [pi-dynamic-models] Could not reach ${baseUrl}/models (${err}), using configured models only`);
         } else {
-          startupLines.push(`[pi-dynamic-models] Could not reach ${baseUrl}/models: ${err}`);
+          startupLines.push(`   [pi-dynamic-models] Could not reach ${baseUrl}/models: ${err}`);
           return;
         }
       }
@@ -182,7 +182,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
       const allIds = new Set<string>([...fetchedIds, ...Object.keys(modelOverrides ?? {})]);
 
       if (allIds.size === 0) {
-        startupLines.push(`[pi-dynamic-models] No models for provider "${provider}"`);
+        startupLines.push(`   [pi-dynamic-models] No models for provider "${provider}"`);
         return;
       }
 
@@ -214,7 +214,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
         ? `, ${Object.keys(modelOverrides!).length} configured`
         : "";
       startupLines.push(
-        `[pi-dynamic-models] Provider "${provider}": ${fetchedNote}${overrideNote}, ${allIds.size} total (${api ?? "openai-completions"})`
+        `   [pi-dynamic-models] Provider "${provider}": ${fetchedNote}${overrideNote}, ${allIds.size} total (${api ?? "openai-completions"})`
       );
     })
   );

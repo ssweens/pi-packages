@@ -112,8 +112,8 @@ export default function (pi: ExtensionAPI) {
 
   // Show startup info as a widget that clears on first user input
   const vertexStartupLines = [
-    `[pi-vertex] Initializing with project: ${projectId}`,
-    `[pi-vertex] Registered ${ALL_MODELS.length} models`,
+    `   [pi-vertex] Initializing with project: ${projectId}`,
+    `   [pi-vertex] Registered ${ALL_MODELS.length} models`,
   ];
   pi.on("session_start", async (_event, ctx) => {
     ctx.ui.setWidget("pi-vertex-startup", (_tui, theme) => ({

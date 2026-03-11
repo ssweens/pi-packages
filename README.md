@@ -8,6 +8,8 @@ Extension packages for [pi](https://github.com/badlogic/pi-mono).
 
 | Package | Description |
 |---------|-------------|
+| **pi-qq** | Quick questions with `/qq` or `/btw` — side-channel LLM interaction |
+| **pi-compaxxt** | Enhanced session compaction with file importance heuristics |
 | **pi-vertex** | Google Vertex AI provider — Gemini, Claude, and all MaaS models |
 | **pi-handoff** | Context management for agentic coding workflows |
 | **pi-image-gen** | Provider-agnostic image generation |
@@ -18,6 +20,8 @@ Extension packages for [pi](https://github.com/badlogic/pi-mono).
 ## Installation
 
 ```bash
+pi install @ssweens/pi-qq
+pi install @ssweens/pi-compaxxt
 pi install @ssweens/pi-vertex
 pi install @ssweens/pi-handoff
 pi install @ssweens/pi-image-gen
