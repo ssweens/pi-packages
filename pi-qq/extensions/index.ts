@@ -14,7 +14,7 @@ import {
 	type Theme,
 } from "@mariozechner/pi-coding-agent";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { wrapTextWithAnsi, Key, matchesKey, visibleWidth, truncateToWidth } from "@mariozechner/pi-tui";
+import { wrapTextWithAnsi, Key, matchesKey, truncateToWidth } from "@mariozechner/pi-tui";
 
 const QQ_CUSTOM_TYPE = "qq";
 const QQ_SYSTEM_PROMPT_SUFFIX = `
@@ -43,16 +43,20 @@ function renderQqBox(
 	const dimStyle = (s: string) => theme.fg("dim", s);
 	const thumbStyle = (s: string) => theme.fg("accent", s);
 
-	const drawWidth = Math.max(10, width - 2); 
-	const prefix = borderStyle("│") + "   ";
-	const contentWidth = Math.max(1, drawWidth - 8); // Account for left prefix + right scrollbar
+	// Account for left border (1 char) + "   " (3 chars) + right border (1 char)
+	// But we also add "  " before right border, so: 1 + 3 + content + 2 + 1 = width
+	const leftPrefixWidth = 4; // "│   "
+	const rightSuffixWidth = 3; // "  │" or "  ┃"
+	const contentWidth = Math.max(1, width - leftPrefixWidth - rightSuffixWidth);
+	
 	const out: string[] = [];
 
 	// Widget mode: add breathing room above
 	out.push(""); 
 
-	// Header line
-	out.push(`${borderStyle("╭─")} ${accentStyle("Quick Question:")} ${question}`);
+	// Header line (full width, no right border)
+	const headerText = `${borderStyle("╭─")} ${accentStyle("Quick Question:")} ${question}`;
+	out.push(truncateToWidth(headerText, width));
 	out.push(borderStyle("│")); // Top Spacer
 
 	// Body text
@@ -66,7 +70,6 @@ function renderQqBox(
 	const visibleLines = bodyLines.slice(viewStart, viewEnd);
 
 	// Scrollbar logic
-	// Calculate which lines of the viewport should show the "thumb" ┃
 	let thumbStart = -1;
 	let thumbEnd = -1;
 	if (totalLines > MAX_VIEWPORT_HEIGHT) {
@@ -78,7 +81,7 @@ function renderQqBox(
 
 	for (let i = 0; i < visibleLines.length; i++) {
 		const line = visibleLines[i];
-		const padding = " ".repeat(Math.max(0, contentWidth - visibleWidth(line)));
+		const truncatedLine = truncateToWidth(line, contentWidth);
 		
 		// Right border is either track │ or thumb ┃
 		let rightBorder = borderStyle("│");
@@ -86,7 +89,10 @@ function renderQqBox(
 			rightBorder = thumbStyle("┃");
 		}
 
-		out.push(prefix + line + padding + "  " + rightBorder);
+		// Build line: left prefix + content + right suffix
+		const leftPrefix = borderStyle("│") + "   ";
+		const rightSuffix = "  " + rightBorder;
+		out.push(leftPrefix + truncatedLine + rightSuffix);
 	}
 
 	out.push(borderStyle("│")); // Bottom Spacer
@@ -101,8 +107,8 @@ function renderQqBox(
 		? dimStyle("(Esc to cancel)") 
 		: dimStyle("(Space/Enter/Esc to dismiss)");
 	
-	const bottomLine = "─".repeat(Math.max(0, drawWidth - hint.length - scrollInfo.length - 3));
-	out.push(borderStyle("╰─" + bottomLine) + scrollInfo + " " + hint);
+	const footerText = borderStyle("╰─") + scrollInfo + " " + hint;
+	out.push(truncateToWidth(footerText, width));
 
 	return out;
 }
