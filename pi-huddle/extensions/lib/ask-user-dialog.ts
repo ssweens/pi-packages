@@ -3,7 +3,7 @@
  */
 
 import type { Component, Focusable } from "@mariozechner/pi-tui";
-import { Input, Key, matchesKey, truncateToWidth } from "@mariozechner/pi-tui";
+import { Input, Key, matchesKey, truncateToWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
 
 // Inline block cursor: inverse-video character (used after typed text)
 const BLOCK_CURSOR = "\x1b[7m \x1b[27m";
@@ -368,7 +368,9 @@ export class AskUserDialog implements Component, Focusable {
 		const checkedLabels = this.selections.get(q.question) ?? [];
 		const freeformValue = this.freeformValues.get(q.question) ?? "";
 
-		lines.push(t.bold(q.question));
+		for (const line of wrapTextWithAnsi(t.bold(q.question), width - 2)) {
+			lines.push(line);
+		}
 		lines.push("");
 
 		for (let i = 0; i < q.options.length; i++) {
