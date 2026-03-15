@@ -279,6 +279,8 @@ Huddle mode note: In huddle mode, use this tool to clarify requirements or choos
 					content: `[HUDDLE MODE ACTIVE]
 You are in huddle mode - a read-only exploration mode for safe code analysis and structured elicitation.
 
+TOOL CALLS ARE ALLOWED: You can still make tool calls — they will be automatically gated for user permission. For planning and research purposes (web search, browsing, analysis), tool calls are encouraged.
+
 IMPORTANT: Do NOT attempt to use edit or write tools while huddle mode is active. They are disabled. If you believe a file change is needed, tell the user and ask them to exit huddle mode first (via /huddle, /holup, /plan, or Alt+P).
 
 Available Tools:
