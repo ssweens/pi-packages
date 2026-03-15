@@ -212,7 +212,9 @@ Huddle mode note: In huddle mode, use this tool to clarify requirements or choos
 			let reason = `User denied ${toolName} on "${path}" in huddle mode`;
 			if (choice === "Deny with feedback") {
 				const feedback = await ctx.ui.input("Why? (feedback sent to agent):");
-				if (feedback) reason = `User denied ${toolName} on "${path}". Feedback from user: ${feedback}`;
+				reason = feedback 
+					? `User denied ${toolName} on "${path}". Feedback from user: ${feedback}`
+					: `User denied ${toolName} on "${path}" in huddle mode (no feedback provided)`;
 			}
 
 			return { block: true, reason };
@@ -234,7 +236,9 @@ Huddle mode note: In huddle mode, use this tool to clarify requirements or choos
 				let reason = `User denied bash command in huddle mode: \`${command}\``;
 				if (choice === "Deny with feedback") {
 					const feedback = await ctx.ui.input("Why? (feedback sent to agent):");
-					if (feedback) reason = `User denied bash command \`${command}\`. Feedback from user: ${feedback}`;
+					reason = feedback 
+						? `User denied bash command \`${command}\`. Feedback from user: ${feedback}`
+						: `User denied bash command \`${command}\` in huddle mode (no feedback provided)`;
 				}
 
 				return { block: true, reason };
