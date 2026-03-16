@@ -41,6 +41,63 @@ function buildSessionContextBlock(
 }
 
 // ---------------------------------------------------------------------------
+// Retry logic for transient HTTP errors
+// ---------------------------------------------------------------------------
+
+const MAX_RETRIES = 3;
+const INITIAL_RETRY_DELAY_MS = 1000;
+
+function isRetryableError(error: unknown): boolean {
+	if (error instanceof Error) {
+		// 503 Service Unavailable, 502 Bad Gateway, 504 Gateway Timeout
+		// Also handle network errors and rate limits (429)
+		const message = error.message.toLowerCase();
+		return (
+			message.includes("503") ||
+			message.includes("502") ||
+			message.includes("504") ||
+			message.includes("429") ||
+			message.includes("service unavailable") ||
+			message.includes("bad gateway") ||
+			message.includes("gateway timeout") ||
+			message.includes("too many requests") ||
+			message.includes("network error") ||
+			message.includes("fetch failed") ||
+			message.includes("econnreset") ||
+			message.includes("etimedout")
+		);
+	}
+	return false;
+}
+
+async function retryWithBackoff<T>(
+	operation: () => Promise<T>,
+	operationName: string,
+): Promise<T> {
+	let lastError: Error | undefined;
+
+	for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+		try {
+			return await operation();
+		} catch (error) {
+			lastError = error instanceof Error ? error : new Error(String(error));
+
+			if (!isRetryableError(lastError) || attempt === MAX_RETRIES - 1) {
+				throw lastError;
+			}
+
+			const delay = INITIAL_RETRY_DELAY_MS * Math.pow(2, attempt);
+			console.warn(
+				`pi-compaxxt: ${operationName} failed (attempt ${attempt + 1}/${MAX_RETRIES}): ${lastError.message}. Retrying in ${delay}ms...`,
+			);
+			await new Promise((resolve) => setTimeout(resolve, delay));
+		}
+	}
+
+	throw lastError;
+}
+
+// ---------------------------------------------------------------------------
 // Important files: parsing + file section restructuring
 // ---------------------------------------------------------------------------
 
@@ -158,12 +215,16 @@ ${fileLines.join("\n\n")}`;
 		}
 
 		try {
-			const result = await compact(
-				preparation,
-				ctx.model,
-				apiKey,
-				combinedInstructions || undefined,
-				signal,
+			const result = await retryWithBackoff(
+				() =>
+					compact(
+						preparation,
+						ctx.model,
+						apiKey,
+						combinedInstructions || undefined,
+						signal,
+					),
+				"compaction",
 			);
 
 			if (signal.aborted) return;
