@@ -4,6 +4,8 @@ Security hooks for Pi to reduce accidental destructive actions and secret-file a
 
 Forked from [`@aliou/pi-guardrails`](https://github.com/aliou/pi-guardrails) with added **sudo mode** for secure password handling.
 
+The shell parser used by permission checks is vendored into this package (`src/vendor/aliou-sh`) so local path installs do not depend on external module resolution.
+
 ## Install
 
 ```bash

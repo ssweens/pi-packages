@@ -32,9 +32,8 @@
     "README.md",
     "LICENSE"
   ],
-  "dependencies": {
-    "@aliou/sh": "^0.1.0"
-  },
+  "dependencies": {},
+
   "peerDependencies": {
     "@mariozechner/pi-agent-core": ">=0.52.7",
     "@mariozechner/pi-ai": ">=0.52.7",

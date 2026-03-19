@@ -1,7 +1,7 @@
 /**
  * Shared shell AST helpers used by guardrails hooks.
  *
- * Each hook imports `parse` from `@aliou/sh` directly and uses these
+ * Each hook imports `parse` from the vendored shell parser and uses these
  * for common AST operations.
  */
 
@@ -12,7 +12,7 @@ import type {
   Statement,
   Word,
   WordPart,
-} from "@aliou/sh";
+} from "../vendor/aliou-sh/index.js";
 
 /**
  * Resolve a Word node to its literal string value.
