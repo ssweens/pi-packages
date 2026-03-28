@@ -14,7 +14,7 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { complete, type Message } from "@mariozechner/pi-ai";
+import { streamSimple, type Message } from "@mariozechner/pi-ai";
 import type {
 	ExtensionAPI,
 	ExtensionCommandContext,
@@ -186,6 +186,11 @@ async function generateHandoffPrompt(
 	return ctx.ui.custom<HandoffResult>((tui, theme, _kb, done) => {
 		const loader = new BorderedLoader(tui, theme, "Generating handoff prompt...");
 		loader.onAbort = () => done(null);
+		const setLoaderMessage = (msg: string) => {
+			// BorderedLoader wraps a Loader which has setMessage(), access it at runtime
+			const inner = (loader as any).loader;
+			if (inner?.setMessage) inner.setMessage(msg);
+		};
 
 		const run = async () => {
 			const auth = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model!);
@@ -202,27 +207,34 @@ async function generateHandoffPrompt(
 				timestamp: Date.now(),
 			};
 
-			const response = await complete(
+			let accumulated = "";
+			let charCount = 0;
+			const eventStream = streamSimple(
 				ctx.model!,
 				{ systemPrompt: SYSTEM_PROMPT, messages: [userMessage] },
-				{ apiKey: auth.apiKey, headers: auth.headers, signal: loader.signal },
+				{ apiKey: auth.apiKey, headers: auth.headers, signal: loader.signal, tools: [] },
 			);
 
-			if (response.stopReason === "aborted") return null;
-			if (response.stopReason === "error") {
-				const msg =
-					"errorMessage" in response && typeof (response as any).errorMessage === "string"
-						? (response as any).errorMessage
-						: "LLM request failed";
-				return { type: "error" as const, message: msg };
+			for await (const event of eventStream) {
+				if (loader.signal.aborted) return null;
+				if (event.type === "text_delta") {
+					accumulated += event.delta;
+					charCount = accumulated.length;
+					setLoaderMessage(`Generating handoff prompt... (${charCount} chars)`);
+				} else if (event.type === "done") {
+					if (!accumulated && event.message?.content) {
+						for (const part of event.message.content) {
+							if (part.type === "text") accumulated += part.text;
+						}
+					}
+					if (event.reason === "error" || event.reason === "aborted") {
+						if (event.reason === "aborted") return null;
+						return { type: "error" as const, message: "LLM request failed" };
+					}
+				}
 			}
 
-			const text = response.content
-				.filter((c): c is { type: "text"; text: string } => c.type === "text")
-				.map((c) => c.text)
-				.join("\n")
-				.trim();
-
+			const text = accumulated.trim();
 			return text.length > 0 ? { type: "prompt" as const, text } : { type: "error" as const, message: "LLM returned empty response" };
 		};
 
