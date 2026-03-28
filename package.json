@@ -1,0 +1,23 @@
+{
+  "name": "@henriquebastos/pi-packages",
+  "private": true,
+  "keywords": ["pi-package"],
+  "pi": {
+    "extensions": [
+      "pi-compaxxt/extensions",
+      "pi-dynamic-models/index.ts",
+      "pi-handoff/extensions",
+      "pi-huddle/extensions",
+      "pi-image-gen/extensions",
+      "pi-leash/src",
+      "pi-qq/extensions",
+      "pi-vertex/index.ts"
+    ],
+    "skills": [
+      "pi-compaxxt/skills",
+      "pi-file-todos/skills",
+      "pi-handoff/skills",
+      "pi-huddle/skills"
+    ]
+  }
+}
