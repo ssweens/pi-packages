@@ -145,11 +145,25 @@ export default function qqExtension(pi: ExtensionAPI): void {
 			{ role: "user" as const, content: [{ type: "text" as const, text: question }], timestamp: Date.now() },
 		];
 
-		let apiKey: string;
-		try { apiKey = await ctx.modelRegistry.getApiKey(ctx.model); }
-		catch { ctx.ui.notify("Could not retrieve API key for quick question", "error"); return; }
+		let qqModel = ctx.model!;
+		let auth = await ctx.modelRegistry.getApiKeyAndHeaders(qqModel);
+		if (!auth.ok) {
+			// Current model doesn't have a usable API key — try other available models
+			const fallback = ctx.modelRegistry.getAvailable().find((m: any) => m !== qqModel);
+			if (fallback) {
+				auth = await ctx.modelRegistry.getApiKeyAndHeaders(fallback);
+				if (auth.ok) qqModel = fallback;
+			}
+			if (!auth.ok) {
+				ctx.ui.notify("Could not retrieve API key for quick question", "error");
+				return;
+			}
+		}
+		const apiKey = auth.apiKey ?? "";
+		const extraHeaders = auth.ok && auth.headers ? auth.headers : undefined;
 
-		const thinkingLevel = pi.getThinkingLevel();
+		// Disable thinking for quick questions — fast and concise
+		const thinkingLevel = undefined;
 		const abortController = new AbortController();
 		let accumulated = "";
 		let streamDone = false;
@@ -172,13 +186,14 @@ export default function qqExtension(pi: ExtensionAPI): void {
 		const streamPromise = (async () => {
 			try {
 				const eventStream = streamSimple(
-					ctx.model!,
+					qqModel,
 					{ systemPrompt, messages: contextMessages },
 					{ 
 						apiKey, 
 						signal: abortController.signal, 
 						reasoning: thinkingLevel,
-						tools: []
+						tools: [],
+						...(extraHeaders ? { headers: extraHeaders } : {}),
 					},
 				);
 				for await (const event of eventStream) {
@@ -187,11 +202,23 @@ export default function qqExtension(pi: ExtensionAPI): void {
 						accumulated += event.delta;
 						updateWidget();
 					} else if (event.type === "done") {
+						// Extract text from the final message if streaming missed it
+						if (!accumulated && event.message?.content) {
+							for (const part of event.message.content) {
+								if (part.type === "text") accumulated += part.text;
+							}
+						}
+						if (!accumulated) accumulated = "(No response text received)";
 						streamDone = true;
 						updateWidget();
 					}
 				}
-			} catch {
+				if (!streamDone) {
+					streamDone = true;
+					updateWidget();
+				}
+			} catch (err) {
+				accumulated = accumulated || `Error: ${err instanceof Error ? err.message : String(err)}`;
 				streamDone = true;
 				updateWidget();
 			}
