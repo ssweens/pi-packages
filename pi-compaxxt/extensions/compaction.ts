@@ -171,8 +171,10 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_before_compact", async (event, ctx) => {
 		if (!ctx.model) return;
 
-		const apiKey = await ctx.modelRegistry.getApiKey(ctx.model);
-		if (!apiKey) return;
+		const auth = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model);
+		if (!auth.ok) return;
+		const apiKey = auth.apiKey ?? "";
+		const authHeaders = auth.headers;
 
 		const { preparation, customInstructions: userInstructions, signal } = event;
 
@@ -221,6 +223,7 @@ ${fileLines.join("\n\n")}`;
 						preparation,
 						ctx.model,
 						apiKey,
+						authHeaders,
 						combinedInstructions || undefined,
 						signal,
 					),
