@@ -188,7 +188,8 @@ async function generateHandoffPrompt(
 		loader.onAbort = () => done(null);
 
 		const run = async () => {
-			const apiKey = await ctx.modelRegistry.getApiKey(ctx.model!);
+			const auth = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model!);
+			if (!auth.ok) throw new Error(auth.error);
 
 			const userMessage: Message = {
 				role: "user",
@@ -204,7 +205,7 @@ async function generateHandoffPrompt(
 			const response = await complete(
 				ctx.model!,
 				{ systemPrompt: SYSTEM_PROMPT, messages: [userMessage] },
-				{ apiKey, signal: loader.signal },
+				{ apiKey: auth.apiKey, headers: auth.headers, signal: loader.signal },
 			);
 
 			if (response.stopReason === "aborted") return null;
