@@ -769,7 +769,7 @@ export default function piImageGen(pi: ExtensionAPI) {
       }
     }
     if (!sessionSelection) {
-      const config = loadConfig(ctx.cwd);
+      const config = loadConfig(ctx.cwd || process.cwd());
       if (config.defaultProvider && config.defaultModel) {
         sessionSelection = { provider: config.defaultProvider, model: config.defaultModel };
       }
