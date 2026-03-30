@@ -381,9 +381,6 @@ export function streamMaaS(
         if ("error" in event && event.error && typeof event.error === "object") {
           const err = event.error as any;
           err.model = model.id;
-          if (typeof err.errorMessage === "string" && /^400\s*(status code)?\s*\(no body\)/i.test(err.errorMessage)) {
-            err.errorMessage = `Vertex MaaS HTTP 400 (no body) for model "${apiModelId}". Not automatically treated as context overflow.`;
-          }
         }
         stream.push(event);
       }
