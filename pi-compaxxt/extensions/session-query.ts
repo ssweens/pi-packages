@@ -171,7 +171,9 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			try {
-				const apiKey = await ctx.modelRegistry.getApiKey(ctx.model);
+				const auth = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model);
+				if (!auth.ok) return errorResult(`Auth error: ${auth.error}`);
+				const apiKey = auth.apiKey;
 
 				const userMessage: Message = {
 					role: "user",
