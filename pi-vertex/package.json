@@ -1,6 +1,6 @@
 {
   "name": "@ssweens/pi-vertex",
-  "version": "1.1.3",
+  "version": "1.1.4",
   "description": "Google Vertex AI provider for Pi coding agent - supports Gemini, Claude, and all MaaS models",
   "type": "module",
   "main": "index.ts",
