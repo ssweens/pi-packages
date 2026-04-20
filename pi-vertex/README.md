@@ -17,7 +17,7 @@ Set your GCP project and credentials. Vertex AI models (Gemini, Claude, Llama, D
 
 - **43 models** across 4 categories:
   - **Gemini** (8): 3.1 Pro, 3 Pro, 3 Flash, 2.5 Pro, 2.5 Flash, 2.0 Flash, and more
-  - **Claude** (12): Opus 4.6, Sonnet 4.6, 4.5, 4.1, 4, 3.7 Sonnet, 3.5 Sonnet v2, 3.5 Sonnet, 3 Haiku
+  - **Claude** (12): Opus 4.7, 4.6, Sonnet 4.6, 4.5, 4.1, 4, 3.7 Sonnet, 3.5 Sonnet v2, 3.5 Sonnet, 3 Haiku
   - **Llama** (3): 4 Maverick, 4 Scout, 3.3 70B
   - **Other MaaS** (20): AI21 Jamba, Mistral, DeepSeek, Qwen, OpenAI GPT-OSS, Kimi, MiniMax, GLM
 
@@ -100,8 +100,8 @@ pi --provider vertex --model claude-sonnet-4-6 --reasoning high
 Add to `~/.bashrc` or `~/.zshrc`:
 
 ```bash
-# Claude 4.6 Opus
-alias pic="GOOGLE_CLOUD_PROJECT=your-project pi --provider vertex --model claude-opus-4-6"
+# Claude 4.7 Opus
+alias pic="GOOGLE_CLOUD_PROJECT=your-project pi --provider vertex --model claude-opus-4-7"
 
 # Gemini 2.5 Pro
 alias pig="GOOGLE_CLOUD_PROJECT=your-project pi --provider vertex --model gemini-2.5-pro"
@@ -130,6 +130,7 @@ alias pil="GOOGLE_CLOUD_PROJECT=your-project pi --provider vertex --model llama-
 
 | Model | Context | Max Tokens | Input | Reasoning | Price (in/out) | Region |
 |-------|---------|------------|-------|-----------|----------------|--------|
+| claude-opus-4-7 | 1M | 32,000 | text, image | ✅ | $5.00/$25.00 | global |
 | claude-opus-4-6 | 1M | 32,000 | text, image | ✅ | $5.00/$25.00 | global |
 | claude-sonnet-4-6 | 1M | 64,000 | text, image | ✅ | $3.00/$15.00 | global |
 | claude-opus-4-5 | 200K | 32,000 | text, image | ✅ | $5.00/$25.00 | global |
