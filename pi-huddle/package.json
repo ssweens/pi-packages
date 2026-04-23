@@ -1,6 +1,6 @@
 {
   "name": "@ssweens/pi-huddle",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "type": "module",
   "description": "Huddle mode for pi - safe exploration and structured elicitation before execution",
   "keywords": [
@@ -9,7 +9,7 @@
     "plan-mode",
     "safe-mode",
     "read-only",
-    "ask-user"
+    "gather-input"
   ],
   "author": "ssweens",
   "license": "MIT",
@@ -19,7 +19,7 @@
     "README.md",
     "LICENSE",
     "screenshot.png",
-    "ask-user-screenshot.png"
+    "gather-input-screenshot.png"
   ],
   "peerDependencies": {
     "@mariozechner/pi-ai": "*",

@@ -1,5 +1,5 @@
 /**
- * AskUserDialog - TUI component matching the Claude Code AskUserQuestion UI.
+ * GatherInputDialog - TUI component matching the Claude Code AskUserQuestion UI.
  */
 
 import type { Component, Focusable } from "@mariozechner/pi-tui";
@@ -22,16 +22,16 @@ export interface QuestionDef {
 	multiSelect: boolean;
 }
 
-export interface AskUserResult {
+export interface GatherInputResult {
 	answers: Record<string, string>;
 	annotations: Record<string, { markdown?: string; notes?: string }>;
 }
 
-export type AskUserDialogResult = AskUserResult | { chatMode: true } | null;
+export type GatherInputDialogResult = GatherInputResult | { chatMode: true } | null;
 
 const SUBMIT_VIEW = -1;
 
-export class AskUserDialog implements Component, Focusable {
+export class GatherInputDialog implements Component, Focusable {
 	private questions: QuestionDef[];
 	private theme: Theme;
 
@@ -55,7 +55,7 @@ export class AskUserDialog implements Component, Focusable {
 	get focused(): boolean { return this._focused; }
 	set focused(value: boolean) { this._focused = value; }
 
-	onDone?: (result: AskUserDialogResult) => void;
+	onDone?: (result: GatherInputDialogResult) => void;
 
 	constructor(questions: QuestionDef[], theme: Theme) {
 		this.questions = questions;
@@ -447,7 +447,7 @@ export class AskUserDialog implements Component, Focusable {
 					lines.push(truncateToWidth(`${prefix}${t.fg("dim", wrappedLines[i])}`, width));
 				} else {
 					const padding = " ".repeat(prefixWidth + numWidth + 1);
-					lines.push(truncateToWidth(`${padding}${wrappedLines[i]}`, width));
+					lines.push(truncateToWidth(`${padding}${wrappedLines[i])}`, width));
 				}
 			}
 		} else {

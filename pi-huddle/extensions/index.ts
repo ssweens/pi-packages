@@ -9,20 +9,20 @@
  * - Alt+P shortcut to toggle
  * - Bash restricted to allowlisted commands (others prompt for permission)
  * - edit/write tools prompt for permission during huddle mode
- * - ask_user tool for structured elicitation during planning
+ * - gather_input tool for structured elicitation during planning
  */
 
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { TextContent } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { AskUserDialog, type AskUserDialogResult } from "./lib/ask-user-dialog.js";
+import { GatherInputDialog, type GatherInputDialogResult } from "./lib/gather-input-dialog.js";
 import { PermissionDialog, type PermissionDialogResult } from "./lib/permission-dialog.js";
 import { isSafeCommand } from "./lib/utils.js";
 
 // Tools
-const HUDDLE_MODE_TOOLS = ["read", "bash", "grep", "find", "ls", "ask_user"];
-const NORMAL_MODE_TOOLS = ["read", "bash", "edit", "write", "ask_user"];
+const HUDDLE_MODE_TOOLS = ["read", "bash", "grep", "find", "ls", "gather_input"];
+const NORMAL_MODE_TOOLS = ["read", "bash", "edit", "write", "gather_input"];
 
 export default function huddleExtension(pi: ExtensionAPI): void {
 	let huddleEnabled = false;
@@ -83,10 +83,10 @@ export default function huddleExtension(pi: ExtensionAPI): void {
 		handler: async (ctx) => toggleHuddle(ctx),
 	});
 
-	// Ask User Question tool - structured elicitation
+	// Gather Input tool - structured elicitation
 	pi.registerTool({
-		name: "ask_user",
-		label: "Ask User Question",
+		name: "gather_input",
+		label: "Gather Input",
 		description: `Use this tool when you need to ask the user questions during execution. This allows you to:
 - Gather user preferences or requirements
 - Clarify ambiguous instructions
@@ -147,9 +147,9 @@ Huddle mode note: In huddle mode, use this tool to clarify requirements or choos
 		execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
 			const { questions, metadata } = params;
 
-			const result = await ctx.ui.custom<AskUserDialogResult>(
+			const result = await ctx.ui.custom<GatherInputDialogResult>(
 				(tui, theme, _kb, done) => {
-					const dialog = new AskUserDialog(questions, theme);
+					const dialog = new GatherInputDialog(questions, theme);
 					dialog.onDone = (r) => done(r);
 					return {
 						get focused() { return dialog.focused; },
@@ -311,14 +311,14 @@ TOOL CALLS ARE ALLOWED: You can still make tool calls — they will be automatic
 IMPORTANT: Do NOT attempt to use edit or write tools while huddle mode is active. They are disabled. If you believe a file change is needed, tell the user and ask them to exit huddle mode first (via /huddle, /holup, /plan, or Alt+P).
 
 Available Tools:
-- read, bash, grep, find, ls, ask_user (always allowed)
+- read, bash, grep, find, ls, gather_input (always allowed)
 
 Safe Bash Commands (always allowed):
 cat, cd, rg, fd, grep, head, tail, ls, find, git status/log/diff/branch, npm list
 
 Other bash commands will prompt for permission.
 
-Use the ask_user tool for structured elicitation — gathering requirements, clarifying ambiguity, and getting decisions from the user before acting.
+Use the gather_input tool for structured elicitation — gathering requirements, clarifying ambiguity, and getting decisions from the user before acting.
 
 Create a detailed numbered plan under a "Plan:" header:
 

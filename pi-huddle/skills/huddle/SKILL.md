@@ -1,19 +1,19 @@
 ---
 name: huddle
-description: Use this skill when working in pi's Huddle Mode. Huddle Mode is a safe exploration mode where read operations are always allowed, write operations require user permission, and the ask_user tool enables structured multi-question elicitation with a rich TUI dialog.
+description: Use this skill when working in pi's Huddle Mode. Huddle Mode is a safe exploration mode where read operations are always allowed, write operations require user permission, and the gather_input tool enables structured multi-question elicitation with a rich TUI dialog.
 ---
 
 # Huddle Mode Skill
 
 ## Overview
 
-Huddle Mode is a safety feature that allows free read-only exploration while requiring user approval for any file modifications. It also provides the `ask_user` tool for structured elicitation — gathering requirements, clarifying ambiguity, and getting decisions from the user via a rich multi-question TUI dialog.
+Huddle Mode is a safety feature that allows free read-only exploration while requiring user approval for any file modifications. It also provides the `gather_input` tool for structured elicitation — gathering requirements, clarifying ambiguity, and getting decisions from the user via a rich multi-question TUI dialog.
 
 ## When to Use
 
 - **Initial code exploration** - Understanding a new codebase safely
 - **Complex refactoring** - Planning multi-step changes before executing
-- **Requirements gathering** - Using `ask_user` to clarify intent before acting
+- **Requirements gathering** - Using `gather_input` to clarify intent before acting
 - **Safety-critical changes** - When you want explicit approval for each modification
 
 ## Commands
@@ -40,7 +40,7 @@ Huddle Mode is a safety feature that allows free read-only exploration while req
 **Always Allowed:**
 - `read`, `grep`, `find`, `ls` - Read and search operations
 - `bash` - Allowlisted safe commands (cat, grep, ls, git status, etc.)
-- `ask_user` - Structured user elicitation
+- `gather_input` - Structured user elicitation
 
 **Requires Permission:**
 - `edit` - File modifications (user must approve each edit)
@@ -53,9 +53,9 @@ When ready to execute changes:
 - Toggle off with `/huddle`, `/holup`, `/plan`, or `Alt+H`
 - Full tool access restored
 
-## ask_user Tool
+## gather_input Tool
 
-The `ask_user` tool is available in **both huddle mode and normal mode**. It presents a rich TUI dialog with tabs for each question, multiple-choice options, freeform text input, and a submit/review view.
+The `gather_input` tool is available in **both huddle mode and normal mode**. It presents a rich TUI dialog with tabs for each question, multiple-choice options, freeform text input, and a submit/review view.
 
 ### When to Use
 
@@ -64,7 +64,7 @@ The `ask_user` tool is available in **both huddle mode and normal mode**. It pre
 - Get decisions on implementation choices
 - Offer architectural choices with descriptions and code previews
 
-**Huddle mode:** Use `ask_user` to clarify requirements BEFORE finalizing your plan. Do NOT ask "Is my plan ready?" — the user cannot see the plan until they exit huddle mode.
+**Huddle mode:** Use `gather_input` to clarify requirements BEFORE finalizing your plan. Do NOT ask "Is my plan ready?" — the user cannot see the plan until they exit huddle mode.
 
 ### Tool Parameters
 
@@ -157,7 +157,7 @@ The `ask_user` tool is available in **both huddle mode and normal mode**. It pre
 
 ## Tips
 
-1. **Use `ask_user` early** — clarify intent before exploring, not after
+1. **Use `gather_input` early** — clarify intent before exploring, not after
 2. **Up to 4 questions per call** — batch related questions together
 3. **Use `markdown` field** for code previews in option descriptions
 4. **multiSelect** for feature flags, configuration choices, etc.

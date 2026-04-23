@@ -2,18 +2,18 @@
 
 ![Huddle mode — permission-gated exploration](screenshot.png)
 
-![ask_user — structured multi-question elicitation](ask-user-screenshot.png)
+![gather_input — structured multi-question elicitation](gather-input-screenshot.png)
 
 ```bash
 pi install @ssweens/pi-huddle
 ```
 
-Huddle mode for [pi](https://github.com/badlogic/pi-mono). Safe exploration with permission gates, plus a powerful `ask_user` tool for structured multi-question elicitation. Toggle with `/huddle`, `/holup`, `/plan`, or `Alt+H`.
+Huddle mode for [pi](https://github.com/badlogic/pi-mono). Safe exploration with permission gates, plus a powerful `gather_input` tool for structured multi-question elicitation. Toggle with `/huddle`, `/holup`, `/plan`, or `Alt+H`.
 
 ## Features
 
 - **Huddle mode** — read-only by default; writes require your approval
-- **`ask_user` tool** — rich TUI dialog for structured elicitation (available in all modes)
+- **`gather_input` tool** — rich TUI dialog for structured elicitation (available in all modes)
 - **Permission gates** — approve or deny individual edit/write operations inline
 - **Bash allowlist** — safe commands execute freely, destructive ones prompt first
 - **Three commands** — `/huddle` (primary), `/holup`, `/plan` all toggle the mode
@@ -51,16 +51,16 @@ pi --plan            # alias (backward compat)
 ### Workflow
 
 1. **Enter huddle mode** — `/huddle` or `Alt+H`
-2. **Use `ask_user`** — gather requirements and clarify before acting
+2. **Use `gather_input`** — gather requirements and clarify before acting
 3. **Explore safely** — read, search, and analyze freely
 4. **Approve edits on demand** — each write operation requires approval
 5. **Exit when ready** — toggle off to restore full access
 
 ---
 
-## ask_user Tool
+## gather_input Tool
 
-The `ask_user` tool is available **in all modes** — not just huddle. It presents a rich TUI dialog with one tab per question, numbered options, freeform text input, and a submit/review view.
+The `gather_input` tool is available **in all modes** — not just huddle. It presents a rich TUI dialog with one tab per question, numbered options, freeform text input, and a submit/review view.
 
 ### Dialog UX
 
@@ -166,7 +166,7 @@ Enter to select · Tab/↑↓ to navigate · Esc to cancel
 | `grep` | Search within files |
 | `find` | Find files |
 | `ls` | List directories |
-| `ask_user` | Structured elicitation |
+| `gather_input` | Structured elicitation |
 
 ### ⚠️ Requires Permission
 
@@ -203,9 +203,9 @@ Benign output redirections like `2>/dev/null` and `2>&1` are also allowed.
 pi-huddle/
 ├── package.json          # Package manifest
 ├── extensions/
-│   ├── index.ts          # Commands, shortcuts, ask_user tool, permission gates
+│   ├── index.ts          # Commands, shortcuts, gather_input tool, permission gates
 │   └── lib/
-│       ├── ask-user-dialog.ts  # TUI dialog component
+│       ├── gather-input-dialog.ts  # TUI dialog component
 │       └── utils.ts            # Bash command classification
 ├── skills/
 │   └── huddle/
@@ -216,8 +216,8 @@ pi-huddle/
 
 Two pi primitives:
 
-- **Extension** — registers `/huddle`, `/holup`, `/plan` commands, `Alt+H` shortcut, `ask_user` tool, permission gates, and context injection
-- **Skill** — documents huddle mode and `ask_user` behaviour so the agent knows how to use them
+- **Extension** — registers `/huddle`, `/holup`, `/plan` commands, `Alt+H` shortcut, `gather_input` tool, permission gates, and context injection
+- **Skill** — documents huddle mode and `gather_input` behaviour so the agent knows how to use them
 
 ## Development
 
