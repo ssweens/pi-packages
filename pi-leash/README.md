@@ -89,7 +89,8 @@ Create this file to customize settings. All fields are optional — sensible def
   "permissionGate": {
     "patterns": [
       { "pattern": "rm -rf", "description": "recursive force delete" },
-      { "pattern": "sudo", "description": "superuser command" }
+      { "pattern": "sudo", "description": "superuser command" },
+      { "pattern": "git checkout", "description": "branch switch or discard uncommitted changes" }
     ],
     "requireConfirmation": true,
     "allowedPatterns": [],
@@ -137,6 +138,7 @@ Built-in dangerous patterns are matched structurally (AST-based):
 - `mkfs.`
 - `chmod -R 777`
 - `chown -R`
+- `git checkout`
 
 You can add custom dangerous patterns via `permissionGate.patterns`.
 

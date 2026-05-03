@@ -185,6 +185,7 @@ const DEFAULT_DANGEROUS_PATTERNS: DangerousPattern[] = [
   { pattern: "mkfs.", description: "filesystem format" },
   { pattern: "chmod -R 777", description: "insecure recursive permissions" },
   { pattern: "chown -R", description: "recursive ownership change" },
+  { pattern: "git checkout", description: "branch switch or discard uncommitted changes" },
 ];
 
 function mergeConfig(userConfig: GuardrailsConfig): ResolvedConfig {

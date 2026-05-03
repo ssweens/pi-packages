@@ -80,6 +80,11 @@ const BUILTIN_MATCHERS: StructuralMatcher[] = [
     if (words[0] !== "chown") return undefined;
     return words.includes("-R") ? "recursive ownership change" : undefined;
   },
+  // git checkout
+  (words) => {
+    if (words[0] !== "git") return undefined;
+    return words[1] === "checkout" ? "branch switch or discard uncommitted changes" : undefined;
+  },
 ];
 
 interface DangerMatch {
@@ -447,6 +452,7 @@ function findDangerousMatch(
     "mkfs.",
     "chmod -R 777",
     "chown -R",
+    "git checkout",
   ]);
 
   for (const cp of compiledPatterns) {
