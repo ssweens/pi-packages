@@ -21,7 +21,9 @@ import { PermissionDialog, type PermissionDialogResult } from "./lib/permission-
 import { isSafeCommand } from "./lib/utils.js";
 
 // Tools
-const HUDDLE_MODE_TOOLS = ["read", "bash", "grep", "find", "ls", "gather_input"];
+// In huddle mode, edit/write are available but gated via permission dialog.
+// The model should just call them — the user will be prompted inline.
+const HUDDLE_MODE_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls", "gather_input"];
 const NORMAL_MODE_TOOLS = ["read", "bash", "edit", "write", "gather_input"];
 
 export default function huddleExtension(pi: ExtensionAPI): void {
@@ -53,7 +55,7 @@ export default function huddleExtension(pi: ExtensionAPI): void {
 
 		if (huddleEnabled) {
 			pi.setActiveTools(HUDDLE_MODE_TOOLS);
-			ctx.ui.notify(`Huddle mode enabled. Tools: ${HUDDLE_MODE_TOOLS.join(", ")}. Safe: cd, rg, fd, head, tail, cat, grep, find, git status/log/diff`);
+			ctx.ui.notify(`Huddle mode enabled. Read freely. Edits/writes will prompt for approval.`);
 		} else {
 			pi.setActiveTools(NORMAL_MODE_TOOLS);
 			ctx.ui.notify("Huddle mode disabled. Full access restored.");
@@ -304,30 +306,31 @@ Huddle mode note: In huddle mode, use this tool to clarify requirements or choos
 				message: {
 					customType: "huddle-context",
 					content: `[HUDDLE MODE ACTIVE]
-You are in huddle mode - a read-only exploration mode for safe code analysis and structured elicitation.
+You are in huddle mode. All tools are available. The only difference from normal mode is that write operations trigger an inline permission dialog for the user instead of executing immediately.
 
-TOOL CALLS ARE ALLOWED: You can still make tool calls — they will be automatically gated for user permission. For planning and research purposes (web search, browsing, analysis), tool calls are encouraged.
+NEVER tell the user to exit huddle mode. They are in huddle mode because they WANT to be asked before each change. Just use the tools you need and let the permission gates handle the asking.
 
-IMPORTANT: Do NOT attempt to use edit or write tools while huddle mode is active. They are disabled. If you believe a file change is needed, tell the user and ask them to exit huddle mode first (via /huddle, /holup, /plan, or Alt+P).
+When you need to make a change:
+1. Just call edit or write as you normally would
+2. The permission gate will show the user an [Allow] / [Deny] prompt
+3. The user approves or denies inline — no mode switching needed
+
+When you need to run a non-allowlisted bash command:
+1. Just run it (e.g., npm install, git commit)
+2. The user gets a prompt to approve or deny
+3. Proceed based on their response
 
 Available Tools:
-- read, bash, grep, find, ls, gather_input (always allowed)
+- read, bash, edit, write, grep, find, ls, gather_input
 
-Safe Bash Commands (always allowed):
+Safe Bash Commands (no prompt):
 cat, cd, rg, fd, grep, head, tail, ls, find, git status/log/diff/branch, npm list
 
 Other bash commands will prompt for permission.
 
-Use the gather_input tool for structured elicitation — gathering requirements, clarifying ambiguity, and getting decisions from the user before acting.
+Use the gather_input tool for structured elicitation — gathering requirements, clarifying ambiguity, and getting decisions from the user.
 
-Create a detailed numbered plan under a "Plan:" header:
-
-Plan:
-1. First step description
-2. Second step description
-...
-
-Do NOT execute the plan. Only plan and analyze. When you are ready to execute, ask the user to exit huddle mode.`,
+You can create a plan AND execute it. The user controls approval per-step via the permission gates, not by toggling modes.`,
 					display: false,
 				},
 			};

@@ -35,23 +35,36 @@ Huddle Mode is a safety feature that allows free read-only exploration while req
 /huddle      # or /holup, /plan, Alt+H
 ```
 
-### 2. Permission Gates
+### 2. Just Act — The System Will Ask
 
-**Always Allowed:**
+**NEVER tell the user to exit huddle mode.** That defeats the purpose.
+
+In huddle mode, you have full access to all tools. The difference is that write operations trigger an inline permission dialog for the user instead of executing immediately. This is a feature, not a restriction.
+
+**When you need to make a change:**
+1. Just use `edit` or `write` as you normally would
+2. The permission gate will automatically show the user an `[Allow] / [Deny]` prompt
+3. The user approves or denies inline — no mode switching required
+4. If approved, the operation executes. If denied, you get feedback.
+
+**When you need to run a non-allowlisted bash command:**
+1. Just run it (e.g., `npm install`, `git commit`)
+2. The user gets a prompt to approve or deny
+3. Proceed based on their response
+
+**The user is IN huddle mode because they WANT to be asked before every change.** Do not apologize for this. Do not suggest exiting. Just do the work and let the permission gates handle the asking.
+
+### 3. Permission Gates
+
+**Always Allowed (no prompt):**
 - `read`, `grep`, `find`, `ls` - Read and search operations
 - `bash` - Allowlisted safe commands (cat, grep, ls, git status, etc.)
 - `gather_input` - Structured user elicitation
 
-**Requires Permission:**
-- `edit` - File modifications (user must approve each edit)
-- `write` - File creation (user must approve each write)
+**Requires Permission (inline prompt):**
+- `edit` - File modifications
+- `write` - File creation
 - Non-allowlisted bash commands (npm install, git commit, etc.)
-
-### 3. Exit Huddle Mode
-
-When ready to execute changes:
-- Toggle off with `/huddle`, `/holup`, `/plan`, or `Alt+H`
-- Full tool access restored
 
 ## gather_input Tool
 
@@ -64,7 +77,7 @@ The `gather_input` tool is available in **both huddle mode and normal mode**. It
 - Get decisions on implementation choices
 - Offer architectural choices with descriptions and code previews
 
-**Huddle mode:** Use `gather_input` to clarify requirements BEFORE finalizing your plan. Do NOT ask "Is my plan ready?" — the user cannot see the plan until they exit huddle mode.
+**Huddle mode:** Use `gather_input` to clarify requirements BEFORE finalizing your plan. Do NOT ask "Is my plan ready?" — present your plan and let the permission gates ask the user to approve each step.
 
 ### Tool Parameters
 
@@ -161,4 +174,4 @@ The `gather_input` tool is available in **both huddle mode and normal mode**. It
 2. **Up to 4 questions per call** — batch related questions together
 3. **Use `markdown` field** for code previews in option descriptions
 4. **multiSelect** for feature flags, configuration choices, etc.
-5. **Exit huddle when ready** — the user controls when to execute
+5. **Just do the work** — don't wait for permission. The permission gates exist so the user can approve inline.
