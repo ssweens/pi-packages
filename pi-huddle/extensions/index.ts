@@ -89,18 +89,19 @@ export default function huddleExtension(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "gather_input",
 		label: "Gather Input",
-		description: `Use this tool when you need to ask the user questions during execution. This allows you to:
-- Gather user preferences or requirements
-- Clarify ambiguous instructions
-- Get decisions on implementation choices as you work
-- Offer choices to the user about what direction to take
+		description: `Ask the user one to four structured questions before acting.
 
-Usage notes:
-- Users will always be able to type a custom answer in the freeform field
-- Use multiSelect: true to allow multiple answers to be selected for a question
-- If you recommend a specific option, make that the first option in the list and add "(Recommended)" at the end of the label
+Use for:
+- Gathering preferences or requirements
+- Clarifying ambiguous instructions
+- Choosing between implementation approaches
 
-Huddle mode note: In huddle mode, use this tool to clarify requirements or choose between approaches BEFORE finalizing your plan. Do NOT use this tool to ask "Is my plan ready?" or "Should I proceed?" - use ExitHuddleMode for plan approval. IMPORTANT: Do not reference "the plan" in your questions (e.g. "Do you have feedback about the plan?", "Does the plan look good?") because the user cannot see the plan in the UI until you call ExitHuddleMode. If you need plan approval, use ExitHuddleMode instead.`,
+Usage:
+- Each option needs a short label and a description; mark a recommended choice with "(Recommended)"
+- Set multiSelect true only when several options can be chosen at once
+- Users may also type a freeform answer
+
+Do not use this tool to request plan approval; in huddle mode the user approves each tool call via the inline permission dialog.`,
 		parameters: Type.Object({
 			questions: Type.Array(
 				Type.Object({

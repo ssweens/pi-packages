@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.1] - 2026-05-06
+### Fixed
+- `gather_input` description no longer references a non-existent `ExitHuddleMode` tool. Three stale mentions and the entire "Huddle mode note" paragraph are removed; the equivalent guidance lives in `skills/huddle/SKILL.md` and the injected `[HUDDLE MODE ACTIVE]` context message.
+- Description shrunk from ~1.2 KB to ~540 chars. Long, deeply-quoted tool descriptions caused small/quantized DSML-format models (observed with DeepSeek-V4-Flash IQ2_XS via llama.cpp) to drift off the required tool-call format and emit malformed tags or refuse to call the tool at all. The remaining text covers actual usage without contradicting the package's own "never tell the user to exit huddle mode" design.
+
 ## [1.3.0] - 2026-05-02
 ### Fixed
 - Huddle mode no longer tells the model to ask users to exit. Instead, the model is instructed to just use `edit`/`write` tools normally — the permission gate will prompt the user inline. This fixes the long-standing issue where models would refuse to make changes and repeatedly ask the user to toggle huddle mode off.
