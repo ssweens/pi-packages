@@ -97,6 +97,22 @@ interface ModelsResponse {
   data: RemoteModel[];
 }
 
+/** Shape returned by GET {baseUrl}/corral/models */
+interface CorralModelDetail {
+  id: string;
+  context_size: number | null;
+  hf_base?: string | null;
+  aliases?: string[];
+  unlisted?: boolean;
+  ttl?: number | null;
+  pool_size?: number;
+}
+
+interface CorralModelsResponse {
+  object: string;
+  data: CorralModelDetail[];
+}
+
 function parseConfigFile(path: string): ServerConfig[] {
   if (!existsSync(path)) return [];
 
@@ -129,6 +145,25 @@ function parseConfigFile(path: string): ServerConfig[] {
 function loadConfig(): ServerConfig[] {
   const configPath = join(getAgentDir(), "settings", "pi-dynamic-models.json");
   return parseConfigFile(configPath);
+}
+
+async function fetchCorralModelDetails(
+  baseUrl: string,
+  apiKey?: string,
+): Promise<Map<string, CorralModelDetail>> {
+  const url = `${baseUrl.replace(/\/+$/, "")}/corral/models`;
+  const headers: Record<string, string> = { Accept: "application/json" };
+  if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
+  try {
+    const response = await fetch(url, { headers, signal: AbortSignal.timeout(5000) });
+    if (!response.ok) return new Map();
+    const body = (await response.json()) as CorralModelsResponse;
+    const map = new Map<string, CorralModelDetail>();
+    for (const m of body.data ?? []) map.set(m.id, m);
+    return map;
+  } catch {
+    return new Map();
+  }
 }
 
 async function fetchRemoteModels(baseUrl: string, apiKey?: string): Promise<RemoteModel[]> {
@@ -164,11 +199,16 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 
   await Promise.all(
     servers.map(async ({ provider, baseUrl, apiKey, api, compat, models: modelOverrides }) => {
-      // Fetch remote model IDs — fall back gracefully if unreachable
+      // Fetch remote model IDs and corral metadata in parallel
       let fetchedIds: string[] = [];
+      let corralDetails = new Map<string, CorralModelDetail>();
       try {
-        const fetched = await fetchRemoteModels(baseUrl, apiKey);
+        const [fetched, details] = await Promise.all([
+          fetchRemoteModels(baseUrl, apiKey),
+          fetchCorralModelDetails(baseUrl, apiKey),
+        ]);
         fetchedIds = fetched.map((m) => m.id);
+        corralDetails = details;
       } catch (err) {
         if (modelOverrides && Object.keys(modelOverrides).length > 0) {
           startupLines.push(`   [pi-dynamic-models] Could not reach ${baseUrl}/models (${err}), using configured models only`);
@@ -195,13 +235,15 @@ export default async function (pi: ExtensionAPI): Promise<void> {
         api: api ?? "openai-completions",
         models: Array.from(allIds).sort((a, b) => a.localeCompare(b)).map((id) => {
           const override = modelOverrides?.[id];
+          const corral = corralDetails.get(id);
           return {
             id,
             name:          override?.name          ?? id,
             reasoning:     override?.reasoning     ?? false,
             input:         override?.input         ?? (["text"] as ("text" | "image")[]),
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: override?.contextWindow ?? 128_000,
+            // Priority: manual config override > corral's live context_size > default
+            contextWindow: override?.contextWindow ?? corral?.context_size ?? 128_000,
             maxTokens:     override?.maxTokens     ?? 16_384,
             // compat is only meaningful for openai-completions but harmless elsewhere
             ...(compat ? { compat } : {}),
