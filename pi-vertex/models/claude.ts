@@ -9,6 +9,26 @@
 import type { VertexModelConfig } from "../types.js";
 
 export const CLAUDE_MODELS: VertexModelConfig[] = [
+  // Claude 4.7 series
+  {
+    id: "claude-opus-4-7",
+    name: "Claude Opus 4.7",
+    apiId: "claude-opus-4-7",
+    publisher: "anthropic",
+    endpointType: "maas",
+    contextWindow: 1000000,
+    maxTokens: 32000,
+    input: ["text", "image"],
+    reasoning: true,
+    tools: true,
+    cost: {
+      input: 5.0,
+      output: 25.0,
+      cacheRead: 0.5,
+      cacheWrite: 6.25,
+    },
+    region: "global",
+  },
   // Claude 4.6 series
   {
     id: "claude-opus-4-6",
