@@ -20,14 +20,45 @@ import { GatherInputDialog, type GatherInputDialogResult } from "./lib/gather-in
 import { PermissionDialog, type PermissionDialogResult } from "./lib/permission-dialog.js";
 import { isSafeCommand } from "./lib/utils.js";
 
-// Tools
-// In huddle mode, edit/write are available but gated via permission dialog.
-// The model should just call them — the user will be prompted inline.
-const HUDDLE_MODE_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls", "gather_input"];
-const NORMAL_MODE_TOOLS = ["read", "bash", "edit", "write", "gather_input"];
+// Tools to exclude from active tools while huddle is enabled.
+//
+// IMPORTANT: This is an EXCLUSION list, not an allowlist. In huddle mode,
+// edit/write/bash remain available — they are gated via permission dialog
+// in the `tool_call` hook below, not by tool-list filtering. Other extensions
+// frequently register tools at runtime (web_search, web_fetch, image-gen,
+// etc.); using an allowlist here would silently remove them when the user
+// toggles huddle, which we explicitly do NOT want.
+//
+// Add a tool name here only if it should be completely hidden from the model
+// while huddle is active (e.g., a destructive integration that has no
+// permission gate). Default: empty — permission gates handle safety.
+const HUDDLE_EXCLUDED_TOOLS: string[] = [];
 
 export default function huddleExtension(pi: ExtensionAPI): void {
 	let huddleEnabled = false;
+	// Snapshot of active tools captured when huddle was enabled, so we can
+	// faithfully restore on exit without clobbering tools registered by other
+	// extensions. Null when huddle is off or when no filtering was applied.
+	let priorActiveTools: string[] | null = null;
+
+	function applyHuddleTools(): void {
+		if (HUDDLE_EXCLUDED_TOOLS.length === 0) {
+			// Nothing to exclude — leave active tools untouched so other extensions
+			// (web search, etc.) keep working.
+			priorActiveTools = null;
+			return;
+		}
+		priorActiveTools = pi.getActiveTools();
+		const filtered = priorActiveTools.filter((t) => !HUDDLE_EXCLUDED_TOOLS.includes(t));
+		pi.setActiveTools(filtered);
+	}
+
+	function restoreNormalTools(): void {
+		if (priorActiveTools !== null) {
+			pi.setActiveTools(priorActiveTools);
+			priorActiveTools = null;
+		}
+	}
 
 	pi.registerFlag("huddle", {
 		description: "Start in huddle mode (read-only exploration)",
@@ -54,10 +85,10 @@ export default function huddleExtension(pi: ExtensionAPI): void {
 		huddleEnabled = !huddleEnabled;
 
 		if (huddleEnabled) {
-			pi.setActiveTools(HUDDLE_MODE_TOOLS);
+			applyHuddleTools();
 			ctx.ui.notify(`Huddle mode enabled. Read freely. Edits/writes will prompt for approval.`);
 		} else {
-			pi.setActiveTools(NORMAL_MODE_TOOLS);
+			restoreNormalTools();
 			ctx.ui.notify("Huddle mode disabled. Full access restored.");
 		}
 		updateStatus(ctx);
@@ -165,6 +196,14 @@ Do not use this tool to request plan approval; in huddle mode the user approves 
 						},
 					};
 				},
+				// overlay: true composites the dialog over existing scrollback
+				// instead of rendering inline at the bottom. Without this, every
+				// keystroke/navigation re-renders into the buffer and snaps the
+				// terminal viewport to the bottom, making it impossible to scroll
+				// back through prior agent output while answering questions.
+				// Added to pi-coding-agent in 0.x via `{ overlay: true }`; see
+				// pi-coding-agent CHANGELOG entry for ctx.ui.custom() overlay mode.
+				{ overlay: true },
 			);
 
 			// Cancelled (Esc)
@@ -221,6 +260,9 @@ Do not use this tool to request plan approval; in huddle mode the user approves 
 						},
 					};
 				},
+				// Float over scrollback so the user can still scroll up through
+				// agent output while approving/denying an edit or write.
+				{ overlay: true },
 			);
 
 			// Cancelled (Esc) - treat as deny
@@ -258,6 +300,9 @@ Do not use this tool to request plan approval; in huddle mode the user approves 
 							},
 						};
 					},
+					// Float over scrollback so the user can still scroll up through
+					// agent output while approving/denying a bash command.
+					{ overlay: true },
 				);
 
 				// Cancelled (Esc) - treat as deny
@@ -322,7 +367,8 @@ When you need to run a non-allowlisted bash command:
 3. Proceed based on their response
 
 Available Tools:
-- read, bash, edit, write, grep, find, ls, gather_input
+- All normally-active tools remain available (read, bash, edit, write, gather_input, plus any tools registered by other extensions such as web_search, web_fetch, etc.).
+- The only difference: edit/write and non-allowlisted bash commands trigger a permission dialog before running.
 
 Safe Bash Commands (no prompt):
 cat, cd, rg, fd, grep, head, tail, ls, find, git status/log/diff/branch, npm list
@@ -355,7 +401,7 @@ You can create a plan AND execute it. The user controls approval per-step via th
 		}
 
 		if (huddleEnabled) {
-			pi.setActiveTools(HUDDLE_MODE_TOOLS);
+			applyHuddleTools();
 		}
 		updateStatus(ctx);
 	});
