@@ -257,18 +257,30 @@ export class GatherInputDialog implements Component, Focusable {
 			return;
 		}
 
-		// Navigation keys always take priority, even on the freeform row
-		if (matchesKey(data, Key.tab) || matchesKey(data, Key.right)) {
-			this.goNext(); return;
-		}
-		if (matchesKey(data, Key.shift("tab")) || matchesKey(data, Key.left)) {
-			this.goPrev(); return;
-		}
+		// Universal cancel
 		if (matchesKey(data, Key.escape)) {
 			this.onDone?.(null); return;
 		}
 
-		// On the freeform row — up/down navigate away; everything else goes to Input
+		// Tab / Shift+Tab are the canonical "leave this field" keys for forms
+		// and always navigate between questions — even when the freeform input
+		// has focus. Users who want to leave the freeform field press Tab.
+		if (matchesKey(data, Key.tab)) {
+			this.goNext(); return;
+		}
+		if (matchesKey(data, Key.shift("tab"))) {
+			this.goPrev(); return;
+		}
+
+		// On the freeform row — only Up/Down (row navigation) and Enter (confirm)
+		// are handled here. EVERY other key (Left, Right, Home, End, Ctrl+A,
+		// Ctrl+E, Ctrl+W, Alt+Left/Right word jumps, Ctrl+U/K line kills,
+		// Ctrl+Z undo, Backspace, Delete, printable characters, etc.) is
+		// forwarded to pi-tui's Input component, which natively supports the
+		// full editor keybinding set via the `tui.editor.*` keybindings.
+		// Previously Left/Right were intercepted by this handler for inter-
+		// question navigation, which broke ALL cursor movement inside the
+		// freeform input. Use Tab/Shift+Tab to move between questions instead.
 		if (this.isOnFreeform) {
 			if (matchesKey(data, Key.up)) {
 				this.setSelectedIdx(this.selectedIdx - 1);
@@ -277,7 +289,6 @@ export class GatherInputDialog implements Component, Focusable {
 			} else if (matchesKey(data, Key.enter)) {
 				this.selectCurrentOption();
 			} else {
-				// Character input — goes straight to freeformInput
 				this.freeformInput.handleInput(data);
 				// Keep freeformValues in sync live
 				this.saveFreeform();
@@ -285,7 +296,14 @@ export class GatherInputDialog implements Component, Focusable {
 			return;
 		}
 
-		// Normal option navigation
+		// Non-freeform rows: Left/Right navigate between questions, Up/Down
+		// navigate between options within a question, Enter selects.
+		if (matchesKey(data, Key.right)) {
+			this.goNext(); return;
+		}
+		if (matchesKey(data, Key.left)) {
+			this.goPrev(); return;
+		}
 		if (matchesKey(data, Key.up)) {
 			if (this.selectedIdx > 0) this.setSelectedIdx(this.selectedIdx - 1);
 		} else if (matchesKey(data, Key.down)) {
@@ -451,13 +469,30 @@ export class GatherInputDialog implements Component, Focusable {
 				const row = `  ${t.fg("accent", `> ${otherNum}`)} ${cursorChar}${t.fg("dim", placeholder.slice(1))}`;
 				lines.push(truncateToWidth(row, width));
 			} else {
-				// Wrap the input value across multiple lines
+				// Render the freeform value with the cursor positioned at the
+				// Input's actual cursor offset, NOT pinned to the end of the
+				// line. We splice an inverse-video cursor character into the
+				// value at the cursor position, then wrap the result. Because
+				// the cursor sequence (\x1b[7m + ch + \x1b[27m) has a visible
+				// width of exactly one column, wrapTextWithAnsi places it
+				// correctly within the wrapped lines.
+				//
+				// Previously the cursor block was always appended at the end of
+				// the first wrapped line, so Left/Right/Home/End/word-jump key
+				// presses moved the Input's internal cursor but never visibly
+				// reflected the move — making the freeform field feel broken.
+				const cursorPos = this.freeformInput.cursor;
+				const before = inputVal.slice(0, cursorPos);
+				const atCursorRaw = inputVal.slice(cursorPos, cursorPos + 1);
+				const atCursor = atCursorRaw === "" ? " " : atCursorRaw;
+				const after = atCursorRaw === "" ? "" : inputVal.slice(cursorPos + 1);
+				const valueWithCursor = `${before}\x1b[7m${atCursor}\x1b[27m${after}`;
+
 				const prefix = `  ${t.fg("accent", `> ${otherNum} `)}`;
-				const wrappedLines = wrapTextWithAnsi(inputVal, contentWidth);
+				const wrappedLines = wrapTextWithAnsi(valueWithCursor, contentWidth);
 				for (let i = 0; i < wrappedLines.length; i++) {
 					if (i === 0) {
-						// First line gets the prefix and cursor
-						lines.push(truncateToWidth(`${prefix}${wrappedLines[i]}${BLOCK_CURSOR}`, width));
+						lines.push(truncateToWidth(`${prefix}${wrappedLines[i]}`, width));
 					} else {
 						// Continuation lines get indented padding to align with content
 						const padding = " ".repeat(prefixWidth + numWidth + 1);
