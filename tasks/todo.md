@@ -45,7 +45,41 @@ The `ALL_MODELS` array in `pi-vertex/models/index.ts` is now sorted alphabetical
 - [x] Suppress sudo terminal prompt noise with `-p ''` so prompt area does not get polluted <!-- id: leash-sudo-6 -->
 - [x] Handle compound commands with multiple `sudo` invocations by wrapping shell `sudo()` and feeding stdin for each prompt <!-- id: leash-sudo-7 -->
 
-## Current Task: fix Enter key behavior in permission approval dialog
+## Current Task: pi-huddle exclusion list + pi-leash sudo password cache
+- [x] pi-huddle: replace `HUDDLE_MODE_TOOLS`/`NORMAL_MODE_TOOLS` allowlists with `HUDDLE_EXCLUDED_TOOLS` exclusion model (default empty) <!-- id: huddle-excl-1 -->
+- [x] pi-huddle: snapshot prior active tools on enter, restore on exit, no-op when exclusion list is empty (preserves web_search etc. registered by other extensions) <!-- id: huddle-excl-2 -->
+- [x] pi-huddle: update before_agent_start system prompt to stop enumerating a hard-coded tool list <!-- id: huddle-excl-3 -->
+- [x] pi-leash: add `sudoMode.cacheEnabled` (default true) and `sudoMode.cacheTtl` (default 300_000ms) config fields <!-- id: leash-cache-1 -->
+- [x] pi-leash: add module-scoped in-memory password cache with TTL timer, auto-clear on expiry / process exit / session_shutdown <!-- id: leash-cache-2 -->
+- [x] pi-leash: render Tab-toggleable `[ ] Remember password for N min` checkbox in sudo password dialog (default OFF — explicit per-prompt opt-in) <!-- id: leash-cache-3 -->
+- [x] pi-leash: skip password dialog when cache is warm; approval dialog still runs every time <!-- id: leash-cache-4 -->
+- [x] pi-leash: clear cache on "incorrect password" stderr; notify user that cached password was rejected <!-- id: leash-cache-5 -->
+- [x] Quality gates: confirm no new typecheck errors introduced in either package <!-- id: huddle-leash-qg-1 -->
+- [ ] Visually verify in running pi: huddle toggle preserves web_search; sudo cache toggle appears and works across two consecutive sudo commands <!-- id: huddle-leash-verify -->
+- [x] Fix dialogs eating terminal scrollback by opting into `ctx.ui.custom({ overlay: true })` for gather_input, huddle permission dialogs, sudo password dialog, and dangerous-command approval dialog <!-- id: dialog-overlay-1 -->
+- [ ] Visually verify scrollback works during a gather_input prompt (scroll up to prior agent output while answering, content stays visible) <!-- id: dialog-overlay-verify -->
+
+### Review (dialog scrollback fix via overlay mode)
+- **Root cause**: `ctx.ui.custom()` defaults to *inline* rendering, which appends dialog output to the chat buffer on every render. Each keystroke triggers a re-render that grows/shrinks the buffer at the bottom, causing the terminal to scroll-snap to the cursor and making prior scrollback unreachable while a dialog is open.
+- **Fix**: pi-coding-agent 0.x exposes `{ overlay: true }` on `ctx.ui.custom()` (CHANGELOG line 2380 in the global install: "floating modal components that composite over existing content without clearing the screen"). With overlay mode, the dialog composites over the chat buffer instead of growing it, so scrollback stays intact and the viewport doesn't snap.
+- **Files**:
+  - `pi-huddle/extensions/index.ts`: opted-in for all three custom() call sites (gather_input dialog, edit/write permission dialog, bash permission dialog).
+  - `pi-leash/src/hooks/permission-gate.ts`: opted-in for the sudo password dialog and the dangerous-command approval dialog.
+- **Compatibility**: `overlay?: boolean` is already in the 0.52.7 `ExtensionUIContext.custom()` type signature, so the change is backward-compatible with every supported pi version.
+- **Quality gate**: `pnpm typecheck` still shows only the 4 pre-existing `selectConfirm`/`selectCancel` errors.
+
+### Review (pi-huddle exclusion list + pi-leash sudo cache)
+- **pi-huddle/extensions/index.ts**: removed allowlist constants; introduced `HUDDLE_EXCLUDED_TOOLS: string[] = []` plus `applyHuddleTools()` / `restoreNormalTools()` helpers that snapshot `pi.getActiveTools()` only when there's something to exclude. Result: toggling huddle no longer clobbers dynamically-registered tools (web_search, web_fetch, image_gen, etc.).
+- **pi-leash/src/config.ts**: extended `sudoMode` interface and `ResolvedConfig` with `cacheEnabled` (default true) and `cacheTtl` (default 300000ms).
+- **pi-leash/src/hooks/permission-gate.ts**:
+  - Added module-scoped `PasswordCache` with `setPasswordCache`/`getCachedPassword`/`clearPasswordCache` helpers. Timer is `unref()`'d so it doesn't keep the process alive. `installProcessExitHook()` clears the cache on `exit`/`SIGINT`/`SIGTERM`.
+  - `promptForSudoPassword` now takes `cacheEnabled` and `cacheTtl` parameters and renders a Tab-toggleable `[ ] Remember password for N min (in-memory only)` checkbox. Returns `{ password, remember }`.
+  - `setupPermissionGateHook` registers a `session_shutdown` listener that clears the cache, and the sudo flow tries the cache before showing the password dialog. The approval dialog (allow/deny) still runs for every sudo invocation — only the password step is bypassed.
+  - On `incorrect password` stderr with a cache hit, the cache is invalidated and the user is notified explicitly. Local `password` reference is dropped after execution.
+- **Quality gates**: `pnpm typecheck` and `pnpm lint` in pi-leash show only the same 4 pre-existing `selectConfirm`/`selectCancel` typing errors and the same 2 pre-existing `.js` extension lint errors that existed before these edits. pi-huddle has no configured build/lint scripts; ad-hoc tsc shows the same 5 pre-existing errors as on `main`.
+- **Not done**: live visual verification in pi (requires the user to run the agent and exercise both flows).
+
+## Earlier task: fix Enter key behavior in permission approval dialog
 - [x] Reproduce/inspect why Enter is ignored in dangerous-command approval UI <!-- id: leash-enter-1 -->
 - [x] Add robust Enter detection (`Key.enter`, `\r`, `\n`) for approval and password dialogs <!-- id: leash-enter-2 -->
 - [ ] Verify interactively that Enter now confirms approval without requiring `y` <!-- id: leash-enter-3 -->
