@@ -196,14 +196,6 @@ Do not use this tool to request plan approval; in huddle mode the user approves 
 						},
 					};
 				},
-				// overlay: true composites the dialog over existing scrollback
-				// instead of rendering inline at the bottom. Without this, every
-				// keystroke/navigation re-renders into the buffer and snaps the
-				// terminal viewport to the bottom, making it impossible to scroll
-				// back through prior agent output while answering questions.
-				// Added to pi-coding-agent in 0.x via `{ overlay: true }`; see
-				// pi-coding-agent CHANGELOG entry for ctx.ui.custom() overlay mode.
-				{ overlay: true },
 			);
 
 			// Cancelled (Esc)
@@ -260,9 +252,6 @@ Do not use this tool to request plan approval; in huddle mode the user approves 
 						},
 					};
 				},
-				// Float over scrollback so the user can still scroll up through
-				// agent output while approving/denying an edit or write.
-				{ overlay: true },
 			);
 
 			// Cancelled (Esc) - treat as deny
@@ -300,9 +289,6 @@ Do not use this tool to request plan approval; in huddle mode the user approves 
 							},
 						};
 					},
-					// Float over scrollback so the user can still scroll up through
-					// agent output while approving/denying a bash command.
-					{ overlay: true },
 				);
 
 				// Cancelled (Esc) - treat as deny

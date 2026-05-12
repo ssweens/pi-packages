@@ -397,12 +397,6 @@ async function promptForSudoPassword(
         },
       };
     },
-    // Float the password prompt over scrollback rather than rendering inline
-    // at the bottom of the chat buffer. Without overlay mode, each keystroke
-    // re-renders into the buffer and forces the terminal to scroll-snap to
-    // the bottom, which prevents the user from scrolling back to review the
-    // command they're approving.
-    { overlay: true },
   );
 }
 
@@ -816,9 +810,6 @@ export function setupPermissionGateHook(
             },
           };
         },
-        // Float over scrollback so the user can scroll up to review the
-        // surrounding agent output while deciding whether to allow/deny.
-        { overlay: true },
       );
 
       if (result === "allow-session") {
