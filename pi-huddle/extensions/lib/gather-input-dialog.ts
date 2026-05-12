@@ -343,8 +343,25 @@ export class GatherInputDialog implements Component, Focusable {
 					: undefined;
 				const parts = [...sel, ...(freeform ? [freeform] : [])];
 				if (parts.length > 0) {
-					lines.push(truncateToWidth(`  ● ${q.question}`, width));
-					lines.push(truncateToWidth(`    ${t.fg("accent", `→ ${parts.join(", ")}`)}`, width));
+					// Wrap the recap question text so long questions don't get clipped
+					// on the right edge. First line gets the bullet prefix; continuation
+					// lines align with the question text (4 spaces).
+					const qWidth = Math.max(10, width - 4);
+					const wrappedQuestion = wrapTextWithAnsi(q.question, qWidth);
+					for (let i = 0; i < wrappedQuestion.length; i++) {
+						const prefix = i === 0 ? "  ● " : "    ";
+						lines.push(`${prefix}${wrappedQuestion[i]}`);
+					}
+
+					// Wrap the recap answer text similarly. The arrow + 6-space
+					// continuation keep the visual hierarchy intact across wraps.
+					const answerText = parts.join(", ");
+					const aWidth = Math.max(10, width - 6);
+					const wrappedAnswer = wrapTextWithAnsi(answerText, aWidth);
+					for (let i = 0; i < wrappedAnswer.length; i++) {
+						const body = i === 0 ? `→ ${wrappedAnswer[i]}` : `  ${wrappedAnswer[i]}`;
+						lines.push(`    ${t.fg("accent", body)}`);
+					}
 					lines.push("");
 				}
 			}
@@ -373,26 +390,48 @@ export class GatherInputDialog implements Component, Focusable {
 		}
 		lines.push("");
 
+		// Visible prefix before label text is always 7 chars:
+		//   "  " (outer indent) + "> " or "  " (cursor marker) + "N. " (number + dot + space)
+		// Wrap label and description against (width - 7) and pad continuation
+		// lines with 7 spaces so the wrapped text stays aligned under itself.
+		const LABEL_INDENT = 7;
+		const labelContentWidth = Math.max(10, width - LABEL_INDENT);
+		const LABEL_PADDING = " ".repeat(LABEL_INDENT);
+
 		for (let i = 0; i < q.options.length; i++) {
 			const opt = q.options[i];
 			const isCursor = i === this.selectedIdx;
 			const isChecked = checkedLabels.includes(opt.label);
 			const num = `${i + 1}.`;
 			const checkmark = isChecked ? ` ${t.fg("success", "✓")}` : "";
+			const cursorMark = isCursor ? "> " : "  ";
+			const accentHead = isCursor || isChecked;
 
-			let labelLine: string;
-			if (isCursor && isChecked) {
-				labelLine = `${t.fg("accent", `> ${num} ${opt.label}`)}${checkmark}`;
-			} else if (isCursor) {
-				labelLine = t.fg("accent", `> ${num} ${opt.label}`);
-			} else if (isChecked) {
-				labelLine = `  ${t.fg("accent", `${num} ${opt.label}`)}${checkmark}`;
-			} else {
-				labelLine = `  ${num} ${opt.label}`;
+			const wrappedLabel = wrapTextWithAnsi(opt.label, labelContentWidth);
+			for (let li = 0; li < wrappedLabel.length; li++) {
+				const segment = wrappedLabel[li];
+				const isLast = li === wrappedLabel.length - 1;
+				const suffix = isLast ? checkmark : "";
+
+				if (li === 0) {
+					// First line: render "  > N. label..." (or non-cursor variants).
+					// Coloring whitespace is a no-op visually, so we can color the
+					// whole `cursorMark + num + segment` chunk uniformly when active.
+					const chunk = `${cursorMark}${num} ${segment}`;
+					const coloredChunk = accentHead ? t.fg("accent", chunk) : chunk;
+					lines.push(`  ${coloredChunk}${suffix}`);
+				} else {
+					// Continuation line: align under the label text.
+					const coloredSegment = accentHead ? t.fg("accent", segment) : segment;
+					lines.push(`${LABEL_PADDING}${coloredSegment}${suffix}`);
+				}
 			}
-			lines.push(truncateToWidth("  " + labelLine, width));
+
 			if (opt.description) {
-				lines.push(truncateToWidth(`       ${t.fg("muted", opt.description)}`, width));
+				const wrappedDesc = wrapTextWithAnsi(opt.description, labelContentWidth);
+				for (const descLine of wrappedDesc) {
+					lines.push(`${LABEL_PADDING}${t.fg("muted", descLine)}`);
+				}
 			}
 		}
 
