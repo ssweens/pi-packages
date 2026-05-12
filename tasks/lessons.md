@@ -36,3 +36,23 @@ For confirm/cancel in `ctx.ui.custom` dialogs, use the provided `keybindings` ma
   - `overlayOptions: { anchor: “bottom-left”, col: 0, width: “100%” }` *might* visually approximate the inline rendering while still compositing — unverified, must be screenshotted before shipping.
 
 **Tripwire:** If a code change touches `ctx.ui.custom()` options, overlay anchors/sizes, theme calls, ANSI color choices, layout indents, wrapping, or anything that affects what pixels appear on screen — do NOT commit it from a non-interactive agent run. Either run pi or hand the change to the user with a “please verify visually before commit” gate.
+
+## Overlay mode is the wrong tool for tool UIs in pi
+**Investigation summary (do not re-litigate without new evidence):** Tried `ctx.ui.custom({ overlay: true })` with multiple `overlayOptions` configurations (default center-anchored, `anchor: “bottom-left”` + `width: “100%”`, plus `margin: { bottom: 6 }`, plus a hand-rolled `gather_input` header line styled with `theme.bg(“toolPendingBg”, theme.fg(“toolTitle”, ...))` to mimic pi’s inline tool-call header).
+
+**Result:** Every configuration was rejected by the user as visually wrong. Specific failure modes:
+  - Default centered overlay = floating modal in the middle with chat content peeking on the sides. Not the inline look at all.
+  - `bottom-left` + `width: “100%”` + no margin = full-width strip at the bottom but **covers pi’s footer** (cwd, stats, input prompt). Footer is a regular pi child component, not a separate layer, so the overlay composites over it.
+  - `bottom-left` + `margin: { bottom: 6 }` = footer visible, but for tall content (long dialogs with 2+ questions and 4+ options with long descriptions) the dialog overflows the available height and gets clamped by pi-tui to start at `row = marginTop`, **covering the spot in chat where pi rendered the tool-call header**. So the “gather_input” label disappears.
+  - Same + manually rendered header line inside the overlay = closer to target, but “needs more space and covers up content” per the user. The overlay still occupies a big block at the bottom that doesn’t feel like part of the chat flow.
+
+**Why inline is the right model for tool UIs:** pi’s tool execution component (`pi-coding-agent/dist/modes/interactive/components/tool-execution.js`) renders the tool-call header and the tool’s UI together as part of the chat stream. Scrollback shows them as a coherent unit. Overlay mode breaks this contract by lifting the UI out of the chat stream and floating it independently — there’s no clean way to also surface the chat-stream header above it without duplicating or hacking.
+
+**The original scrollback complaint (“I can’t scroll back through prior content while answering a gather_input question”) is a separate, upstream pi-tui issue.** It probably manifests when the dialog’s line count grows (e.g., freeform text wraps and adds rows) and the terminal interprets the growth as new output worth scrolling for. Don’t try to fix it with overlay mode — file/track upstream instead.
+
+**Action when this comes up again:** Default to inline rendering for any tool UI in pi. Only consider overlay mode for:
+  - True modal flows (e.g., a one-off /command dialog that’s not part of a tool call)
+  - Persistent side panels (with `nonCapturing: true`)
+  - Things explicitly designed to float (DOOM-overlay example)
+
+Do not try to make overlay mode look like inline mode. They’re different rendering models with different visual contracts.

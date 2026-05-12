@@ -56,8 +56,8 @@ The `ALL_MODELS` array in `pi-vertex/models/index.ts` is now sorted alphabetical
 - [x] pi-leash: clear cache on "incorrect password" stderr; notify user that cached password was rejected <!-- id: leash-cache-5 -->
 - [x] Quality gates: confirm no new typecheck errors introduced in either package <!-- id: huddle-leash-qg-1 -->
 - [ ] Visually verify in running pi: huddle toggle preserves web_search; sudo cache toggle appears and works across two consecutive sudo commands <!-- id: huddle-leash-verify -->
-- [x] Fix dialogs eating terminal scrollback by opting into `ctx.ui.custom({ overlay: true })` for gather_input, huddle permission dialogs, sudo password dialog, and dangerous-command approval dialog <!-- id: dialog-overlay-1 -->
-- [ ] Visually verify scrollback works during a gather_input prompt (scroll up to prior agent output while answering, content stays visible) <!-- id: dialog-overlay-verify -->
+- [x] ~~Fix dialogs eating terminal scrollback by opting into `ctx.ui.custom({ overlay: true })`~~ — reverted (`1816f69`). Overlay mode changes the look-and-feel in ways the user rejected; inline rendering is the right model for tool UIs. See `tasks/lessons.md` “Overlay mode is the wrong tool for tool UIs in pi.” <!-- id: dialog-overlay-1 -->
+- [ ] Upstream pi-tui issue: investigate why long-content gather_input dialogs break terminal scrollback during typing (likely caused by dialog height growth when freeform text wraps, triggering terminal auto-scroll-on-output). Not a pi-huddle bug. <!-- id: dialog-scrollback-upstream -->
 
 ### Review (dialog scrollback fix via overlay mode)
 - **Root cause**: `ctx.ui.custom()` defaults to *inline* rendering, which appends dialog output to the chat buffer on every render. Each keystroke triggers a re-render that grows/shrinks the buffer at the bottom, causing the terminal to scroll-snap to the cursor and making prior scrollback unreachable while a dialog is open.
