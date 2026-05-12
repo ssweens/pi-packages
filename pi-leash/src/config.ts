@@ -20,9 +20,9 @@
  * }
  */
 
-import { getAgentDir } from "@mariozechner/pi-coding-agent";
-import { readFileSync, existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { getAgentDir } from "@mariozechner/pi-coding-agent";
 
 export function getConfigPath(): string {
   return join(getAgentDir(), "settings", "pi-leash.json");
@@ -119,6 +119,16 @@ export interface GuardrailsConfig {
       timeout?: number;
       /** Preserve environment with sudo -E. Default: false */
       preserveEnv?: boolean;
+      /**
+       * Show a "Remember password for N minutes" toggle in the sudo password
+       * dialog. When the user opts in, the password is cached in-memory only
+       * (never written to disk) for `cacheTtl` milliseconds so subsequent
+       * sudo prompts skip the password step. The approval dialog still runs
+       * every time. Default: true.
+       */
+      cacheEnabled?: boolean;
+      /** Cache TTL in milliseconds. Default: 300000 (5 minutes). */
+      cacheTtl?: number;
     };
   };
 }
@@ -148,6 +158,8 @@ export interface ResolvedConfig {
       enabled: boolean;
       timeout: number;
       preserveEnv: boolean;
+      cacheEnabled: boolean;
+      cacheTtl: number;
     };
   };
 }
@@ -185,7 +197,10 @@ const DEFAULT_DANGEROUS_PATTERNS: DangerousPattern[] = [
   { pattern: "mkfs.", description: "filesystem format" },
   { pattern: "chmod -R 777", description: "insecure recursive permissions" },
   { pattern: "chown -R", description: "recursive ownership change" },
-  { pattern: "git checkout", description: "branch switch or discard uncommitted changes" },
+  {
+    pattern: "git checkout",
+    description: "branch switch or discard uncommitted changes",
+  },
 ];
 
 function mergeConfig(userConfig: GuardrailsConfig): ResolvedConfig {
@@ -209,6 +224,8 @@ function mergeConfig(userConfig: GuardrailsConfig): ResolvedConfig {
       enabled: pg.sudoMode?.enabled ?? false,
       timeout: pg.sudoMode?.timeout ?? 30000,
       preserveEnv: pg.sudoMode?.preserveEnv ?? false,
+      cacheEnabled: pg.sudoMode?.cacheEnabled ?? true,
+      cacheTtl: pg.sudoMode?.cacheTtl ?? 300000,
     },
   };
 
@@ -239,7 +256,9 @@ export function loadConfig(): ResolvedConfig {
 
   if (existsSync(configPath)) {
     try {
-      userConfig = JSON.parse(readFileSync(configPath, "utf-8")) as GuardrailsConfig;
+      userConfig = JSON.parse(
+        readFileSync(configPath, "utf-8"),
+      ) as GuardrailsConfig;
     } catch (err) {
       console.warn(`[pi-leash] Failed to parse ${configPath}: ${err}`);
     }
