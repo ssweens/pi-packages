@@ -1,6 +1,6 @@
 {
   "name": "@ssweens/pi-huddle",
-  "version": "1.3.1",
+  "version": "1.4.0",
   "type": "module",
   "description": "Huddle mode for pi - safe exploration and structured elicitation before execution",
   "keywords": [
@@ -17,6 +17,7 @@
     "extensions/",
     "skills/",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE",
     "screenshot.png",
     "gather-input-screenshot.png"
