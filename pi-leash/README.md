@@ -2,9 +2,7 @@
 
 Security hooks for Pi to reduce accidental destructive actions and secret-file access.
 
-Forked from [`@aliou/pi-guardrails`](https://github.com/aliou/pi-guardrails) with added **sudo mode** for secure password handling.
-
-The shell parser used by permission checks is vendored into this package (`src/vendor/aliou-sh`) so local path installs do not depend on external module resolution.
+Forked from [`@aliou/pi-guardrails`](https://github.com/aliou/pi-guardrails) (MIT) with added **sudo mode** for secure password handling and an opt-in in-memory password cache. See [Credits & Attribution](#credits--attribution) below for details.
 
 ## Install
 
@@ -209,3 +207,15 @@ interface LeashDangerousEvent {
   pattern: string;
 }
 ```
+
+## Credits & Attribution
+
+Pi Leash is a fork of [`@aliou/pi-guardrails`](https://github.com/aliou/pi-guardrails) by [@aliou](https://github.com/aliou), used under the terms of the MIT License. The original package provided the file-protection policy engine, the dangerous-command permission gate, and the optional command-explainer integration that this fork inherits.
+
+This fork adds:
+- Secure sudo mode with masked password input and `sudo -S` execution.
+- Opt-in in-memory sudo password caching with a per-prompt `Remember for N min` toggle.
+- Self-contained shell parser: the `@aliou/sh` parser used by structural command matching is vendored into `src/vendor/aliou-sh` (also MIT, see [`NOTICE.md`](src/vendor/aliou-sh/NOTICE.md)) so local path installs do not depend on external module resolution.
+- Various stability fixes to the sudo approval flow, dialog key handling, and dangerous-pattern detection.
+
+Both pi-leash and the upstream `@aliou/pi-guardrails` are MIT-licensed. See [`LICENSE`](LICENSE) for the full text.
