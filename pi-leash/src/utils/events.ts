@@ -4,7 +4,7 @@ export const LEASH_BLOCKED_EVENT = "leash:blocked";
 export const LEASH_DANGEROUS_EVENT = "leash:dangerous";
 
 export interface LeashBlockedEvent {
-  feature: "policies" | "permissionGate";
+  feature: "policies" | "permissionGate" | "pathAccess";
   toolName: string;
   input: Record<string, unknown>;
   reason: string;

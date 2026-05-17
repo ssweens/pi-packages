@@ -53,6 +53,11 @@ export interface DangerousPattern extends PatternConfig {
 export type Protection = "none" | "readOnly" | "noAccess";
 
 /**
+ * Path access mode for restricting tool access to the working directory.
+ */
+export type PathAccessMode = "allow" | "ask" | "block";
+
+/**
  * A named policy rule. Matches files by patterns and enforces a protection level.
  */
 export interface PolicyRule {
@@ -89,11 +94,20 @@ export interface GuardrailsConfig {
     policies?: boolean;
     /** Enable permission gate for dangerous commands. Default: true */
     permissionGate?: boolean;
+    /** Enable path access restrictions. Default: false */
+    pathAccess?: boolean;
   };
   /** File protection policies */
   policies?: {
     /** Custom rules to add to the default secret-files rule */
     rules?: PolicyRule[];
+  };
+  /** Path access configuration */
+  pathAccess?: {
+    /** Access mode: allow (no restrictions), ask (prompt), block (deny). Default: ask */
+    mode?: PathAccessMode;
+    /** Paths outside cwd that are always allowed. Trailing / = directory grant. */
+    allowedPaths?: string[];
   };
   /** Permission gate configuration */
   permissionGate?: {
@@ -146,9 +160,14 @@ export interface ResolvedConfig {
   features: {
     policies: boolean;
     permissionGate: boolean;
+    pathAccess: boolean;
   };
   policies: {
     rules: PolicyRule[];
+  };
+  pathAccess: {
+    mode: PathAccessMode;
+    allowedPaths: string[];
   };
   permissionGate: {
     patterns: DangerousPattern[];
@@ -236,13 +255,21 @@ function mergeConfig(userConfig: GuardrailsConfig): ResolvedConfig {
     },
   };
 
+  // Build path access settings
+  const pathAccess: ResolvedConfig["pathAccess"] = {
+    mode: userConfig.pathAccess?.mode ?? "ask",
+    allowedPaths: userConfig.pathAccess?.allowedPaths ?? [],
+  };
+
   return {
     enabled: userConfig.enabled ?? true,
     features: {
       policies: userConfig.features?.policies ?? true,
       permissionGate: userConfig.features?.permissionGate ?? true,
+      pathAccess: userConfig.features?.pathAccess ?? false,
     },
     policies,
+    pathAccess,
     permissionGate,
   };
 }
