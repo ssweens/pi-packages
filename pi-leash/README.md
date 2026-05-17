@@ -161,6 +161,7 @@ Config fields:
 - `permissionGate.sudoMode.enabled` (boolean) - Enable sudo mode
 - `permissionGate.sudoMode.timeout` (number, ms) - Command timeout (default: 30000)
 - `permissionGate.sudoMode.preserveEnv` (boolean) - Preserve environment with `sudo -E` (default: false)
+- `permissionGate.sudoMode.maxRetries` (number) - Maximum password attempts before failing (default: 3). Mirrors real `sudo` behavior — on a mistyped password the dialog re-appears with an error message and remaining-attempt count.
 
 **Example config:**
 ```json
@@ -180,7 +181,7 @@ Config fields:
 - Password input is masked (••••)
 - Password buffer is overwritten with asterisks after use
 - Uses `sudo -S` for secure stdin-based password delivery
-- Failed authentication shows an error notification
+- Failed authentication re-prompts up to `maxRetries` times before failing
 
 ## Events
 

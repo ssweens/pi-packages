@@ -297,6 +297,8 @@ async function promptForSudoPassword(
   command: string,
   cacheEnabled: boolean,
   cacheTtlMs: number,
+  errorMessage?: string,
+  attemptsRemaining?: number,
 ): Promise<SudoPasswordPromptResult | null> {
   return ctx.ui.custom<SudoPasswordPromptResult | null>(
     (_tui, theme, kb, done) => {
@@ -315,6 +317,30 @@ async function promptForSudoPassword(
           0,
         ),
       );
+
+      // Show error from previous failed attempt
+      if (errorMessage) {
+        container.addChild(new Spacer(1));
+        container.addChild(
+          new Text(theme.fg("error", `✗ ${errorMessage}`), 1, 0),
+        );
+      }
+
+      // Show remaining attempts
+      if (attemptsRemaining !== undefined) {
+        container.addChild(new Spacer(1));
+        container.addChild(
+          new Text(
+            theme.fg(
+              "dim",
+              `${attemptsRemaining} attempt${attemptsRemaining === 1 ? "" : "s"} remaining`,
+            ),
+            1,
+            0,
+          ),
+        );
+      }
+
       container.addChild(new Spacer(1));
       container.addChild(
         new Text(theme.fg("text", "Enter sudo password to execute:"), 1, 0),
@@ -833,87 +859,105 @@ export function setupPermissionGateHook(
       // Handle sudo mode: if enabled and command is sudo, prompt for password and execute
       const sudoMode = config.permissionGate.sudoMode;
       if (sudoMode.enabled && isSudoCommand(command)) {
+        const maxAttempts = sudoMode.maxRetries;
+        let attemptsUsed = 0;
+        let errorMessage: string | undefined;
+
         // Try cache first — the approval dialog above already ran, so the
         // user has explicitly consented to this specific sudo invocation.
         // The cache only skips the *password* re-entry step.
         let password: string | null = sudoMode.cacheEnabled
           ? getCachedPassword()
           : null;
-        const usedCachedPassword = password !== null;
+        let usedCachedPassword = password !== null;
 
-        if (password === null) {
-          const promptResult = await promptForSudoPassword(
-            ctx,
-            command,
-            sudoMode.cacheEnabled,
-            sudoMode.cacheTtl,
+        // Retry loop — mirrors real sudo giving the user multiple attempts
+        while (attemptsUsed < maxAttempts) {
+          if (password === null) {
+            const attemptsRemaining = maxAttempts - attemptsUsed;
+            const promptResult = await promptForSudoPassword(
+              ctx,
+              command,
+              sudoMode.cacheEnabled,
+              sudoMode.cacheTtl,
+              errorMessage,
+              // Only show remaining attempts after the first failure
+              errorMessage ? attemptsRemaining : undefined,
+            );
+
+            if (promptResult === null) {
+              emitBlocked(pi, {
+                feature: "permissionGate",
+                toolName: "bash",
+                input: event.input,
+                reason: "User cancelled sudo password prompt",
+                userDenied: true,
+              });
+              return {
+                block: true,
+                reason: "User cancelled sudo password prompt",
+              };
+            }
+
+            password = promptResult.password;
+            if (promptResult.remember && sudoMode.cacheEnabled) {
+              setPasswordCache(password, sudoMode.cacheTtl);
+            }
+          }
+
+          // Show executing notification
+          ctx.ui.notify(
+            usedCachedPassword
+              ? "Executing sudo command (cached password)..."
+              : "Executing sudo command...",
+            "info",
           );
 
-          if (promptResult === null) {
-            emitBlocked(pi, {
-              feature: "permissionGate",
-              toolName: "bash",
-              input: event.input,
-              reason: "User cancelled sudo password prompt",
-              userDenied: true,
-            });
-            return {
-              block: true,
-              reason: "User cancelled sudo password prompt",
-            };
-          }
+          // Execute with password
+          const sudoResult = await executeSudoCommand(
+            command,
+            password,
+            sudoMode.timeout,
+            sudoMode.preserveEnv,
+          );
 
-          password = promptResult.password;
-          if (promptResult.remember && sudoMode.cacheEnabled) {
-            setPasswordCache(password, sudoMode.cacheTtl);
-          }
-        }
+          // Drop local reference; clearPasswordCache() handles the cached
+          // copy if one exists.
+          password = null;
+          attemptsUsed++;
 
-        // Show executing notification
-        ctx.ui.notify(
-          usedCachedPassword
-            ? "Executing sudo command (cached password)..."
-            : "Executing sudo command...",
-          "info",
-        );
+          // Check for auth failure
+          if (
+            sudoResult.exitCode !== 0 &&
+            sudoResult.stderr.includes("incorrect password")
+          ) {
+            // Invalidate the cache if we used it
+            if (usedCachedPassword) {
+              clearPasswordCache();
+            }
+            usedCachedPassword = false;
 
-        // Execute with password
-        const sudoResult = await executeSudoCommand(
-          command,
-          password,
-          sudoMode.timeout,
-          sudoMode.preserveEnv,
-        );
+            if (attemptsUsed < maxAttempts) {
+              // More attempts remain — loop back to prompt
+              errorMessage = "Incorrect password, please try again";
+              continue;
+            }
 
-        // Drop local reference; clearPasswordCache() handles the cached copy
-        // if one exists.
-        password = null;
-
-        // If sudo failed with auth error, invalidate the cache so the next
-        // attempt prompts for a fresh password. Notify the user with a
-        // message that explains *why* if the failure came from a cached
-        // password (e.g., user changed their account password mid-session).
-        if (
-          sudoResult.exitCode !== 0 &&
-          sudoResult.stderr.includes("incorrect password")
-        ) {
-          if (usedCachedPassword) {
-            clearPasswordCache();
+            // All attempts exhausted
             ctx.ui.notify(
-              "Cached sudo password rejected — cache cleared, you'll be prompted next time",
+              `Sudo failed: incorrect password (${maxAttempts} attempt${maxAttempts === 1 ? "" : "s"} exhausted)`,
               "error",
             );
-          } else {
-            ctx.ui.notify("Sudo failed: incorrect password", "error");
+            sudoResults.set(event.toolCallId, sudoResult);
+            event.input.command = "true";
+            return;
           }
-        }
 
-        // tool_call handlers cannot override tool output directly.
-        // Store result by toolCallId and replace the command with a noop;
-        // tool_result hook injects the captured sudo output.
-        sudoResults.set(event.toolCallId, sudoResult);
-        event.input.command = "true";
-        return;
+          // Success or non-auth failure — done
+          sudoResults.set(event.toolCallId, sudoResult);
+          event.input.command = "true";
+          return;
+        }
       }
     } else {
       // No confirmation required - just notify and allow

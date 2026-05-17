@@ -129,6 +129,11 @@ export interface GuardrailsConfig {
       cacheEnabled?: boolean;
       /** Cache TTL in milliseconds. Default: 300000 (5 minutes). */
       cacheTtl?: number;
+      /**
+       * Maximum number of password attempts before giving up.
+       * Mirrors real sudo behavior. Default: 3.
+       */
+      maxRetries?: number;
     };
   };
 }
@@ -160,6 +165,7 @@ export interface ResolvedConfig {
       preserveEnv: boolean;
       cacheEnabled: boolean;
       cacheTtl: number;
+      maxRetries: number;
     };
   };
 }
@@ -226,6 +232,7 @@ function mergeConfig(userConfig: GuardrailsConfig): ResolvedConfig {
       preserveEnv: pg.sudoMode?.preserveEnv ?? false,
       cacheEnabled: pg.sudoMode?.cacheEnabled ?? true,
       cacheTtl: pg.sudoMode?.cacheTtl ?? 300000,
+      maxRetries: pg.sudoMode?.maxRetries ?? 3,
     },
   };
 
