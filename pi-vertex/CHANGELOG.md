@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.6] - 2026-05-16
+### Fixed
+- **`maxTokens / 2` halving removed** — both the Anthropic and OpenAI-compat MaaS streaming paths were silently capping requests at half the model's stated `maxTokens`. Requests now use the full `maxTokens` value unless the caller explicitly overrides it.
+- **Gemini cached token double-counting** — `promptTokenCount` includes cached tokens, so input cost was inflated. Input usage is now `promptTokenCount − cachedTokenCount`, matching the actual billable amount.
+- **`sanitizeText` corrupted emoji** — the previous regex replaced all surrogate code units including valid pairs (emoji are encoded as two surrogates). Now only unpaired/lone surrogates are stripped.
+- **Gemini Pro can't use `MINIMAL` thinking level** — `ThinkingLevel.MINIMAL` is only valid for Flash models. Pro requests with `minimal`/`low` effort now floor to `ThinkingLevel.LOW`.
+- **Reasoning models always get a minimum thinking config** — previously thinking was only configured when an explicit `reasoning` effort was passed. For reasoning-capable Gemini models, a minimum config (lowest budget/level) is now always set, matching pi-mono behavior and preventing silent thought suppression.
+- **`convertToGeminiMessages`: missing tool results injected** — if an assistant turn with tool calls has no matching `toolResult` message, a synthetic error result (`"No result provided"`) is flushed before the next turn. Prevents Gemini 400 errors from dangling tool calls.
+- **`convertToGeminiMessages`: image tool results supported** — `toolResult` messages containing image content are now forwarded correctly. Gemini 3+ models receive them as `functionResponse.parts`; older models get a separate user image turn.
+- **`convertToGeminiMessages`: tighter same-model guard** — thought signature replay now also requires `api === "google-generative-ai"` so signatures from non-Gemini providers (e.g. Claude) are never incorrectly forwarded.
+- **`convertToGeminiMessages`: removed `id` from `functionCall` parts** — the `requiresToolCallId` heuristic was wrong; Gemini does not use tool call IDs in `functionCall` parts.
+
+### Updated
+- `claude-opus-4-6`: `maxTokens` corrected to `128000` (was `32000`)
+- `claude-sonnet-4-6`: `maxTokens` corrected to `128000` (was `64000`)
+- `convertToolsForGemini` / `convertTools`: signatures tightened from `any[]` to typed `Tool[]`
+
+*Bug fixes co-discovered with [lhl/pi-vertex](https://github.com/lhl/pi-vertex), a respected community fork. Credit: @lhl.*
+
 ## [1.1.5] - 2026-05-16
 ### Added
 - **xAI Grok models** (new publisher on Vertex MaaS OpenAI-compat endpoint):

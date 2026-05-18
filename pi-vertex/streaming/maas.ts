@@ -218,7 +218,7 @@ async function streamAnthropic(
 
   const params: any = {
     model: model.apiId,
-    max_tokens: options?.maxTokens || Math.floor(model.maxTokens / 2),
+    max_tokens: options?.maxTokens || model.maxTokens,
     messages,
     ...(context.systemPrompt ? { system: context.systemPrompt } : {}),
     ...(tools && tools.length > 0 ? { tools } : {}),
@@ -371,7 +371,7 @@ export function streamMaaS(
       const innerStream = streamSimpleOpenAICompletions(modelForPi, context as any, {
         ...options,
         apiKey: accessToken,
-        maxTokens: options?.maxTokens || Math.floor(model.maxTokens / 2),
+        maxTokens: options?.maxTokens || model.maxTokens,
         temperature: options?.temperature,
       });
 

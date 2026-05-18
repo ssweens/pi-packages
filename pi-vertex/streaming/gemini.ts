@@ -24,14 +24,53 @@ const THINKING_LEVEL_MAP: Record<string, ThinkingLevel> = {
   high: ThinkingLevel.HIGH,
 };
 
+interface GeminiThinkingConfig {
+  includeThoughts?: boolean;
+  thinkingBudget?: number;
+  thinkingLevel?: ThinkingLevel;
+}
+
+function isGemini3ProModel(modelId: string): boolean {
+  return /gemini-3(?:\.\d+)?-pro/.test(modelId.toLowerCase());
+}
+
+function isGemini3FlashModel(modelId: string): boolean {
+  return /gemini-3(?:\.\d+)?-flash/.test(modelId.toLowerCase());
+}
+
+function isGemini25ProModel(modelId: string): boolean {
+  return /gemini-2\.5-pro/.test(modelId.toLowerCase());
+}
+
+function getGemini3ThinkingLevel(effort: string, modelId: string): ThinkingLevel {
+  if (isGemini3ProModel(modelId)) {
+    // Pro only supports LOW/MEDIUM/HIGH — floor minimal/low to LOW
+    if (effort === "minimal" || effort === "low") return ThinkingLevel.LOW;
+    if (effort === "medium") return ThinkingLevel.MEDIUM;
+    return ThinkingLevel.HIGH;
+  }
+  return THINKING_LEVEL_MAP[effort];
+}
+
+function getLowestThinkingConfig(modelId: string): GeminiThinkingConfig {
+  if (isGemini3ProModel(modelId)) {
+    return { thinkingLevel: ThinkingLevel.LOW };
+  }
+  if (isGemini3FlashModel(modelId)) {
+    return { thinkingLevel: ThinkingLevel.MINIMAL };
+  }
+  if (isGemini25ProModel(modelId)) {
+    return { thinkingBudget: 128 };
+  }
+  return { thinkingBudget: 0 };
+}
+
 function mapGeminiStopReason(reason: string): "stop" | "length" | "toolUse" | "error" {
   switch (reason) {
     case FinishReason.STOP:
       return "stop";
     case FinishReason.MAX_TOKENS:
       return "length";
-    case FinishReason.SAFETY:
-    case FinishReason.RECITATION:
     default:
       return "error";
   }
@@ -79,9 +118,11 @@ export function streamGemini(
       // Convert messages with model ID for proper thinking/tool handling
       const contents = convertToGeminiMessages(context.messages, model.apiId);
 
-      // Build config — only set temperature when explicitly provided
-      const config: any = {
-        maxOutputTokens: options?.maxTokens || Math.floor(model.maxTokens / 2),
+      // Build config — only set temperature when explicitly provided.
+      // The Vertex Gemini config shape is sprawling; use Record to avoid
+      // fighting the SDK's incomplete typings.
+      const config: Record<string, unknown> = {
+        maxOutputTokens: options?.maxTokens || model.maxTokens,
         ...(options?.temperature !== undefined && { temperature: options.temperature }),
       };
 
@@ -95,28 +136,33 @@ export function streamGemini(
         config.tools = convertToolsForGemini(context.tools);
       }
 
-      // Add thinking configuration (matches pi-mono's buildParams logic)
-      if (model.reasoning && options?.reasoning) {
-        const effort = options.reasoning === "xhigh" ? "high" : options.reasoning;
-        const isGemini3 = model.apiId.startsWith("gemini-3");
+      // Add thinking configuration (matches pi-mono's buildParams logic).
+      // For reasoning models: always set a minimum thinking config so the model
+      // doesn't silently suppress thoughts when no effort level is specified.
+      if (model.reasoning) {
+        if (options?.reasoning) {
+          const effort = options.reasoning === "xhigh" ? "high" : options.reasoning;
+          const isGemini3 = model.apiId.startsWith("gemini-3");
+          const thinkingConfig: GeminiThinkingConfig = { includeThoughts: true };
 
-        const thinkingConfig: any = { includeThoughts: true };
+          if (isGemini3) {
+            // Gemini 3 Pro doesn't support MINIMAL; Flash models do.
+            thinkingConfig.thinkingLevel = getGemini3ThinkingLevel(effort, model.apiId);
+          } else {
+            // Gemini 2.5 models use thinking budgets (token counts)
+            const budgets: Record<string, number> = {
+              minimal: 128,
+              low: 2048,
+              medium: 8192,
+              high: model.apiId.includes("2.5-pro") ? 32768 : 24576,
+            };
+            thinkingConfig.thinkingBudget = budgets[effort] ?? 8192;
+          }
 
-        if (isGemini3) {
-          // Gemini 3 models use thinking levels (MINIMAL/LOW/MEDIUM/HIGH)
-          thinkingConfig.thinkingLevel = THINKING_LEVEL_MAP[effort];
+          config.thinkingConfig = thinkingConfig;
         } else {
-          // Gemini 2.5 models use thinking budgets (token counts)
-          const budgets: Record<string, number> = {
-            minimal: 128,
-            low: 2048,
-            medium: 8192,
-            high: model.apiId.includes("2.5-pro") ? 32768 : 24576,
-          };
-          thinkingConfig.thinkingBudget = budgets[effort] ?? 8192;
+          config.thinkingConfig = getLowestThinkingConfig(model.apiId);
         }
-
-        config.thinkingConfig = thinkingConfig;
       }
 
       // Pass abort signal to SDK for in-flight cancellation
@@ -136,8 +182,10 @@ export function streamGemini(
         config,
       });
 
-      // Track current content block for thinking/text transitions
-      let currentBlock: any = null;
+      // Track current content block for thinking/text transitions.
+      type StreamingTextBlock = { type: "text"; text: string; textSignature?: string };
+      type StreamingThinkingBlock = { type: "thinking"; thinking: string; thinkingSignature?: string };
+      let currentBlock: StreamingTextBlock | StreamingThinkingBlock | null = null;
       let currentBlockType: "text" | "thinking" | null = null;
 
       for await (const chunk of response) {
@@ -152,13 +200,11 @@ export function streamGemini(
 
               // Check if we need to transition to a new block
               if (currentBlockType !== targetType) {
-                // End previous block
-                if (currentBlock && currentBlockType) {
-                  if (currentBlockType === "text") {
-                    stream.push({ type: "text_end", contentIndex: output.content.length - 1, content: currentBlock.text, partial: output });
-                  } else {
-                    stream.push({ type: "thinking_end", contentIndex: output.content.length - 1, content: currentBlock.thinking, partial: output });
-                  }
+                // End previous block (narrow on type for correct field access)
+                if (currentBlock?.type === "text") {
+                  stream.push({ type: "text_end", contentIndex: output.content.length - 1, content: currentBlock.text, partial: output });
+                } else if (currentBlock?.type === "thinking") {
+                  stream.push({ type: "thinking_end", contentIndex: output.content.length - 1, content: currentBlock.thinking, partial: output });
                 }
 
                 // Start new block
@@ -174,12 +220,12 @@ export function streamGemini(
                 currentBlockType = targetType;
               }
 
-              // Accumulate content
-              if (currentBlockType === "thinking") {
+              // Accumulate content (narrow on discriminant for type safety)
+              if (currentBlock?.type === "thinking") {
                 currentBlock.thinking += part.text;
                 currentBlock.thinkingSignature = retainThoughtSignature(currentBlock.thinkingSignature, part.thoughtSignature);
                 stream.push({ type: "thinking_delta", contentIndex: output.content.length - 1, delta: part.text, partial: output });
-              } else {
+              } else if (currentBlock?.type === "text") {
                 currentBlock.text += part.text;
                 currentBlock.textSignature = retainThoughtSignature(currentBlock.textSignature, part.thoughtSignature);
                 stream.push({ type: "text_delta", contentIndex: output.content.length - 1, delta: part.text, partial: output });
@@ -188,12 +234,12 @@ export function streamGemini(
 
             if (part.functionCall) {
               // End current text/thinking block before tool call
-              if (currentBlock && currentBlockType) {
-                if (currentBlockType === "text") {
-                  stream.push({ type: "text_end", contentIndex: output.content.length - 1, content: currentBlock.text, partial: output });
-                } else {
-                  stream.push({ type: "thinking_end", contentIndex: output.content.length - 1, content: currentBlock.thinking, partial: output });
-                }
+              if (currentBlock?.type === "text") {
+                stream.push({ type: "text_end", contentIndex: output.content.length - 1, content: currentBlock.text, partial: output });
+              } else if (currentBlock?.type === "thinking") {
+                stream.push({ type: "thinking_end", contentIndex: output.content.length - 1, content: currentBlock.thinking, partial: output });
+              }
+              if (currentBlock) {
                 currentBlock = null;
                 currentBlockType = null;
               }
@@ -210,7 +256,7 @@ export function streamGemini(
                 type: "toolCall" as const,
                 id: toolCallId,
                 name: part.functionCall.name || "",
-                arguments: (part.functionCall.args as Record<string, any>) ?? {},
+                arguments: (part.functionCall.args as Record<string, unknown>) ?? {},
                 ...(part.thoughtSignature && { thoughtSignature: part.thoughtSignature }),
               };
 
@@ -230,18 +276,26 @@ export function streamGemini(
             output.errorMessage = "Content blocked by safety filters";
           }
           // Override to toolUse if any tool calls are present (matches pi-mono)
-          if (output.content.some((b: any) => b.type === "toolCall")) {
+          if (output.content.some((b) => b.type === "toolCall")) {
             output.stopReason = "toolUse";
           }
         }
 
-        // Update usage — include thoughtsTokenCount in output (matches pi-mono)
+        // Update usage — include thoughtsTokenCount in output (matches pi-mono).
+        // Subtract cached tokens from prompt to avoid double-counting in input cost.
         if (chunk.usageMetadata) {
-          const meta = chunk.usageMetadata as any;
+          const meta = chunk.usageMetadata as {
+            cachedContentTokenCount?: number;
+            promptTokenCount?: number;
+            candidatesTokenCount?: number;
+            thoughtsTokenCount?: number;
+            totalTokenCount?: number;
+          };
+          const cachedTokens = meta.cachedContentTokenCount || 0;
           output.usage = {
-            input: meta.promptTokenCount || 0,
+            input: Math.max(0, (meta.promptTokenCount || 0) - cachedTokens),
             output: (meta.candidatesTokenCount || 0) + (meta.thoughtsTokenCount || 0),
-            cacheRead: meta.cachedContentTokenCount || 0,
+            cacheRead: cachedTokens,
             cacheWrite: 0,
             totalTokens: meta.totalTokenCount || 0,
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
@@ -251,15 +305,17 @@ export function streamGemini(
       }
 
       // End final block
-      if (currentBlock && currentBlockType) {
-        if (currentBlockType === "text") {
-          stream.push({ type: "text_end", contentIndex: output.content.length - 1, content: currentBlock.text, partial: output });
-        } else {
-          stream.push({ type: "thinking_end", contentIndex: output.content.length - 1, content: currentBlock.thinking, partial: output });
-        }
+      if (currentBlock?.type === "text") {
+        stream.push({ type: "text_end", contentIndex: output.content.length - 1, content: currentBlock.text, partial: output });
+      } else if (currentBlock?.type === "thinking") {
+        stream.push({ type: "thinking_end", contentIndex: output.content.length - 1, content: currentBlock.thinking, partial: output });
       }
 
-      stream.push({ type: "done", reason: output.stopReason as any, message: output });
+      if (options?.signal?.aborted) {
+        throw new Error("Request was aborted");
+      }
+
+      stream.push({ type: "done", reason: output.stopReason, message: output });
       stream.end();
     } catch (error) {
       output.stopReason = options?.signal?.aborted ? "aborted" : "error";

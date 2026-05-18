@@ -7,18 +7,24 @@
 
 import type {
   AssistantMessage,
+  ImageContent,
   Message,
   TextContent,
   ThinkingContent,
+  Tool,
   ToolCall,
   ToolResultMessage,
 } from "./types.js";
 
 /**
- * Sanitize text by removing invalid surrogate pairs
+ * Sanitize text by removing unpaired surrogate code units.
+ * Valid surrogate pairs (emoji) are preserved.
  */
 export function sanitizeText(text: string): string {
-  return text.replace(/[\uD800-\uDFFF]/g, "\uFFFD");
+  return text.replace(
+    /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g,
+    "",
+  );
 }
 
 // --- Thought signature helpers (matching pi-mono google-shared.ts) ---
@@ -50,12 +56,20 @@ export function retainThoughtSignature(
   return existing;
 }
 
-/**
- * Whether a model requires explicit tool call IDs in functionCall parts.
- * Claude and GPT-OSS models on Vertex require them; native Gemini models don't.
- */
-function requiresToolCallId(modelId: string): boolean {
-  return modelId.startsWith("claude-") || modelId.startsWith("gpt-oss-");
+type GeminiContent = {
+  role: "user" | "model";
+  parts: Array<Record<string, unknown>>;
+};
+
+function getGeminiMajorVersion(modelId: string): number | undefined {
+  const match = modelId.toLowerCase().match(/^gemini(?:-live)?-(\d+)/);
+  return match ? Number.parseInt(match[1], 10) : undefined;
+}
+
+function supportsMultimodalFunctionResponse(modelId: string): boolean {
+  const majorVersion = getGeminiMajorVersion(modelId);
+  if (majorVersion !== undefined) return majorVersion >= 3;
+  return true;
 }
 
 /**
@@ -64,12 +78,77 @@ function requiresToolCallId(modelId: string): boolean {
  * Handles the full pi-ai Message union: UserMessage, AssistantMessage (with
  * TextContent, ThinkingContent, ToolCall blocks), and ToolResultMessage.
  */
-export function convertToGeminiMessages(messages: Message[], modelId: string): any[] {
-  const result: any[] = [];
+export function convertToGeminiMessages(messages: Message[], modelId: string): GeminiContent[] {
+  const result: GeminiContent[] = [];
   const isGemini3 = modelId.startsWith("gemini-3");
+  let pendingToolCalls: ToolCall[] = [];
+  let existingToolResultIds = new Set<string>();
+
+  const pushToolResult = (
+    toolCallId: string,
+    toolName: string,
+    content: ToolResultMessage["content"],
+    isError: boolean,
+  ) => {
+    const textContent = content.filter((c): c is TextContent => c.type === "text");
+    const textResult = textContent.map((c) => c.text).join("\n");
+    const imageContent = content.filter((c): c is ImageContent => c.type === "image");
+    const hasText = textResult.length > 0;
+    const hasImages = imageContent.length > 0;
+    const responseValue = hasText
+      ? sanitizeText(textResult)
+      : hasImages
+        ? "(see attached image)"
+        : "";
+
+    const imageParts = imageContent.map((img) => ({
+      inlineData: { mimeType: img.mimeType, data: img.data },
+    }));
+
+    const functionResponsePart: Record<string, unknown> = {
+      functionResponse: {
+        name: toolName,
+        response: isError ? { error: responseValue } : { output: responseValue },
+        ...(hasImages && supportsMultimodalFunctionResponse(modelId) ? { parts: imageParts } : {}),
+      },
+    };
+
+    // Merge consecutive tool results into a single user turn (required by Gemini API)
+    const lastContent = result[result.length - 1];
+    if (lastContent?.role === "user" && lastContent.parts?.some((p) => "functionResponse" in p)) {
+      lastContent.parts.push(functionResponsePart);
+    } else {
+      result.push({ role: "user", parts: [functionResponsePart] });
+    }
+
+    // Gemini < 3: carry image tool results as a separate user image turn
+    if (hasImages && !supportsMultimodalFunctionResponse(modelId)) {
+      result.push({
+        role: "user",
+        parts: [{ text: "Tool result image:" }, ...imageParts],
+      });
+    }
+  };
+
+  const flushMissingToolResults = () => {
+    if (pendingToolCalls.length === 0) return;
+    for (const toolCall of pendingToolCalls) {
+      if (!existingToolResultIds.has(toolCall.id)) {
+        pushToolResult(
+          toolCall.id,
+          toolCall.name,
+          [{ type: "text", text: "No result provided" }],
+          true,
+        );
+      }
+    }
+    pendingToolCalls = [];
+    existingToolResultIds = new Set<string>();
+  };
 
   for (const msg of messages) {
     if (msg.role === "user") {
+      flushMissingToolResults();
       if (typeof msg.content === "string") {
         if (msg.content.trim()) {
           result.push({
@@ -78,33 +157,34 @@ export function convertToGeminiMessages(messages: Message[], modelId: string): a
           });
         }
       } else {
-        const parts = msg.content.map((item) => {
-          if (item.type === "text") {
-            return { text: sanitizeText(item.text) };
-          } else {
-            return {
-              inlineData: {
-                mimeType: item.mimeType,
-                data: item.data,
-              },
-            };
-          }
-        });
+        const parts: Array<Record<string, unknown>> = msg.content.map(
+          (item: TextContent | ImageContent) => {
+            if (item.type === "text") {
+              return { text: sanitizeText(item.text) };
+            }
+            return { inlineData: { mimeType: item.mimeType, data: item.data } };
+          },
+        );
         if (parts.length > 0) {
           result.push({ role: "user", parts });
         }
       }
     } else if (msg.role === "assistant") {
       const assistantMsg = msg as AssistantMessage;
+      flushMissingToolResults();
 
       // Skip errored/aborted messages — they're incomplete turns
       if (assistantMsg.stopReason === "error" || assistantMsg.stopReason === "aborted") {
         continue;
       }
 
+      // Also require api match so cross-provider thought signatures aren't replayed
       const isSameProviderAndModel =
-        assistantMsg.provider === "vertex" && assistantMsg.model === modelId;
-      const parts: any[] = [];
+        assistantMsg.provider === "vertex" &&
+        assistantMsg.api === "google-generative-ai" &&
+        assistantMsg.model === modelId;
+      const parts: Array<Record<string, unknown>> = [];
+      const toolCalls: ToolCall[] = [];
 
       for (const block of assistantMsg.content) {
         if (block.type === "text") {
@@ -134,13 +214,13 @@ export function convertToGeminiMessages(messages: Message[], modelId: string): a
           }
         } else if (block.type === "toolCall") {
           const toolCallBlock = block as ToolCall;
+          toolCalls.push(toolCallBlock);
           const thoughtSig = resolveThoughtSignature(isSameProviderAndModel, toolCallBlock.thoughtSignature);
 
-          const part: any = {
+          const part: Record<string, unknown> = {
             functionCall: {
               name: toolCallBlock.name,
               args: toolCallBlock.arguments ?? {},
-              ...(requiresToolCallId(modelId) ? { id: toolCallBlock.id } : {}),
             },
           };
           if (thoughtSig) {
@@ -159,30 +239,23 @@ export function convertToGeminiMessages(messages: Message[], modelId: string): a
       if (parts.length > 0) {
         result.push({ role: "model", parts });
       }
+      if (toolCalls.length > 0) {
+        pendingToolCalls = toolCalls;
+        existingToolResultIds = new Set<string>();
+      }
     } else if (msg.role === "toolResult") {
       const toolResultMsg = msg as ToolResultMessage;
-      const textContent = toolResultMsg.content.filter((c) => c.type === "text") as TextContent[];
-      const textResult = textContent.map((c) => c.text).join("\n");
-      const responseValue = textResult || "";
-
-      const includeId = requiresToolCallId(modelId);
-      const functionResponsePart: any = {
-        functionResponse: {
-          name: toolResultMsg.toolName,
-          response: toolResultMsg.isError ? { error: responseValue } : { output: responseValue },
-          ...(includeId ? { id: toolResultMsg.toolCallId } : {}),
-        },
-      };
-
-      // Merge consecutive tool results into a single user turn (required by Gemini API)
-      const lastContent = result[result.length - 1];
-      if (lastContent?.role === "user" && lastContent.parts?.some((p: any) => p.functionResponse)) {
-        lastContent.parts.push(functionResponsePart);
-      } else {
-        result.push({ role: "user", parts: [functionResponsePart] });
-      }
+      existingToolResultIds.add(toolResultMsg.toolCallId);
+      pushToolResult(
+        toolResultMsg.toolCallId,
+        toolResultMsg.toolName,
+        toolResultMsg.content,
+        toolResultMsg.isError,
+      );
     }
   }
+
+  flushMissingToolResults();
 
   return result;
 }
@@ -191,7 +264,9 @@ export function convertToGeminiMessages(messages: Message[], modelId: string): a
  * Convert tools to Gemini format using parametersJsonSchema (full JSON Schema support).
  * This differs from OpenAI format — Gemini uses functionDeclarations wrapped in an array.
  */
-export function convertToolsForGemini(tools: any[]): any[] | undefined {
+export function convertToolsForGemini(
+  tools: Tool[],
+): Array<{ functionDeclarations: Array<Record<string, unknown>> }> | undefined {
   if (!tools || tools.length === 0) return undefined;
   return [
     {
@@ -207,7 +282,7 @@ export function convertToolsForGemini(tools: any[]): any[] | undefined {
 /**
  * Convert tools to OpenAI format (for Claude and MaaS models)
  */
-export function convertTools(tools: any[]): any[] {
+export function convertTools(tools: Tool[]): Array<Record<string, unknown>> {
   return tools.map((tool) => ({
     type: "function",
     function: {
