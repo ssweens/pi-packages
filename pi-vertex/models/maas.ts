@@ -8,6 +8,46 @@
 import type { VertexModelConfig } from "../types.js";
 
 export const MAAS_MODELS: VertexModelConfig[] = [
+  // --- xAI Grok ---
+  {
+    id: "grok-4.20-reasoning",
+    name: "Grok 4.20 Reasoning",
+    apiId: "grok-4.20-reasoning",
+    publisher: "xai",
+    endpointType: "maas",
+    contextWindow: 200000,
+    maxTokens: 32000,
+    input: ["text", "image"],
+    reasoning: true,
+    tools: true,
+    cost: {
+      input: 1.25,
+      output: 2.50,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
+    region: "global",
+  },
+  {
+    id: "grok-4.1-fast-reasoning",
+    name: "Grok 4.1 Fast Reasoning",
+    apiId: "grok-4.1-fast-reasoning",
+    publisher: "xai",
+    endpointType: "maas",
+    contextWindow: 128000,
+    maxTokens: 32000,
+    input: ["text", "image"],
+    reasoning: true,
+    tools: true,
+    cost: {
+      input: 0.20,
+      output: 0.50,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
+    region: "global",
+  },
+
   // --- Meta Llama ---
   {
     id: "llama-4-maverick",
@@ -378,6 +418,27 @@ export const MAAS_MODELS: VertexModelConfig[] = [
       input: 0.30,
       output: 1.20,
       cacheRead: 0.03,
+      cacheWrite: 0,
+    },
+    region: "global",
+  },
+
+  // --- Google Gemma (MaaS) ---
+  {
+    id: "gemma-4-26b-a4b-it",
+    name: "Gemma 4 26B A4B IT",
+    apiId: "gemma-4-26b-a4b-it-maas",
+    publisher: "google",
+    endpointType: "maas",
+    contextWindow: 262144,
+    maxTokens: 128000,
+    input: ["text", "image"],
+    reasoning: false,
+    tools: false,
+    cost: {
+      input: 0.15,
+      output: 0.60,
+      cacheRead: 0,
       cacheWrite: 0,
     },
     region: "global",
