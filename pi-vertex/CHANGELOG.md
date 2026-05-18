@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.7] - 2026-05-16
+### Added
+- **Regional pricing for Claude models** — non-global Vertex endpoints (us-east5, europe-west1, asia-southeast1, us/eu multi-region) carry a 10% price premium per GCP's published rates. The streaming layer now automatically selects the correct cost tier based on the resolved endpoint at call time. No config change required — if your `GOOGLE_CLOUD_LOCATION` or config resolves to any non-`global` location, cost tracking reflects the regional rate.
+  - Claude Opus 4.7/4.6/4.5: global $5.00/$25.00 → regional $5.50/$27.50
+  - Claude Sonnet 4.6/4.5: global $3.00/$15.00 → regional $3.30/$16.50
+  - Claude Haiku 4.5: global $1.00/$5.00 → regional $1.10/$5.50
+  - Claude Opus 4.1, Opus 4, Sonnet 4: uniform pricing (no regional variant on GCP)
+- **`costRegional?: ModelCost` field on `VertexModelConfig`** — optional cost tier used when the resolved GCP location is non-global. Models without this field use `cost` for all regions.
+
+### Fixed
+- **Grok cache read pricing** — previously 0 for both xAI models; corrected to GCP official rates:
+  - `grok-4.20-reasoning`: cacheRead $0.20/1M
+  - `grok-4.1-fast-reasoning`: cacheRead $0.05/1M
+
 ## [1.1.6] - 2026-05-16
 ### Fixed
 - **`maxTokens / 2` halving removed** — both the Anthropic and OpenAI-compat MaaS streaming paths were silently capping requests at half the model's stated `maxTokens`. Requests now use the full `maxTokens` value unless the caller explicitly overrides it.

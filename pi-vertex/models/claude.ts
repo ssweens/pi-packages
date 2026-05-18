@@ -2,7 +2,9 @@
  * Claude model definitions for Vertex AI
  * Source: https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/use-partner-models
  * Pricing: https://cloud.google.com/vertex-ai/generative-ai/pricing#partner-models
- * All prices per 1M tokens (global endpoint, <= 200K input tokens)
+ * All prices per 1M tokens (<=200K input tokens)
+ * `cost` = global endpoint; `costRegional` = non-global (us-east5, europe-west1,
+ * asia-southeast1, us/eu multi-region) — uniformly 10% above global.
  * Cache write prices are for 5-minute TTL
  */
 
@@ -27,6 +29,12 @@ export const CLAUDE_MODELS: VertexModelConfig[] = [
       cacheRead: 0.50,
       cacheWrite: 6.25,
     },
+    costRegional: {
+      input: 5.50,
+      output: 27.50,
+      cacheRead: 0.55,
+      cacheWrite: 6.875,
+    },
     region: "global",
   },
 
@@ -48,6 +56,12 @@ export const CLAUDE_MODELS: VertexModelConfig[] = [
       cacheRead: 0.50,
       cacheWrite: 6.25,
     },
+    costRegional: {
+      input: 5.50,
+      output: 27.50,
+      cacheRead: 0.55,
+      cacheWrite: 6.875,
+    },
     region: "global",
   },
   {
@@ -66,6 +80,12 @@ export const CLAUDE_MODELS: VertexModelConfig[] = [
       output: 15.00,
       cacheRead: 0.30,
       cacheWrite: 3.75,
+    },
+    costRegional: {
+      input: 3.30,
+      output: 16.50,
+      cacheRead: 0.33,
+      cacheWrite: 4.125,
     },
     region: "global",
   },
@@ -88,6 +108,12 @@ export const CLAUDE_MODELS: VertexModelConfig[] = [
       cacheRead: 0.50,
       cacheWrite: 6.25,
     },
+    costRegional: {
+      input: 5.50,
+      output: 27.50,
+      cacheRead: 0.55,
+      cacheWrite: 6.875,
+    },
     region: "global",
   },
   {
@@ -107,6 +133,12 @@ export const CLAUDE_MODELS: VertexModelConfig[] = [
       cacheRead: 0.30,
       cacheWrite: 3.75,
     },
+    costRegional: {
+      input: 3.30,
+      output: 16.50,
+      cacheRead: 0.33,
+      cacheWrite: 4.125,
+    },
     region: "global",
   },
   {
@@ -125,6 +157,12 @@ export const CLAUDE_MODELS: VertexModelConfig[] = [
       output: 5.00,
       cacheRead: 0.10,
       cacheWrite: 1.25,
+    },
+    costRegional: {
+      input: 1.10,
+      output: 5.50,
+      cacheRead: 0.11,
+      cacheWrite: 1.375,
     },
     region: "global",
   },

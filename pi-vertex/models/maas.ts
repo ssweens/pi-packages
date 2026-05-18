@@ -23,7 +23,7 @@ export const MAAS_MODELS: VertexModelConfig[] = [
     cost: {
       input: 1.25,
       output: 2.50,
-      cacheRead: 0,
+      cacheRead: 0.20,
       cacheWrite: 0,
     },
     region: "global",
@@ -42,7 +42,7 @@ export const MAAS_MODELS: VertexModelConfig[] = [
     cost: {
       input: 0.20,
       output: 0.50,
-      cacheRead: 0,
+      cacheRead: 0.05,
       cacheWrite: 0,
     },
     region: "global",

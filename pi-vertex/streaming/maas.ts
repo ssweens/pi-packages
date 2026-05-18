@@ -53,6 +53,11 @@ async function streamAnthropic(
   const location = resolveLocation(model.region);
   const auth = getAuthConfig(location);
 
+  // Use regional pricing when the resolved endpoint is not the global one.
+  // Models without costRegional (e.g. Opus 4.1, Sonnet 4) have uniform pricing.
+  const effectiveCost =
+    auth.location !== "global" && model.costRegional ? model.costRegional : model.cost;
+
   const client = new AnthropicVertex({
     projectId: auth.projectId,
     region: auth.location,
@@ -314,7 +319,7 @@ async function streamAnthropic(
   }
 
   output.usage.totalTokens = output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
-  calculateCost(model as any, output.usage);
+  calculateCost({ ...model, cost: effectiveCost } as any, output.usage);
 
   if (output.content.some((b: any) => b.type === "toolCall")) {
     output.stopReason = "toolUse";

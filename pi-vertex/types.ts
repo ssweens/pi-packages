@@ -47,7 +47,17 @@ export interface VertexModelConfig {
   input: ModelInputType[];
   reasoning: boolean;
   tools: boolean;
+  /** Pricing for the global endpoint (default). */
   cost: ModelCost;
+  /**
+   * Pricing for non-global regional endpoints (us-east5, europe-west1,
+   * asia-southeast1, us/eu multi-region, etc.).
+   *
+   * When the resolved GCP location is not "global" and this field is set,
+   * the streaming layer uses these costs instead of `cost`.
+   * Omit for models whose pricing is uniform across all regions.
+   */
+  costRegional?: ModelCost;
   region: string;
 }
 
