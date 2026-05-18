@@ -15,18 +15,18 @@ Set your GCP project and credentials. Vertex AI models (Gemini, Claude, Llama, D
 
 ## Features
 
-- **43 models** across 4 categories:
-  - **Gemini** (8): 3.1 Pro, 3 Pro, 3 Flash, 2.5 Pro, 2.5 Flash, 2.0 Flash, and more
-  - **Claude** (12): Opus 4.6, Sonnet 4.6, 4.5, 4.1, 4, 3.7 Sonnet, 3.5 Sonnet v2, 3.5 Sonnet, 3 Haiku
+- **48 models** across 4 categories:
+  - **Gemini** (9): 3.1 Pro, 3.1 Flash-Lite, 3 Flash, 2.5 Pro, 2.5 Flash, 2.5 Flash-Lite, 2.0 Flash, 2.0 Flash-Lite
+  - **Claude** (10): Opus 4.7, Opus 4.6, Sonnet 4.6, Opus/Sonnet/Haiku 4.5, Opus 4.1, Opus 4, Sonnet 4, 3.5 Sonnet v2
   - **Llama** (3): 4 Maverick, 4 Scout, 3.3 70B
-  - **Other MaaS** (20): AI21 Jamba, Mistral, DeepSeek, Qwen, OpenAI GPT-OSS, Kimi, MiniMax, GLM
+  - **Other MaaS** (26): Grok, Gemma, Mistral, DeepSeek, Qwen, OpenAI GPT-OSS, Kimi, MiniMax, GLM
 
 - **Unified streaming**: Single provider, multiple model families
 - **Full tool calling support**: All models with multi-turn tool use and proper tool result handling
 - **Thinking/reasoning**: Gemini 3 thinking levels, Gemini 2.5 thinking budgets, thought signature preservation
 - **Automatic auth**: Uses Google Application Default Credentials
 - **Region awareness**: Global endpoints where supported, regional where required
-- **Pricing tracking**: Built-in cost per token for all models (including thinking tokens)
+- **Pricing tracking**: Built-in cost per token for all models (including thinking tokens and regional endpoint premiums)
 
 ## Installation
 
@@ -128,17 +128,20 @@ alias pil="GOOGLE_CLOUD_PROJECT=your-project pi --provider vertex --model llama-
 
 ### Claude Models
 
-| Model | Context | Max Tokens | Input | Reasoning | Price (in/out) | Region |
-|-------|---------|------------|-------|-----------|----------------|--------|
-| claude-opus-4-6 | 1M | 32,000 | text, image | ✅ | $5.00/$25.00 | global |
-| claude-sonnet-4-6 | 1M | 64,000 | text, image | ✅ | $3.00/$15.00 | global |
-| claude-opus-4-5 | 200K | 32,000 | text, image | ✅ | $5.00/$25.00 | global |
-| claude-sonnet-4-5 | 200K | 64,000 | text, image | ✅ | $3.00/$15.00 | global |
-| claude-haiku-4-5 | 200K | 64,000 | text, image | ✅ | $1.00/$5.00 | global |
-| claude-opus-4-1 | 200K | 32,000 | text, image | ✅ | $15.00/$75.00 | global |
-| claude-opus-4 | 200K | 32,000 | text, image | ✅ | $15.00/$75.00 | global |
-| claude-sonnet-4 | 200K | 64,000 | text, image | ✅ | $3.00/$15.00 | global |
-| claude-3-5-sonnet-v2 | 200K | 8,192 | text, image | ❌ | $3.00/$15.00 | global |
+Prices shown are for the **global** endpoint. Non-global regions (us-east5, europe-west1, asia-southeast1, us/eu multi-region) carry a 10% premium — cost tracking adjusts automatically based on your configured `GOOGLE_CLOUD_LOCATION`.
+
+| Model | Context | Max Tokens | Input | Reasoning | Price global (in/out) | Price regional (in/out) |
+|-------|---------|------------|-------|-----------|----------------------|------------------------|
+| claude-opus-4-7 | 1M | 128,000 | text, image | ✅ | $5.00/$25.00 | $5.50/$27.50 |
+| claude-opus-4-6 | 1M | 128,000 | text, image | ✅ | $5.00/$25.00 | $5.50/$27.50 |
+| claude-sonnet-4-6 | 1M | 128,000 | text, image | ✅ | $3.00/$15.00 | $3.30/$16.50 |
+| claude-opus-4-5 | 200K | 32,000 | text, image | ✅ | $5.00/$25.00 | $5.50/$27.50 |
+| claude-sonnet-4-5 | 200K | 64,000 | text, image | ✅ | $3.00/$15.00 | $3.30/$16.50 |
+| claude-haiku-4-5 | 200K | 64,000 | text, image | ✅ | $1.00/$5.00 | $1.10/$5.50 |
+| claude-opus-4-1 | 200K | 32,000 | text, image | ✅ | $15.00/$75.00 | (uniform) |
+| claude-opus-4 | 200K | 32,000 | text, image | ✅ | $15.00/$75.00 | (uniform) |
+| claude-sonnet-4 | 200K | 64,000 | text, image | ✅ | $3.00/$15.00 | (uniform) |
+| claude-3-5-sonnet-v2 | 200K | 8,192 | text, image | ❌ | $3.00/$15.00 | (uniform) |
 
 ### Llama Models
 
@@ -170,6 +173,9 @@ alias pil="GOOGLE_CLOUD_PROJECT=your-project pi --provider vertex --model llama-
 | minimax-m2 | 196K | minimaxai | $0.30/$1.20 | global |
 | glm-5 | 200K | zai-org | $1.00/$3.20 | global |
 | glm-4.7 | 200K | zai-org | $0.60/$2.20 | global |
+| grok-4.20-reasoning | 200K | xai | $1.25/$2.50 | global |
+| grok-4.1-fast-reasoning | 128K | xai | $0.20/$0.50 | global |
+| gemma-4-26b-a4b-it | 262K | google | $0.15/$0.60 | global |
 
 ## Regional Endpoints
 
@@ -217,6 +223,10 @@ export GOOGLE_CLOUD_LOCATION=us-central1
 - `google-auth-library`: ADC authentication for all models
 - `@mariozechner/pi-ai`: Peer dependency
 - `@mariozechner/pi-coding-agent`: Peer dependency
+
+## Acknowledgments
+
+[lhl](https://github.com/lhl) maintains [lhl/pi-vertex](https://github.com/lhl/pi-vertex), an independent fork that added comprehensive unit tests and CI, and identified several important bugs. Several fixes in v1.1.6 were co-discovered through review of that work, including the `maxTokens/2` halving bug, Gemini cached-token double-counting, `sanitizeText` emoji corruption, missing tool result flushing, and image tool result forwarding. Kudos.
 
 ## License
 
