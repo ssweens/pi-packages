@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.0] - 2026-05-19
+### Added
+- **Sudo password retries** — mistyped passwords no longer cause immediate execution failure. Added a password retry loop that matches native `sudo` behavior (3 attempts by default). On a failed password:
+  - The masked password prompt is re-rendered with a clear error indication: `✗ Incorrect password, please try again`.
+  - It displays the remaining attempt count: `2 attempts remaining`.
+  - The in-memory cache is automatically invalidated if it rejected a cached password, then re-prompts the user cleanly.
+  - Users can press `Esc` at any retry to cancel the operation.
+- **`maxRetries` configuration option** — under `permissionGate.sudoMode`, sets the maximum number of password attempts before giving up (default: `3`). Documented in the README.
+
 ## [0.12.0] - 2026-05-14
 ### Added
 - Sudo password caching (opt-in, in-memory, 5-minute TTL by default). The sudo password dialog now renders a Tab-toggleable `[ ] Remember password for N min (in-memory only)` checkbox. When checked, the password is cached in module memory for `sudoMode.cacheTtl` (default 300_000 ms) so consecutive sudo invocations skip the password re-entry step. The approval dialog (allow/deny) still runs every time — only the password step is bypassed when the cache is warm.
