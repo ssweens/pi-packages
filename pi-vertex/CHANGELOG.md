@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.8] - 2026-05-19
+### Added
+- **Gemini 3.5 Flash** (`gemini-3.5-flash`) — GA release from Google I/O 2026. Most intelligent Flash model; optimized for agentic execution, coding, and long-horizon tasks. 1M context, 65K max output, text/image/video/audio input, reasoning (thinking levels: minimal/low/medium/high), tools. $1.50/$9.00 per 1M tokens (global), $0.15/1M cache read.
+
 ## [1.1.7] - 2026-05-16
 ### Added
 - **Regional pricing for Claude models** — non-global Vertex endpoints (us-east5, europe-west1, asia-southeast1, us/eu multi-region) carry a 10% price premium per GCP's published rates. The streaming layer now automatically selects the correct cost tier based on the resolved endpoint at call time. No config change required — if your `GOOGLE_CLOUD_LOCATION` or config resolves to any non-`global` location, cost tracking reflects the regional rate.
