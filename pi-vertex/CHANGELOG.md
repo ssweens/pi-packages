@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.9] - 2026-05-19
+### Fixed
+- **Gemini 3/3.5 default thinking preserved** — previously, if no reasoning effort level was specified, we silently overrode Gemini 3/3.5 models to use their lowest thinking level (`MINIMAL`). This severely degraded the intelligence of Gemini 3.5 Flash (defaulting it to no real reasoning/thinking) and Gemini 3 Pro/Flash. We now completely omit `thinkingConfig` when `options.reasoning` is undefined, allowing Gemini 3/3.5 models to use their native GA defaults (`MEDIUM` for 3.5 Flash, `HIGH` for others).
+- **Gemini 2.5 default thinking budget** — Gemini 2.5 has thinking disabled by default on Vertex, so we now apply a healthy thinking budget floor (`2048` tokens for Pro, `1024` for Flash) when `options.reasoning` is undefined.
+
 ## [1.1.8] - 2026-05-19
 ### Added
 - **Gemini 3.5 Flash** (`gemini-3.5-flash`) — GA release from Google I/O 2026. Most intelligent Flash model; optimized for agentic execution, coding, and long-horizon tasks. 1M context, 65K max output, text/image/video/audio input, reasoning (thinking levels: minimal/low/medium/high), tools. $1.50/$9.00 per 1M tokens (global), $0.15/1M cache read.

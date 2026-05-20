@@ -52,19 +52,6 @@ function getGemini3ThinkingLevel(effort: string, modelId: string): ThinkingLevel
   return THINKING_LEVEL_MAP[effort];
 }
 
-function getLowestThinkingConfig(modelId: string): GeminiThinkingConfig {
-  if (isGemini3ProModel(modelId)) {
-    return { thinkingLevel: ThinkingLevel.LOW };
-  }
-  if (isGemini3FlashModel(modelId)) {
-    return { thinkingLevel: ThinkingLevel.MINIMAL };
-  }
-  if (isGemini25ProModel(modelId)) {
-    return { thinkingBudget: 128 };
-  }
-  return { thinkingBudget: 0 };
-}
-
 function mapGeminiStopReason(reason: string): "stop" | "length" | "toolUse" | "error" {
   switch (reason) {
     case FinishReason.STOP:
@@ -137,8 +124,6 @@ export function streamGemini(
       }
 
       // Add thinking configuration (matches pi-mono's buildParams logic).
-      // For reasoning models: always set a minimum thinking config so the model
-      // doesn't silently suppress thoughts when no effort level is specified.
       if (model.reasoning) {
         if (options?.reasoning) {
           const effort = options.reasoning === "xhigh" ? "high" : options.reasoning;
@@ -161,7 +146,18 @@ export function streamGemini(
 
           config.thinkingConfig = thinkingConfig;
         } else {
-          config.thinkingConfig = getLowestThinkingConfig(model.apiId);
+          // If no reasoning level is specified:
+          // - For Gemini 3.x/3.5 models, omit thinkingConfig entirely so Vertex AI uses
+          //   the model's native default level (e.g. MEDIUM for 3.5, HIGH for others).
+          // - For Gemini 2.5 models, apply a healthy thinking budget floor (thinking is
+          //   disabled by default on 2.5).
+          const isGemini3 = model.apiId.startsWith("gemini-3");
+          if (!isGemini3) {
+            config.thinkingConfig = {
+              includeThoughts: true,
+              thinkingBudget: model.apiId.includes("2.5-pro") ? 2048 : 1024,
+            };
+          }
         }
       }
 
