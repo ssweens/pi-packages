@@ -53,6 +53,13 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
+function truncatePlain(text: string, width: number): string {
+  if (width <= 0) return "";
+  if (text.length <= width) return text;
+  if (width === 1) return "…";
+  return `${text.slice(0, width - 1)}…`;
+}
+
 // Mirrors OpenAICompletionsCompat from @mariozechner/pi-ai
 interface OpenAICompat {
   supportsStore?: boolean;
@@ -265,7 +272,10 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   if (startupLines.length > 0) {
     pi.on("session_start", async (_event, ctx) => {
       ctx.ui.setWidget("pi-dynamic-models-startup", (_tui, theme) => ({
-        render: () => [...startupLines.map(l => theme.fg("muted", l)), ""],
+        render: (width: number) => [
+          ...startupLines.map((line) => theme.fg("muted", truncatePlain(line, width))),
+          "",
+        ],
         invalidate: () => {},
       }));
     });

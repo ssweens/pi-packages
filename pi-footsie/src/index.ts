@@ -1,13 +1,12 @@
 import os from "node:os";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-// Helper to resolve the primary local non-internal IPv4 address
+const VULGARITY_REGEX = /\b(fuck|fucking|fucked|shit|shitty|damn|bitch|asshole|wtf|bullshit|crap|dick|piss|motherfucker)\b/gi;
+
 function getLocalIpAddress(): string {
   const interfaces = os.networkInterfaces();
   for (const name of Object.keys(interfaces)) {
     for (const iface of interfaces[name] || []) {
-      // Skip loopback/internal and IPv6 for the primary address
       if (!iface.internal && iface.family === "IPv4") {
         return iface.address;
       }
@@ -16,128 +15,95 @@ function getLocalIpAddress(): string {
   return "127.0.0.1";
 }
 
-// Format CPU load average (1 minute)
-function formatLoad(): string {
-  const load = os.loadavg()[0];
-  return load !== undefined ? load.toFixed(2) : "0.00";
+function extractText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+
+  return content
+    .map((part) => {
+      if (typeof part === "string") return part;
+      if (!part || typeof part !== "object") return "";
+      const text = (part as { text?: unknown }).text;
+      return typeof text === "string" ? text : "";
+    })
+    .join(" ");
 }
 
-// Get free memory percentage
-function getFreeMemoryPercent(): number {
-  const total = os.totalmem();
-  const free = os.freemem();
-  if (total === 0) return 0;
-  return Math.round((free / total) * 100);
+function countVulgarityUsage(ctx: any): number {
+  let count = 0;
+  for (const entry of ctx.sessionManager.getBranch()) {
+    if (entry.type !== "message") continue;
+    if (entry.message.role !== "user") continue;
+    const text = extractText(entry.message.content);
+    const matches = text.match(VULGARITY_REGEX);
+    count += matches?.length ?? 0;
+  }
+  return count;
 }
 
-// Format system uptime into days, hours, minutes
-function formatUptime(): string {
-  const uptime = os.uptime();
-  const days = Math.floor(uptime / 86400);
-  const hours = Math.floor((uptime % 86400) / 3600);
-  const minutes = Math.floor((uptime % 3600) / 60);
-
-  const parts: string[] = [];
-  if (days > 0) parts.push(`${days}d`);
-  if (hours > 0) parts.push(`${hours}h`);
-  if (parts.length < 2) parts.push(`${minutes}m`);
-
-  return parts.join(" ");
+function compactHost(hostname: string): string {
+  return hostname.split(".")[0] || hostname;
 }
 
 export default function (pi: ExtensionAPI) {
   let enabled = true;
   let intervalId: ReturnType<typeof setInterval> | null = null;
 
-  function registerFooter(ctx: any) {
-    ctx.ui.setFooter((tui: any, theme: any, footerData: any) => {
-      // Re-render when git branch changes
-      const unsub = footerData.onBranchChange(() => tui.requestRender());
+  function renderStatus(ctx: any) {
+    if (!enabled) {
+      ctx.ui.setStatus("footsie", undefined);
+      return;
+    }
 
-      // Periodically refresh system metrics (every 5 seconds)
-      if (intervalId) clearInterval(intervalId);
-      intervalId = setInterval(() => {
-        tui.requestRender();
-      }, 5000);
+    const host = compactHost(os.hostname());
+    const ip = getLocalIpAddress();
+    const vulgarityCount = countVulgarityUsage(ctx);
+    const jarAmount = vulgarityCount * 0.25;
+    const jarColor = vulgarityCount >= 5 ? "error" : vulgarityCount > 0 ? "warning" : "muted";
 
-      // Unref the timer so it doesn't prevent Node from exiting
-      if (typeof intervalId.unref === "function") {
-        intervalId.unref();
-      }
+    const text =
+      `${ctx.ui.theme.fg("text", `${host}@${ip}`)}` +
+      `${ctx.ui.theme.fg("dim", " • ")}${ctx.ui.theme.fg("muted", "swear jar:")}${ctx.ui.theme.fg(jarColor, `$${jarAmount.toFixed(2)}`)}`;
 
-      return {
-        dispose: () => {
-          unsub();
-          if (intervalId) {
-            clearInterval(intervalId);
-            intervalId = null;
-          }
-        },
-        invalidate() {},
-        render(width: number): string[] {
-          // System specs
-          const host = os.hostname();
-          const ip = getLocalIpAddress();
-          const platform = os.platform();
-          const freeMem = getFreeMemoryPercent();
-          const load = formatLoad();
-          const up = formatUptime();
-
-          // Left side: sysinfo segments
-          const hostSegment = theme.fg("accent", "sys:") + theme.fg("text", host);
-          const ipSegment = theme.fg("dim", " • ") + theme.fg("muted", "ip:") + theme.fg("text", ip);
-          const osSegment = theme.fg("dim", " • ") + theme.fg("muted", "os:") + theme.fg("text", platform);
-          const memSegment = theme.fg("dim", " • ") + theme.fg("muted", "mem:") + theme.fg(freeMem < 15 ? "warning" : "text", `${freeMem}% free`);
-          const loadSegment = theme.fg("dim", " • ") + theme.fg("muted", "load:") + theme.fg("text", load);
-          const upSegment = theme.fg("dim", " • ") + theme.fg("muted", "up:") + theme.fg("text", up);
-
-          const left = hostSegment + ipSegment + osSegment + memSegment + loadSegment + upSegment;
-
-          // Right side: Active model and git branch
-          const branch = footerData.getGitBranch();
-          const branchStr = branch ? ` (${branch})` : "";
-          const right = theme.fg("dim", `${ctx.model?.id || "no-model"}${branchStr}`);
-
-          // Padding and truncate
-          const padWidth = Math.max(1, width - visibleWidth(left) - visibleWidth(right));
-          const pad = " ".repeat(padWidth);
-
-          return [truncateToWidth(left + pad + right, width)];
-        },
-      };
-    });
+    ctx.ui.setStatus("footsie", text);
   }
 
-  pi.on("session_start", async (_event, ctx) => {
-    if (enabled) {
-      registerFooter(ctx);
-    }
-  });
+  function startUpdates(ctx: any) {
+    renderStatus(ctx);
+    if (intervalId) clearInterval(intervalId);
+    intervalId = setInterval(() => renderStatus(ctx), 5000);
+    if (typeof intervalId.unref === "function") intervalId.unref();
+  }
 
-  pi.on("session_shutdown", async () => {
+  function stopUpdates(ctx?: any) {
     if (intervalId) {
       clearInterval(intervalId);
       intervalId = null;
     }
+    if (ctx) ctx.ui.setStatus("footsie", undefined);
+  }
+
+  pi.on("session_start", async (_event, ctx) => {
+    if (enabled) startUpdates(ctx);
+  });
+
+  pi.on("session_shutdown", async (_event, ctx) => {
+    stopUpdates(ctx);
   });
 
   pi.registerCommand("sysinfo", {
-    description: "Toggle custom system info footer (on/off)",
+    description: "Toggle system info footer status (on/off)",
     handler: async (args, ctx) => {
       const arg = args.trim().toLowerCase();
 
       if (arg === "on" || (arg === "" && !enabled)) {
         enabled = true;
-        registerFooter(ctx);
+        startUpdates(ctx);
         ctx.ui.notify("System info footer enabled", "info");
       } else if (arg === "off" || (arg === "" && enabled)) {
         enabled = false;
-        ctx.ui.setFooter(undefined);
-        if (intervalId) {
-          clearInterval(intervalId);
-          intervalId = null;
-        }
-        ctx.ui.notify("Default footer restored", "info");
+        stopUpdates(ctx);
+        ctx.ui.notify("System info footer disabled", "info");
       } else {
         ctx.ui.notify("Unknown argument. Use '/sysinfo on' or '/sysinfo off'.", "error");
       }

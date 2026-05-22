@@ -1,7 +1,7 @@
 {
   "name": "@ssweens/pi-footsie",
   "version": "1.0.0",
-  "description": "Rich system information in your TUI footer - displays hostname, active IP address, memory usage, load average, and OS platform",
+  "description": "Adds compact host/IP and a vulgarity-based frustration meter to Pi's existing footer status line",
   "type": "module",
   "main": "src/index.ts",
   "files": [
@@ -15,8 +15,7 @@
     "check": "echo 'nothing to check'"
   },
   "peerDependencies": {
-    "@mariozechner/pi-coding-agent": "*",
-    "@mariozechner/pi-tui": "*"
+    "@earendil-works/pi-coding-agent": "*"
   },
   "pi": {
     "extensions": [

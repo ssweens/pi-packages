@@ -56,3 +56,8 @@ For confirm/cancel in `ctx.ui.custom` dialogs, use the provided `keybindings` ma
   - Things explicitly designed to float (DOOM-overlay example)
 
 Do not try to make overlay mode look like inline mode. They’re different rendering models with different visual contracts.
+
+## Footer extension rule: add, don’t replace
+When a user asks for "extra footer info", default to `ctx.ui.setStatus()` (additive) instead of `ctx.ui.setFooter()` (replacement). Replacing the footer hides built-in token/model/status rows and is usually a UX regression.
+
+Also: when Pi reports a width crash, check `~/.pi/agent/pi-crash.log` line indices before assuming your component caused it — the offending line may come from another extension/log renderer.
