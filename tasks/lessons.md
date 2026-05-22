@@ -61,3 +61,6 @@ Do not try to make overlay mode look like inline mode. They’re different rende
 When a user asks for "extra footer info", default to `ctx.ui.setStatus()` (additive) instead of `ctx.ui.setFooter()` (replacement). Replacing the footer hides built-in token/model/status rows and is usually a UX regression.
 
 Also: when Pi reports a width crash, check `~/.pi/agent/pi-crash.log` line indices before assuming your component caused it — the offending line may come from another extension/log renderer.
+
+## Never capture extension ctx in long-lived async callbacks
+In Pi extensions, a `ctx` becomes stale after reload/session replacement. Do not retain command/session `ctx` inside `setInterval`, delayed promises, or other long-lived callbacks. Prefer event-driven updates (`session_start`, `input`, etc.) using fresh callback ctx, or stop timers before any reload/session replacement path.

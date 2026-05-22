@@ -47,7 +47,6 @@ function compactHost(hostname: string): string {
 
 export default function (pi: ExtensionAPI) {
   let enabled = true;
-  let intervalId: ReturnType<typeof setInterval> | null = null;
 
   function renderStatus(ctx: any) {
     if (!enabled) {
@@ -68,27 +67,20 @@ export default function (pi: ExtensionAPI) {
     ctx.ui.setStatus("footsie", text);
   }
 
-  function startUpdates(ctx: any) {
-    renderStatus(ctx);
-    if (intervalId) clearInterval(intervalId);
-    intervalId = setInterval(() => renderStatus(ctx), 5000);
-    if (typeof intervalId.unref === "function") intervalId.unref();
-  }
-
-  function stopUpdates(ctx?: any) {
-    if (intervalId) {
-      clearInterval(intervalId);
-      intervalId = null;
-    }
-    if (ctx) ctx.ui.setStatus("footsie", undefined);
+  function clearStatus(ctx: any) {
+    ctx.ui.setStatus("footsie", undefined);
   }
 
   pi.on("session_start", async (_event, ctx) => {
-    if (enabled) startUpdates(ctx);
+    if (enabled) renderStatus(ctx);
+  });
+
+  pi.on("input", async (_event, ctx) => {
+    if (enabled) renderStatus(ctx);
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
-    stopUpdates(ctx);
+    clearStatus(ctx);
   });
 
   pi.registerCommand("sysinfo", {
@@ -98,11 +90,11 @@ export default function (pi: ExtensionAPI) {
 
       if (arg === "on" || (arg === "" && !enabled)) {
         enabled = true;
-        startUpdates(ctx);
+        renderStatus(ctx);
         ctx.ui.notify("System info footer enabled", "info");
       } else if (arg === "off" || (arg === "" && enabled)) {
         enabled = false;
-        stopUpdates(ctx);
+        clearStatus(ctx);
         ctx.ui.notify("System info footer disabled", "info");
       } else {
         ctx.ui.notify("Unknown argument. Use '/sysinfo on' or '/sysinfo off'.", "error");

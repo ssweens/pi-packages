@@ -8,7 +8,7 @@ A Pi extension that adds compact host/IP and a vulgarity-based swear jar meter t
 
 - **Compact Host/IP** — Condensed `<host>@<ip>` indicator for fast environment awareness.
 - **Swear Jar Meter** — `swear jar:$X.XX`, increasing by **$0.25** per vulgarity occurrence found in user messages for the current session.
-- **Dynamic Refresh** — Status refreshes every **5 seconds**.
+- **Live Refresh** — Status refreshes on new input/session events.
 - **Default Footer Preserved** — Keeps Pi's built-in footer (tokens/model/statuses) and adds footsie as an extra status entry.
 - **On/Off Toggle** — Turn it off or on at any time using the `/sysinfo` slash command.
 

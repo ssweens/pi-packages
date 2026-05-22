@@ -6,6 +6,7 @@
 - [x] Remove custom line rendering path that can violate width constraints
 - [x] Update package imports/metadata/docs to match current Pi namespace and behavior
 - [ ] User validate in-session: default footer stats remain visible and `footsie` status appears/updates
+- [x] Fix stale extension context crash by removing interval-based captured ctx usage in `pi-footsie`
 
 ### Review (pi-footsie footer fix)
 - Crash line in `pi-crash.log` was from a long `pi-dynamic-models` log line, not `pi-footsie` footer rendering.
@@ -14,6 +15,7 @@
 - Result: default footer remains intact; host/IP appears as an extra status entry.
 - Updated per user request to reduce crowding: dropped os/mem/load/up and condensed host/IP.
 - Added frustration meter (`fr:<count>`) based on vulgarity usage in user messages.
+- Fixed stale ctx crash: removed 5s interval retaining old ctx; status now updates on `session_start` and `input` events with fresh ctx.
 - Updated imports to `@earendil-works/pi-coding-agent` and updated README/package description accordingly.
 
 
