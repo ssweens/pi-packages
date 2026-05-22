@@ -1,8 +1,8 @@
-# @ssweens/pi-sysinfo-footer
+# @ssweens/pi-footsie
 
 A Pi extension that replaces the default terminal TUI footer with a rich, real-time system information dashboard. 
 
-![pi-sysinfo-footer banner](https://raw.githubusercontent.com/ssweens/pi-packages/main/pi-sysinfo-footer/banner.png)
+![pi-footsie banner](https://raw.githubusercontent.com/ssweens/pi-packages/main/pi-footsie/banner.png)
 
 ## Features
 
@@ -21,7 +21,7 @@ Add it to your global settings file (`~/.pi/agent/settings.json`):
 ```json
 {
   "packages": [
-    "npm:@ssweens/pi-sysinfo-footer"
+    "npm:@ssweens/pi-footsie"
   ]
 }
 ```
@@ -30,7 +30,7 @@ Or install it from source by checking out the monorepo:
 
 ```bash
 cd ~/.pi/agent/extensions/
-ln -s /path/to/pi-packages/pi-sysinfo-footer .
+ln -s /path/to/pi-packages/pi-footsie .
 ```
 
 ## Usage

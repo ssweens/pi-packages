@@ -1,5 +1,5 @@
 {
-  "name": "@ssweens/pi-sysinfo-footer",
+  "name": "@ssweens/pi-footsie",
   "version": "1.0.0",
   "description": "Rich system information in your TUI footer - displays hostname, active IP address, memory usage, load average, and OS platform",
   "type": "module",
@@ -29,6 +29,7 @@
     "sysinfo",
     "system",
     "footer",
+    "footsie",
     "status",
     "ip",
     "hostname"
