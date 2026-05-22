@@ -1,0 +1,38 @@
+{
+  "name": "@ssweens/pi-sysinfo-footer",
+  "version": "1.0.0",
+  "description": "Rich system information in your TUI footer - displays hostname, active IP address, memory usage, load average, and OS platform",
+  "type": "module",
+  "main": "src/index.ts",
+  "files": [
+    "src/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "clean": "echo 'nothing to clean'",
+    "build": "echo 'nothing to build'",
+    "check": "echo 'nothing to check'"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-tui": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "sysinfo",
+    "system",
+    "footer",
+    "status",
+    "ip",
+    "hostname"
+  ],
+  "author": "ssweens",
+  "license": "MIT"
+}
