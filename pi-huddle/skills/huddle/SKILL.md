@@ -168,6 +168,18 @@ The `gather_input` tool is available in **both huddle mode and normal mode**. It
 - System: `sudo`, `kill`, `reboot`
 - Redirections: `>`, `>>` (except benign output suppression like `2>/dev/null` or `2>&1`)
 
+## Prior Session Research in Huddle
+
+When you need historical context from older pi runs:
+
+1. **If you have an exact session file path** (`.../session.jsonl`), call `session_query`.
+2. **If you need to find candidate sessions first**, use safe bash tools over `~/.pi/agent/sessions`:
+   - `fd session.jsonl ~/.pi/agent/sessions`
+   - `rg -n "<topic|error|file>" ~/.pi/agent/sessions`
+   - Optionally refine interactively with `fzf`
+   - Use `bat`, `head`, `tail` for quick inspection
+3. **Then query surgically** using `session_query(sessionPath, question)` rather than loading giant logs into context.
+
 ## Tips
 
 1. **Use `gather_input` early** — clarify intent before exploring, not after

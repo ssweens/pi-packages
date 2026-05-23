@@ -14,6 +14,7 @@ Huddle mode for [pi](https://github.com/badlogic/pi-mono). Safe exploration with
 
 - **Huddle mode** — read-only by default; writes require your approval
 - **`gather_input` tool** — rich TUI dialog for structured elicitation (available in all modes)
+- **`session_query` tool** — targeted lookup into prior `.jsonl` sessions without loading full history
 - **Permission gates** — approve or deny individual edit/write operations inline
 - **Bash allowlist** — safe commands execute freely, destructive ones prompt first
 - **Three commands** — `/huddle` (primary), `/holup`, `/plan` all toggle the mode
@@ -185,8 +186,20 @@ Enter to select · Tab/↑↓ to navigate · Esc to cancel
 
 ### Safe Bash Commands (No Prompt)
 
-`cat`, `head`, `tail`, `grep`, `find`, `rg`, `fd`, `ls`, `pwd`, `tree`,
+`cat`, `head`, `tail`, `grep`, `find`, `rg`, `fd`, `fzf`, `bat`, `ls`, `pwd`, `tree`,
 `git status`, `git log`, `git diff`, `git branch`, `npm list`, `curl`, `jq`
+
+### Prior Session Research Workflow
+
+Use this two-step approach when you need historical context:
+
+1. **Find candidate sessions** (safe bash):
+   - `fd session.jsonl ~/.pi/agent/sessions`
+   - `rg -n "<keyword|error|path>" ~/.pi/agent/sessions`
+   - Optional narrowing with `fzf`; inspect with `bat`, `head`, `tail`
+2. **Query surgically** with `session_query(sessionPath, question)`
+
+This keeps context small and avoids dumping huge session files into the prompt.
 
 Benign output redirections like `2>/dev/null` and `2>&1` are also allowed.
 
@@ -204,20 +217,23 @@ pi-huddle/
 ├── package.json          # Package manifest
 ├── extensions/
 │   ├── index.ts          # Commands, shortcuts, gather_input tool, permission gates
+│   ├── session-query.ts  # session_query tool for querying prior sessions
 │   └── lib/
 │       ├── gather-input-dialog.ts  # TUI dialog component
 │       └── utils.ts            # Bash command classification
 ├── skills/
-│   └── huddle/
-│       └── SKILL.md      # Teaches the agent huddle mode behaviour
+│   ├── huddle/
+│   │   └── SKILL.md      # Teaches the agent huddle mode behaviour
+│   └── pi-session-query/
+│       └── SKILL.md      # Teaches when/how to use session_query
 ├── LICENSE
 └── README.md
 ```
 
 Two pi primitives:
 
-- **Extension** — registers `/huddle`, `/holup`, `/plan` commands, `Alt+H` shortcut, `gather_input` tool, permission gates, and context injection
-- **Skill** — documents huddle mode and `gather_input` behaviour so the agent knows how to use them
+- **Extension** — registers `/huddle`, `/holup`, `/plan` commands, `Alt+H` shortcut, `gather_input` + `session_query` tools, permission gates, and context injection
+- **Skills** — document huddle behavior and prior-session querying patterns so the agent uses them correctly
 
 ## Development
 

@@ -8,7 +8,7 @@ disable-model-invocation: true
 
 Query pi session files to retrieve context from past conversations.
 
-This skill is automatically invoked in handed-off sessions when you need to look up details from the parent session.
+This skill is automatically invoked whenever you need to look up details from prior sessions (handoff parent sessions or general historical runs).
 
 ## When to Use
 
@@ -16,17 +16,29 @@ This skill is automatically invoked in handed-off sessions when you need to look
 - When you need specific details not included in the handoff summary
 - When you need to verify a decision or approach from the parent or an ancestor session
 - When you need file paths or code snippets from earlier work
+- When the user asks "what did we do before?" and you need to mine `~/.pi/agent/sessions`
 
 ## Usage
 
-Use the `session_query` tool:
+### Step 1: Find candidate sessions (if path is unknown)
 
+Use safe shell search over `~/.pi/agent/sessions`:
+
+```bash
+fd session.jsonl ~/.pi/agent/sessions
+rg -n "oauth|timeout|pi-footsie" ~/.pi/agent/sessions
 ```
+
+Optionally narrow interactively with `fzf` and inspect with `bat`, `head`, or `tail`.
+
+### Step 2: Ask targeted questions with `session_query`
+
+```ts
 session_query(sessionPath, question)
 ```
 
 **Parameters:**
-- `sessionPath`: Full path to the session file (provided in the "Parent session:" line)
+- `sessionPath`: Full path to the session file (provided in the "Parent session:" line or discovered via `fd`/`rg`)
 - `question`: Specific question about that session
 
 ## Examples
@@ -50,8 +62,9 @@ session_query("/path/to/session.jsonl", "Summarize the key decisions made")
 1. **Be specific** - Ask targeted questions for better results
 2. **Reference code** - Ask about specific files or functions when relevant
 3. **Verify before assuming** - If the handoff summary seems incomplete, query for details
-4. **Don't over-query** - The handoff summary should have most context; query only when needed
+4. **Don't over-query** - Query only what you need; avoid broad "summarize everything" asks
 5. **Check ancestors** - If the parent session doesn't have the info, try ancestor sessions listed in the handoff
+6. **Search first, query second** - Use `fd`/`rg` to locate likely sessions, then `session_query` for precise retrieval
 
 ## How It Works
 

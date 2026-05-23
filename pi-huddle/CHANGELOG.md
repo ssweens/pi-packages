@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.0] - 2026-05-22
+### Added
+- `session_query` tool in `pi-huddle/extensions/session-query.ts` for targeted retrieval from prior `.jsonl` sessions (same workflow used in `pi-handoff` and `pi-compaxxt`).
+- Explicit prior-session retrieval guidance in huddle's injected context: use `session_query` when path is known; otherwise discover sessions via `fd`/`rg` in `~/.pi/agent/sessions`, optionally narrow with `fzf` and inspect with `bat/head/tail`.
+
+### Changed
+- Expanded `skills/huddle/SKILL.md` and `skills/pi-session-query/SKILL.md` with a concrete search-then-query workflow for historical context lookup.
+- Added `fzf` to huddle's safe read-only bash allowlist.
+
 ## [1.4.0] - 2026-05-14
 ### Added
 - Exclusion-list tool filtering for huddle mode. The previous `HUDDLE_MODE_TOOLS` / `NORMAL_MODE_TOOLS` allowlists wiped out any tools registered by other extensions (web_search, web_fetch, image-gen, etc.) whenever the user toggled huddle. Replaced with `HUDDLE_EXCLUDED_TOOLS` (empty by default) plus snapshot/restore of `pi.getActiveTools()`. With an empty exclusion list, huddle no longer touches the active tool set at all — permission gates already cover edit/write/bash via inline dialogs.

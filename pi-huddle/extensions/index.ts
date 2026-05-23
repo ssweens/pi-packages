@@ -363,6 +363,14 @@ Other bash commands will prompt for permission.
 
 Use the gather_input tool for structured elicitation — gathering requirements, clarifying ambiguity, and getting decisions from the user.
 
+Prior-session retrieval guidance:
+- If you already have a specific session file path, use the `session_query` tool.
+- If you need to discover likely session files first, use safe bash search over `~/.pi/agent/sessions`:
+  - `fd session.jsonl ~/.pi/agent/sessions`
+  - `rg -n "keyword" ~/.pi/agent/sessions`
+  - optionally narrow/inspect with `fzf`, `head`, `tail`, `bat`.
+- Prefer targeted lookups over loading huge files into context.
+
 You can create a plan AND execute it. The user controls approval per-step via the permission gates, not by toggling modes.`,
 					display: false,
 				},

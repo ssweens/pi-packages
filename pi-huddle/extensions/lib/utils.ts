@@ -92,6 +92,7 @@ const SAFE_PATTERNS = [
 	/^\s*rg\b/,
 	/^\s*fd\b/,
 	/^\s*bat\b/,
+	/^\s*fzf\b/,
 	/^\s*exa\b/,
 ];
 

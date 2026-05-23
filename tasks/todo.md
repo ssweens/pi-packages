@@ -1,5 +1,20 @@
 # Tasks
 
+## Current Task: add prior-session retrieval workflow to pi-huddle
+- [x] Add `session_query` tool to `pi-huddle` extension set
+- [x] Add explicit huddle system-guidance for prior-session retrieval (`session_query` + `fd/rg/fzf/bat` over `~/.pi/agent/sessions`)
+- [x] Expand huddle docs/skills with a concrete search-then-query workflow
+- [x] Allow `fzf` as a safe bash command in huddle mode
+- [ ] User validate in-session: agent uses `fd/rg` discovery + `session_query` retrieval path when asked about prior sessions
+
+### Review (pi-huddle prior sessions)
+- Added `pi-huddle/extensions/session-query.ts` registering the `session_query` tool (same behavior as handoff/compaxxt).
+- Updated huddle injected context (`before_agent_start`) with explicit guidance:
+  - use `session_query` when session path is known
+  - otherwise search `~/.pi/agent/sessions` with `fd`/`rg`, optionally narrow via `fzf` and inspect with `bat/head/tail`.
+- Updated `skills/huddle/SKILL.md` and `skills/pi-session-query/SKILL.md` with the search-then-query workflow.
+- Updated README to document `session_query`, safe `fzf` usage, and the prior-session research workflow.
+
 ## Current Task: fix pi-footsie footer behavior and width safety
 - [x] Investigate crash report and identify whether pi-footsie caused the over-width render
 - [x] Preserve default footer info by switching from `setFooter()` replacement to additive `setStatus()`
