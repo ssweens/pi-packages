@@ -1,0 +1,39 @@
+# ai harnesses
+/.claude/*
+!/.claude/settings.json
+/.codex
+/.opencode
+/.pi/
+/.pi-lens/
+/.ralph/
+/.serena
+
+# gsd
+/.agent/
+
+# build output
+/dist/
+/build/
+/coverage/
+
+# dependencies
+node_modules/
+
+# logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# mac
+.DS_Store
+
+# package artifacts
+*.tgz
+
+# tmp
+/tmp/
+
+# worktrees
+/.worktrees/

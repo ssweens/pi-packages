@@ -1,5 +1,30 @@
 # Tasks
 
+## Current Task: add `pi-claude-marketplace` and enable SSH git repo URLs
+- [x] Fork/add `pi-claude-marketplace` into this `pi-packages` workspace
+- [x] Locate and update git repository URL validation/parsing to accept SSH forms (e.g. `git@github.com:owner/repo.git`, `ssh://git@...`)
+- [x] Add/adjust tests covering both HTTPS and SSH git URL cases
+- [x] Run quality gates for the package (tests/lint/typecheck/build as available)
+- [x] Update package docs (README and any relevant docs) to document SSH support
+- [x] Update `tasks/todo.md` review section with outcome and verification notes
+
+### Review (pi-claude-marketplace SSH git repo support)
+- Added `pi-claude-marketplace` from `https://github.com/acolomba/pi-claude-marketplace.git` into this workspace as a source directory (nested `.git` metadata removed so it can be tracked by `pi-packages`).
+- Updated `domain/source.ts` to accept GitHub SSH marketplace sources:
+  - `git@github.com:<owner>/<repo>[.git][#<ref>]`
+  - `ssh://git@github.com/<owner>/<repo>[.git][#<ref>]`
+- Preserved SSH clone URLs on parsed GitHub sources via `cloneUrl`, while HTTPS and `owner/repo` continue to use canonical HTTPS clone URLs.
+- Updated `marketplace add` to clone with `source.cloneUrl` when present.
+- Added native `git` fallback in `platform/git.ts` for SSH clone/fetch only; HTTPS remains on `isomorphic-git`.
+- Updated the shell-out architecture test so `child_process` is allowed only inside `platform/git.ts` for SSH transport.
+- Updated README docs and added `pi-claude-marketplace/TEST_COVERAGE.md`.
+- Verification:
+  - `npm run typecheck` ✅
+  - `npm run lint` ✅
+  - `npm run format:check` ✅
+  - `node --experimental-strip-types --test tests/domain/source.test.ts tests/orchestrators/marketplace/add.test.ts tests/architecture/no-shell-out.test.ts` ✅ (54 tests)
+  - `NODE_OPTIONS=--experimental-strip-types npm test` ✅ (1037 pass)
+
 ## Current Task: add prior-session retrieval workflow to pi-huddle
 - [x] Add `session_query` tool to `pi-huddle` extension set
 - [x] Add explicit huddle system-guidance for prior-session retrieval (`session_query` + `fd/rg/fzf/bat` over `~/.pi/agent/sessions`)
