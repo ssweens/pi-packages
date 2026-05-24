@@ -1,4 +1,3 @@
-import { parse } from "../vendor/aliou-sh/index.js";
 import { spawn } from "node:child_process";
 import {
   DynamicBorder,
@@ -19,18 +18,32 @@ import {
 } from "@mariozechner/pi-tui";
 import type { DangerousPattern, ResolvedConfig } from "../config";
 import { executeSubagent, resolveModel } from "../lib";
+import { extractBashPathCandidates } from "../utils/bash-paths";
 import { emitBlocked, emitDangerous } from "../utils/events";
 import {
   type CompiledPattern,
   compileCommandPatterns,
 } from "../utils/matching";
+import { isWithinBoundary } from "../utils/path";
 import { walkCommands, wordToString } from "../utils/shell-utils";
+import { parse } from "../vendor/aliou-sh/index.js";
 import {
   BUILTIN_KEYWORD_PATTERNS,
   BUILTIN_MATCHERS,
 } from "./dangerous-commands";
 
-
+/**
+ * Dangerous-pattern descriptions eligible for the cwd-scoped session bypass.
+ *
+ * Only reversible, file-level operations qualify. Disk-level ops, privilege
+ * escalation, and irreversible destruction never get a blanket cwd bypass.
+ */
+const CWD_BYPASS_ELIGIBLE_DESCRIPTIONS = new Set([
+  "recursive force delete", // rm -rf
+  "insecure recursive permissions", // chmod -R 777
+  "recursive ownership change", // chown -R
+  "branch switch or discard uncommitted changes", // git checkout
+]);
 /**
  * Permission gate that prompts user confirmation for dangerous commands.
  *
@@ -541,6 +554,33 @@ function findDangerousMatch(
   return undefined;
 }
 
+export async function isCwdScopedFileOperation(
+  command: string,
+  cwd: string,
+): Promise<boolean> {
+  const extracted = await extractBashPathCandidates(command, cwd);
+
+  // Bare "." (cwd itself) is a false negative of maybePathLike but is a
+  // valid cwd-scoped target for commands like `chmod -R 777 .` or `rm -rf .`.
+  let hasCwdDot = false;
+  try {
+    const { ast } = parse(command);
+    walkCommands(ast, (cmd) => {
+      const words = (cmd.words ?? []).map(wordToString);
+      if (words.some((w) => w === ".")) hasCwdDot = true;
+      return hasCwdDot;
+    });
+  } catch {
+    if (/(?:\s|^)\.(?:\s|$)/.test(command)) hasCwdDot = true;
+  }
+
+  const absolutePaths = hasCwdDot ? [...extracted, cwd] : extracted;
+  return (
+    absolutePaths.length > 0 &&
+    absolutePaths.every((absPath) => isWithinBoundary(absPath, cwd))
+  );
+}
+
 export function setupPermissionGateHook(
   pi: ExtensionAPI,
   config: ResolvedConfig,
@@ -566,6 +606,10 @@ export function setupPermissionGateHook(
 
   // Track commands allowed for this session only (in-memory)
   const sessionAllowedCommands = new Set<string>();
+
+  // When enabled by explicit user choice, bypass dangerous-command prompts for
+  // file-based bash operations whose extracted file targets are all inside cwd.
+  let sessionAllowCwdFileOps = false;
 
   // Captured sudo execution output keyed by tool call id.
   // We inject this via tool_result after replacing the original bash command with a noop.
@@ -645,6 +689,19 @@ export function setupPermissionGateHook(
 
     const { description, pattern: rawPattern } = match;
 
+    // Check session-wide cwd-scoped file-operation allowance.
+    // Only eligible for reversible, file-level operations (rm, chmod, chown,
+    // git checkout). Never for disk ops, privilege escalation, or shred.
+    const cwdBypassEligible =
+      CWD_BYPASS_ELIGIBLE_DESCRIPTIONS.has(description);
+    if (
+      sessionAllowCwdFileOps &&
+      cwdBypassEligible &&
+      (await isCwdScopedFileOperation(command, ctx.cwd))
+    ) {
+      return;
+    }
+
     // Emit dangerous event (presenter will play sound)
     emitDangerous(pi, { command, description, pattern: rawPattern });
 
@@ -678,7 +735,15 @@ export function setupPermissionGateHook(
         }
       }
 
-      type ConfirmResult = "allow" | "allow-session" | "deny";
+      const canGrantCwdFileOpsSession =
+        cwdBypassEligible &&
+        (await isCwdScopedFileOperation(command, ctx.cwd));
+
+      type ConfirmResult =
+        | "allow"
+        | "allow-session"
+        | "allow-cwd-fileops-session"
+        | "deny";
 
       const result = await ctx.ui.custom<ConfirmResult>(
         (_tui, theme, kb, done) => {
@@ -743,7 +808,9 @@ export function setupPermissionGateHook(
             new Text(
               theme.fg(
                 "dim",
-                "y/enter: allow • a: allow for session • n/esc: deny",
+                canGrantCwdFileOpsSession
+                  ? "y/enter: allow • a: allow for session • c: allow cwd file ops this session • n/esc: deny"
+                  : "y/enter: allow • a: allow for session • n/esc: deny",
               ),
               1,
               0,
@@ -772,6 +839,11 @@ export function setupPermissionGateHook(
                 done("allow");
               } else if (data === "a" || data === "A") {
                 done("allow-session");
+              } else if (
+                canGrantCwdFileOpsSession &&
+                (data === "c" || data === "C")
+              ) {
+                done("allow-cwd-fileops-session");
               } else if (cancel || data === "n" || data === "N") {
                 done("deny");
               }
@@ -784,6 +856,14 @@ export function setupPermissionGateHook(
         // Add command to session-allowed set (in-memory only)
         sessionAllowedCommands.add(command);
         ctx.ui.notify("Command allowed for this session", "info");
+      }
+
+      if (result === "allow-cwd-fileops-session") {
+        sessionAllowCwdFileOps = true;
+        ctx.ui.notify(
+          "CWD-scoped file operations allowed for this session",
+          "info",
+        );
       }
 
       if (result === "deny") {

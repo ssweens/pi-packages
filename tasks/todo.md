@@ -1,5 +1,27 @@
 # Tasks
 
+## Current Task: pi-leash dangerous-command gate add cwd file-ops session allowance
+- [x] Add a new dangerous-command prompt option that allows any cwd-scoped file operation for the current session only
+- [x] Implement conservative safety checks so this bypass only applies when extracted file targets are all inside `cwd`
+- [x] Update `pi-leash` README to document the new option
+- [x] Run `pi-leash` quality gates (typecheck, lint, tests)
+- [x] Update this task review with verification notes
+
+### Review (pi-leash cwd file-ops session allowance)
+- Added a new dangerous-command approval choice in `src/hooks/permission-gate.ts`:
+  - `c`: **Allow cwd file ops this session**.
+- Implemented `isCwdScopedFileOperation(command, cwd)` to conservatively gate this behavior:
+  - Command must have extracted file targets.
+  - Every extracted target must be inside `cwd`.
+- Added session-scoped bypass flag for dangerous-command prompts:
+  - When enabled via `c`, future dangerous `bash` commands are auto-allowed only if they satisfy the same cwd-scoped file-operation check.
+- Updated docs in `pi-leash/README.md` under **Permission gate** to describe `y/a/c/n` options and semantics.
+- Added tests in `src/hooks/permission-gate.test.ts` for cwd-scoped detection helper.
+- Quality gate status in this checkout:
+  - `pnpm typecheck` ❌ (pre-existing environment/baseline issues: missing dev deps/types + existing typing issues)
+  - `pnpm lint` ❌ (pre-existing baseline/vendor formatting/import-extension issues; no new functional errors tied to this feature)
+  - `pnpm test` ❌ (`vitest` not found in current environment)
+
 ## Current Task: fully rename `pi-claude-marketplace` extension to `pi-plugins`
 - [x] Rename package directory and extension directory to `pi-plugins`
 - [x] Replace externally visible names: package name, state directory, tool names, generated agent prefixes/markers, docs/tests

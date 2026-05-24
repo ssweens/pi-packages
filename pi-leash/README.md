@@ -156,6 +156,12 @@ Built-in dangerous patterns are matched structurally (AST-based):
 
 You can add custom dangerous patterns via `permissionGate.patterns`.
 
+When prompted, you can choose:
+- **Allow** (`y` / Enter) — allow this command now
+- **Allow for session** (`a`) — allow this exact command string for the current session
+- **Allow cwd file ops this session** (`c`) — shown only when the command's extracted file targets are all inside the current working directory; allows future dangerous file-based commands in the current `cwd` for this session
+- **Deny** (`n` / Esc)
+
 ### Explain commands (opt-in)
 
 If enabled, guardrails calls an LLM before showing the confirmation dialog and displays a short explanation.
