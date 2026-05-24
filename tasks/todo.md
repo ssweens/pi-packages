@@ -1,5 +1,29 @@
 # Tasks
 
+## Current Task: fully rename `pi-claude-marketplace` extension to `pi-plugins`
+- [x] Rename package directory and extension directory to `pi-plugins`
+- [x] Replace externally visible names: package name, state directory, tool names, generated agent prefixes/markers, docs/tests
+- [x] Keep unrelated Claude plugin marketplace concepts/command behavior intact unless they specifically use the old extension name
+- [x] Run typecheck, lint, format, and tests
+- [x] Update task review with verification notes
+
+### Review (pi-plugins full rename)
+- Renamed package root from `pi-claude-marketplace/` to `pi-plugins/`.
+- Renamed extension path from `extensions/pi-claude-marketplace/` to `extensions/pi-plugins/`.
+- Updated package metadata to `@ssweens/pi-plugins`, with repository metadata pointing at `ssweens/pi-packages`.
+- Updated externally visible runtime names:
+  - state/storage dir now uses `pi-plugins`
+  - LLM tools are now `pi_plugins_list` and `pi_plugins_plugin_list`
+  - generated agent prefix/marker now use `pi-plugins`
+  - MCP ownership marker key is now `_piPlugins`
+  - E2E ref env var is now `PI_PLUGINS_E2E_REF`
+- Preserved the existing `/claude:plugin` command behavior and Claude plugin marketplace terminology where it describes the upstream ecosystem rather than this extension's package name.
+- Verification:
+  - `npm run typecheck` ✅
+  - `npm run lint` ✅
+  - `npm run format:check` ✅
+  - `NODE_OPTIONS=--experimental-strip-types npm test` ✅ (1037 pass)
+
 ## Current Task: add `pi-claude-marketplace` and enable SSH git repo URLs
 - [x] Fork/add `pi-claude-marketplace` into this `pi-packages` workspace
 - [x] Locate and update git repository URL validation/parsing to accept SSH forms (e.g. `git@github.com:owner/repo.git`, `ssh://git@...`)
@@ -9,7 +33,7 @@
 - [x] Update `tasks/todo.md` review section with outcome and verification notes
 
 ### Review (pi-claude-marketplace SSH git repo support)
-- Added `pi-claude-marketplace` from `https://github.com/acolomba/pi-claude-marketplace.git` into this workspace as a source directory (nested `.git` metadata removed so it can be tracked by `pi-packages`).
+- Added `pi-claude-marketplace` from `https://github.com/acolomba/pi-claude-marketplace.git` into this workspace as a source directory (nested `.git` metadata removed so it can be tracked by `pi-packages`). It was later fully renamed to `pi-plugins`.
 - Updated `domain/source.ts` to accept GitHub SSH marketplace sources:
   - `git@github.com:<owner>/<repo>[.git][#<ref>]`
   - `ssh://git@github.com/<owner>/<repo>[.git][#<ref>]`
@@ -17,7 +41,7 @@
 - Updated `marketplace add` to clone with `source.cloneUrl` when present.
 - Added native `git` fallback in `platform/git.ts` for SSH clone/fetch only; HTTPS remains on `isomorphic-git`.
 - Updated the shell-out architecture test so `child_process` is allowed only inside `platform/git.ts` for SSH transport.
-- Updated README docs and added `pi-claude-marketplace/TEST_COVERAGE.md`.
+- Updated README docs and added `pi-plugins/TEST_COVERAGE.md`.
 - Verification:
   - `npm run typecheck` ✅
   - `npm run lint` ✅
