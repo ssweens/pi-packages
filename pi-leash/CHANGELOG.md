@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.1] - 2026-05-28
+### Added
+- **Dangerous-command trust windows** in the permission prompt:
+  - `w`: allow eligible dangerous commands for 5 minutes
+  - `s`: allow eligible dangerous commands for the current session
+- **Eligible-category guardrails** for trust windows and cwd session bypass. These bypasses now apply only to non-evil, cwd-scoped file-operation categories (`rm -rf`, recursive insecure `chmod`, recursive `chown`). Privilege escalation, disk/filesystem tooling, `shred`, and dangerous container flags are never included.
+- **Heredoc-aware dangerous matching** for shell invokers (`sh`, `bash`, etc.) using heredoc scripts.
+
+### Changed
+- Dangerous-command analysis now searches complex shell structures more consistently (including pipelines and shell heredoc script payloads) before deciding bypass eligibility.
+- Dangerous-command approval UI now includes explicit **Reason**, **Source**, and **Trigger** fields so users can see exactly what matched and why.
+
 ## [1.2.0] - 2026-05-19
 ### Added
 - **Sudo password retries** — mistyped passwords no longer cause immediate execution failure. Added a password retry loop that matches native `sudo` behavior (3 attempts by default). On a failed password:

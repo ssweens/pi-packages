@@ -159,8 +159,24 @@ You can add custom dangerous patterns via `permissionGate.patterns`.
 When prompted, you can choose:
 - **Allow** (`y` / Enter) — allow this command now
 - **Allow for session** (`a`) — allow this exact command string for the current session
-- **Allow cwd file ops this session** (`c`) — shown only when the command's extracted file targets are all inside the current working directory; allows future dangerous file-based commands in the current `cwd` for this session
+- **Allow cwd file ops this session** (`c`) — shown only for cwd-scoped, allowlisted file operations; allows future dangerous file-based commands in the current `cwd` for this session
+- **Allow eligible cmds for 5 min** (`w`) — shown only for cwd-scoped, allowlisted operations; temporarily bypasses prompts for similar eligible dangerous commands
+- **Allow eligible cmds for session** (`s`) — same as above, but until session end
 - **Deny** (`n` / Esc)
+
+`w`/`s`/`c` are intentionally restricted to non-evil categories only:
+- `rm -rf`
+- `chmod -R ...` (world-writable patterns)
+- `chown -R ...`
+
+They do **not** bypass for privilege escalation, disk/filesystem tools (`sudo`, `dd`, `mkfs`, `wipefs`, partitioning, etc.), `shred`, or dangerous container flags.
+
+Danger detection and cwd-scope checks parse full shell structure (AST), including pipelines and shell heredoc payloads (e.g. `bash <<'EOF' ... EOF`).
+
+The approval prompt now shows:
+- **Reason** (danger category)
+- **Source** (`built-in structural`, `custom pattern`, or `fallback substring (parse failed)`)
+- **Trigger** (exact token/pattern that matched, e.g. `rm -rf`)
 
 ### Explain commands (opt-in)
 

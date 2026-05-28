@@ -1,5 +1,48 @@
 # Tasks
 
+## Current Task: pi-leash dangerous command trust windows + heredoc/pipeline detection
+- [x] Add dangerous-command prompt options for temporary/session trust windows (`w` 5 minutes, `s` session)
+- [x] Restrict trust-window bypass to non-evil allowlisted categories only
+- [x] Parse dangerous content across complex commands (pipelines and shell heredoc scripts) for matching and bypass eligibility
+- [x] Update README and CHANGELOG for the new permission-gate options and semantics
+- [x] Run pi-leash quality gates (typecheck/lint/tests) and record environment constraints
+- [x] Update this task review section
+
+### Review (pi-leash trust windows + complex shell parsing)
+- Added new dangerous-command prompt options in `pi-leash/src/hooks/permission-gate.ts`:
+  - `w`: allow eligible dangerous commands for 5 minutes
+  - `s`: allow eligible dangerous commands for the current session
+- Added in-memory trust state:
+  - `allowEligibleDangerousUntil` (5-minute TTL window)
+  - `allowEligibleDangerousForSession` (session-long)
+- Restricted bypass eligibility to a non-evil allowlist only:
+  - `recursive force delete` (`rm -rf`)
+  - `insecure recursive permissions` (`chmod -R ...` world-writable)
+  - `recursive ownership change` (`chown -R`)
+- Preserved strict exclusions from trust bypass:
+  - privilege escalation (`sudo`/`doas`/`pkexec`)
+  - disk/filesystem/partition tools
+  - `shred`
+  - container-escape patterns
+- Replaced single-match dangerous detection with multi-match collection:
+  - `findDangerousMatches(...)` now collects all matching dangerous signals
+  - recursive structural analysis of shell heredoc payloads for shell interpreters (`sh`, `bash`, etc.) with bounded depth
+- Extended cwd-scope detection (`isCwdScopedFileOperation`) to account for:
+  - pipelines
+  - shell heredoc script bodies (recursive)
+  - bare `.` target handling
+- Docs updated:
+  - `pi-leash/README.md`: new `w`/`s` options + eligibility/exclusion semantics + complex shell parsing note
+  - `pi-leash/CHANGELOG.md`: added `1.2.1` entry
+- Dangerous-command prompt transparency improved:
+  - now shows **Reason**, **Source**, and **Trigger** so users can see exactly what matched (`rm -rf`, custom regex, or parse-fallback pattern)
+- Tests updated:
+  - `pi-leash/src/hooks/permission-gate.test.ts` now covers pipeline + heredoc cwd-scope cases
+- Quality gates (environment baseline in this checkout):
+  - `pnpm typecheck` ❌ (pre-existing missing vitest/types + existing unrelated type issues)
+  - `pnpm lint` ❌ (pre-existing baseline lint issues in vendored/untouched files; touched file still includes existing vendored-import extension warning)
+  - `pnpm test` ❌ (`vitest` not installed in current environment)
+
 ## Current Task: pi-leash dangerous-command gate add cwd file-ops session allowance
 - [x] Add a new dangerous-command prompt option that allows any cwd-scoped file operation for the current session only
 - [x] Implement conservative safety checks so this bypass only applies when extracted file targets are all inside `cwd`

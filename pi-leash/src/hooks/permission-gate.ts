@@ -42,7 +42,23 @@ const CWD_BYPASS_ELIGIBLE_DESCRIPTIONS = new Set([
   "recursive force delete", // rm -rf
   "insecure recursive permissions", // chmod -R 777
   "recursive ownership change", // chown -R
-  "branch switch or discard uncommitted changes", // git checkout
+]);
+
+const TRUST_WINDOW_ELIGIBLE_DESCRIPTIONS = new Set([
+  "recursive force delete", // rm -rf
+  "insecure recursive permissions", // chmod -R 777
+  "recursive ownership change", // chown -R
+]);
+
+const TRUST_WINDOW_MS = 5 * 60 * 1000;
+const HEREDOC_MAX_PARSE_DEPTH = 2;
+const HEREDOC_SHELL_INTERPRETERS = new Set([
+  "sh",
+  "bash",
+  "zsh",
+  "ksh",
+  "dash",
+  "ash",
 ]);
 /**
  * Permission gate that prompts user confirmation for dangerous commands.
@@ -52,9 +68,15 @@ const CWD_BYPASS_ELIGIBLE_DESCRIPTIONS = new Set([
  * Allowed/auto-deny patterns match against the raw command string.
  */
 
+type DangerMatchSource =
+  | "builtin-structural"
+  | "custom-pattern"
+  | "fallback-substring";
+
 interface DangerMatch {
   description: string;
   pattern: string;
+  source: DangerMatchSource;
 }
 
 interface SudoExecutionResult {
@@ -479,55 +501,168 @@ async function explainCommand(
 /**
  * Check a parsed command against built-in structural matchers.
  */
+function triggerForBuiltinDescription(description: string): string {
+  switch (description) {
+    case "recursive force delete":
+      return "rm -rf";
+    case "secure file overwrite":
+      return "shred";
+    case "superuser command":
+      return "sudo";
+    case "privileged command execution":
+      return "doas/pkexec";
+    case "disk write operation":
+      return "dd of=";
+    case "filesystem format":
+      return "mkfs";
+    case "filesystem signature wipe":
+      return "wipefs";
+    case "block device discard":
+      return "blkdiscard";
+    case "disk partitioning":
+      return "fdisk/parted/sgdisk";
+    case "insecure recursive permissions":
+      return "chmod -R 777";
+    case "recursive ownership change":
+      return "chown -R";
+    case "container with privileged mode":
+      return "docker/podman --privileged";
+    case "container with host PID namespace":
+      return "docker/podman --pid=host";
+    case "container with host network":
+      return "docker/podman --network=host";
+    case "container with host user namespace":
+      return "docker/podman --userns=host";
+    case "container with host UTS namespace":
+      return "docker/podman --uts=host";
+    case "container with host IPC":
+      return "docker/podman --ipc=host";
+    case "container with root filesystem mount":
+      return "docker/podman root mount";
+    case "container with docker socket access":
+      return "docker/podman socket mount";
+    case "branch switch or discard uncommitted changes":
+      return "git checkout";
+    default:
+      return description;
+  }
+}
+
 function checkBuiltinDangerous(words: string[]): DangerMatch | undefined {
   if (words.length === 0) return undefined;
   for (const matcher of BUILTIN_MATCHERS) {
-    const desc = matcher(words);
-    if (desc) return { description: desc, pattern: "(structural)" };
+    const description = matcher(words);
+    if (description) {
+      return {
+        description,
+        pattern: triggerForBuiltinDescription(description),
+        source: "builtin-structural",
+      };
+    }
   }
   return undefined;
 }
 
 /**
- * Check a command string against dangerous patterns.
- *
- * When useBuiltinMatchers is true (default patterns): tries structural AST
- * matching first, falls back to substring match on parse failure.
- *
- * When useBuiltinMatchers is false (customPatterns replaced defaults): skips
- * structural matchers entirely, uses compiled patterns (substring/regex)
- * against the raw command string.
+ * Return a normalized command name (basename, lowercase) for shell invoker checks.
  */
-function findDangerousMatch(
+function normalizeCommandName(raw: string | undefined): string {
+  if (!raw) return "";
+  const slash = Math.max(raw.lastIndexOf("/"), raw.lastIndexOf("\\"));
+  return (slash >= 0 ? raw.slice(slash + 1) : raw).toLowerCase();
+}
+
+/**
+ * Collect structural dangerous matches, including shell heredoc payloads like:
+ * `bash <<'EOF' ... EOF`.
+ */
+function collectBuiltinDangerousMatches(
+  command: string,
+  depth = 0,
+): DangerMatch[] {
+  const { ast } = parse(command);
+  const matches: DangerMatch[] = [];
+  const seen = new Set<string>();
+
+  const addMatch = (match: DangerMatch) => {
+    const key = `${match.description}::${match.pattern}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    matches.push(match);
+  };
+
+  walkCommands(ast, (cmd) => {
+    const words = (cmd.words ?? []).map(wordToString);
+    const result = checkBuiltinDangerous(words);
+    if (result) addMatch(result);
+
+    if (depth >= HEREDOC_MAX_PARSE_DEPTH) return false;
+
+    const commandName = normalizeCommandName(words[0]);
+    if (!HEREDOC_SHELL_INTERPRETERS.has(commandName)) return false;
+
+    for (const redir of cmd.redirects ?? []) {
+      if ((redir.op === "<<" || redir.op === "<<-") && redir.heredoc) {
+        const script = wordToString(redir.heredoc);
+        if (!script.trim()) continue;
+        try {
+          for (const nested of collectBuiltinDangerousMatches(
+            script,
+            depth + 1,
+          )) {
+            addMatch(nested);
+          }
+        } catch {
+          // Ignore unparsable heredoc payloads.
+        }
+      }
+    }
+
+    return false;
+  });
+
+  return matches;
+}
+
+/**
+ * Check a command string against dangerous patterns and return all matches.
+ *
+ * Structural built-ins are checked first (with heredoc recursion).
+ * Compiled patterns are then checked for fallback/extension behavior.
+ */
+function findDangerousMatches(
   command: string,
   compiledPatterns: CompiledPattern[],
   useBuiltinMatchers: boolean,
   fallbackPatterns: DangerousPattern[],
-): DangerMatch | undefined {
+): DangerMatch[] {
+  const matches: DangerMatch[] = [];
+  const seen = new Set<string>();
+
+  const add = (match: DangerMatch) => {
+    const key = `${match.description}::${match.pattern}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    matches.push(match);
+  };
+
   let parsedSuccessfully = false;
 
   if (useBuiltinMatchers) {
-    // Try structural matching first
+    // Try structural matching first.
     try {
-      const { ast } = parse(command);
       parsedSuccessfully = true;
-      let match: DangerMatch | undefined;
-      walkCommands(ast, (cmd) => {
-        const words = (cmd.words ?? []).map(wordToString);
-        const result = checkBuiltinDangerous(words);
-        if (result) {
-          match = result;
-          return true;
-        }
-        return false;
-      });
-      if (match) return match;
+      for (const m of collectBuiltinDangerousMatches(command)) add(m);
     } catch {
       // Parse failed -- fall back to raw substring matching of configured
       // patterns to preserve previous behavior.
       for (const p of fallbackPatterns) {
         if (command.includes(p.pattern)) {
-          return { description: p.description, pattern: p.pattern };
+          add({
+            description: p.description,
+            pattern: p.pattern,
+            source: "fallback-substring",
+          });
         }
       }
     }
@@ -547,37 +682,78 @@ function findDangerousMatch(
     }
 
     if (cp.test(command)) {
-      return { description: src.description, pattern: src.pattern };
+      add({
+        description: src.description,
+        pattern: src.regex ? `/${src.pattern}/` : src.pattern,
+        source: "custom-pattern",
+      });
     }
   }
 
-  return undefined;
+  return matches;
+}
+
+async function collectCwdScopeCandidates(
+  command: string,
+  cwd: string,
+  depth = 0,
+): Promise<{ absolutePaths: string[]; hasCwdDot: boolean }> {
+  const absolutePaths = await extractBashPathCandidates(command, cwd);
+
+  // Bare "." (cwd itself) is a false negative of maybePathLike but is a
+  // valid cwd-scoped target for commands like `chmod -R 777 .` or `rm -rf .`.
+  let hasCwdDot = false;
+
+  try {
+    const { ast } = parse(command);
+    const nestedScripts: string[] = [];
+
+    walkCommands(ast, (cmd) => {
+      const words = (cmd.words ?? []).map(wordToString);
+      if (words.some((w) => w === ".")) hasCwdDot = true;
+
+      if (depth >= HEREDOC_MAX_PARSE_DEPTH) return false;
+
+      const commandName = normalizeCommandName(words[0]);
+      if (!HEREDOC_SHELL_INTERPRETERS.has(commandName)) return false;
+
+      for (const redir of cmd.redirects ?? []) {
+        if ((redir.op === "<<" || redir.op === "<<-") && redir.heredoc) {
+          const script = wordToString(redir.heredoc);
+          if (script.trim()) nestedScripts.push(script);
+        }
+      }
+
+      return false;
+    });
+
+    for (const script of nestedScripts) {
+      const nested = await collectCwdScopeCandidates(script, cwd, depth + 1);
+      absolutePaths.push(...nested.absolutePaths);
+      if (nested.hasCwdDot) hasCwdDot = true;
+    }
+  } catch {
+    if (/(?:\s|^)\.(?:\s|$)/.test(command)) hasCwdDot = true;
+  }
+
+  return { absolutePaths, hasCwdDot };
 }
 
 export async function isCwdScopedFileOperation(
   command: string,
   cwd: string,
 ): Promise<boolean> {
-  const extracted = await extractBashPathCandidates(command, cwd);
+  const { absolutePaths, hasCwdDot } = await collectCwdScopeCandidates(
+    command,
+    cwd,
+  );
 
-  // Bare "." (cwd itself) is a false negative of maybePathLike but is a
-  // valid cwd-scoped target for commands like `chmod -R 777 .` or `rm -rf .`.
-  let hasCwdDot = false;
-  try {
-    const { ast } = parse(command);
-    walkCommands(ast, (cmd) => {
-      const words = (cmd.words ?? []).map(wordToString);
-      if (words.some((w) => w === ".")) hasCwdDot = true;
-      return hasCwdDot;
-    });
-  } catch {
-    if (/(?:\s|^)\.(?:\s|$)/.test(command)) hasCwdDot = true;
-  }
+  const resolvedPaths = hasCwdDot ? [...absolutePaths, cwd] : absolutePaths;
+  const uniquePaths = [...new Set(resolvedPaths)];
 
-  const absolutePaths = hasCwdDot ? [...extracted, cwd] : extracted;
   return (
-    absolutePaths.length > 0 &&
-    absolutePaths.every((absPath) => isWithinBoundary(absPath, cwd))
+    uniquePaths.length > 0 &&
+    uniquePaths.every((absPath) => isWithinBoundary(absPath, cwd))
   );
 }
 
@@ -610,6 +786,12 @@ export function setupPermissionGateHook(
   // When enabled by explicit user choice, bypass dangerous-command prompts for
   // file-based bash operations whose extracted file targets are all inside cwd.
   let sessionAllowCwdFileOps = false;
+
+  // Trust windows for repetitive, non-evil dangerous commands.
+  // - 5-minute window (`w`)
+  // - session-long window (`s`)
+  let allowEligibleDangerousForSession = false;
+  let allowEligibleDangerousUntil = 0;
 
   // Captured sudo execution output keyed by tool call id.
   // We inject this via tool_result after replacing the original bash command with a noop.
@@ -679,26 +861,46 @@ export function setupPermissionGateHook(
     }
 
     // Check dangerous patterns (structural + compiled)
-    const match = findDangerousMatch(
+    const matches = findDangerousMatches(
       command,
       compiledPatterns,
       useBuiltinMatchers,
       fallbackPatterns,
     );
-    if (!match) return;
+    if (matches.length === 0) return;
 
-    const { description, pattern: rawPattern } = match;
+    const primary = matches[0] as DangerMatch;
+    const description = primary.description;
+    const rawPattern = primary.pattern;
+    const sourceLabel =
+      primary.source === "builtin-structural"
+        ? "built-in structural"
+        : primary.source === "custom-pattern"
+          ? "custom pattern"
+          : "fallback substring (parse failed)";
+
+    const allCwdBypassEligible = matches.every((m) =>
+      CWD_BYPASS_ELIGIBLE_DESCRIPTIONS.has(m.description),
+    );
+    const allTrustWindowEligible = matches.every((m) =>
+      TRUST_WINDOW_ELIGIBLE_DESCRIPTIONS.has(m.description),
+    );
+
+    const cwdScopedDangerous = await isCwdScopedFileOperation(command, ctx.cwd);
 
     // Check session-wide cwd-scoped file-operation allowance.
-    // Only eligible for reversible, file-level operations (rm, chmod, chown,
-    // git checkout). Never for disk ops, privilege escalation, or shred.
-    const cwdBypassEligible =
-      CWD_BYPASS_ELIGIBLE_DESCRIPTIONS.has(description);
-    if (
-      sessionAllowCwdFileOps &&
-      cwdBypassEligible &&
-      (await isCwdScopedFileOperation(command, ctx.cwd))
-    ) {
+    if (sessionAllowCwdFileOps && allCwdBypassEligible && cwdScopedDangerous) {
+      return;
+    }
+
+    // Check trust windows for eligible non-evil dangerous commands.
+    const now = Date.now();
+    if (allowEligibleDangerousUntil <= now) {
+      allowEligibleDangerousUntil = 0;
+    }
+    const trustWindowActive =
+      allowEligibleDangerousForSession || allowEligibleDangerousUntil > now;
+    if (trustWindowActive && allTrustWindowEligible && cwdScopedDangerous) {
       return;
     }
 
@@ -736,13 +938,16 @@ export function setupPermissionGateHook(
       }
 
       const canGrantCwdFileOpsSession =
-        cwdBypassEligible &&
-        (await isCwdScopedFileOperation(command, ctx.cwd));
+        allCwdBypassEligible && cwdScopedDangerous;
+
+      const canGrantTrustWindows = allTrustWindowEligible && cwdScopedDangerous;
 
       type ConfirmResult =
         | "allow"
         | "allow-session"
         | "allow-cwd-fileops-session"
+        | "allow-trust-window"
+        | "allow-trust-session"
         | "deny";
 
       const result = await ctx.ui.custom<ConfirmResult>(
@@ -784,11 +989,13 @@ export function setupPermissionGateHook(
           );
           container.addChild(new Spacer(1));
           container.addChild(
-            new Text(
-              theme.fg("warning", `This command contains ${description}:`),
-              1,
-              0,
-            ),
+            new Text(theme.fg("warning", `Reason: ${description}`), 1, 0),
+          );
+          container.addChild(
+            new Text(theme.fg("dim", `Source: ${sourceLabel}`), 1, 0),
+          );
+          container.addChild(
+            new Text(theme.fg("dim", `Trigger: ${rawPattern}`), 1, 0),
           );
           container.addChild(new Spacer(1));
           container.addChild(
@@ -808,9 +1015,22 @@ export function setupPermissionGateHook(
             new Text(
               theme.fg(
                 "dim",
-                canGrantCwdFileOpsSession
-                  ? "y/enter: allow • a: allow for session • c: allow cwd file ops this session • n/esc: deny"
-                  : "y/enter: allow • a: allow for session • n/esc: deny",
+                [
+                  "y/enter: allow",
+                  "a: allow for session",
+                  canGrantCwdFileOpsSession
+                    ? "c: allow cwd file ops this session"
+                    : "",
+                  canGrantTrustWindows
+                    ? "w: allow eligible cmds for 5 min"
+                    : "",
+                  canGrantTrustWindows
+                    ? "s: allow eligible cmds for session"
+                    : "",
+                  "n/esc: deny",
+                ]
+                  .filter(Boolean)
+                  .join(" • "),
               ),
               1,
               0,
@@ -844,6 +1064,16 @@ export function setupPermissionGateHook(
                 (data === "c" || data === "C")
               ) {
                 done("allow-cwd-fileops-session");
+              } else if (
+                canGrantTrustWindows &&
+                (data === "w" || data === "W")
+              ) {
+                done("allow-trust-window");
+              } else if (
+                canGrantTrustWindows &&
+                (data === "s" || data === "S")
+              ) {
+                done("allow-trust-session");
               } else if (cancel || data === "n" || data === "N") {
                 done("deny");
               }
@@ -862,6 +1092,24 @@ export function setupPermissionGateHook(
         sessionAllowCwdFileOps = true;
         ctx.ui.notify(
           "CWD-scoped file operations allowed for this session",
+          "info",
+        );
+      }
+
+      if (result === "allow-trust-window") {
+        allowEligibleDangerousUntil = Date.now() + TRUST_WINDOW_MS;
+        allowEligibleDangerousForSession = false;
+        ctx.ui.notify(
+          "Eligible dangerous commands allowed for 5 minutes",
+          "info",
+        );
+      }
+
+      if (result === "allow-trust-session") {
+        allowEligibleDangerousForSession = true;
+        allowEligibleDangerousUntil = 0;
+        ctx.ui.notify(
+          "Eligible dangerous commands allowed for this session",
           "info",
         );
       }

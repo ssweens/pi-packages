@@ -29,20 +29,38 @@ describe("isCwdScopedFileOperation", () => {
   });
 
   it("returns true when target is bare '.' (cwd itself)", async () => {
-    await expect(
-      isCwdScopedFileOperation("chmod -R 777 .", cwd),
-    ).resolves.toBe(true);
+    await expect(isCwdScopedFileOperation("chmod -R 777 .", cwd)).resolves.toBe(
+      true,
+    );
   });
 
   it("returns true when bare '.' appears alongside other cwd paths", async () => {
-    await expect(
-      isCwdScopedFileOperation("rm -rf ./tmp .", cwd),
-    ).resolves.toBe(true);
+    await expect(isCwdScopedFileOperation("rm -rf ./tmp .", cwd)).resolves.toBe(
+      true,
+    );
   });
 
   it("returns false when only target is bare '..' (parent of cwd)", async () => {
     await expect(
       isCwdScopedFileOperation("chmod -R 777 ..", cwd),
+    ).resolves.toBe(false);
+  });
+
+  it("returns true for pipeline commands scoped to cwd", async () => {
+    await expect(
+      isCwdScopedFileOperation("chmod -R 777 . | cat", cwd),
+    ).resolves.toBe(true);
+  });
+
+  it("returns true for shell heredoc scripts scoped to cwd", async () => {
+    await expect(
+      isCwdScopedFileOperation("bash <<'EOF'\nrm -rf ./tmp\nEOF", cwd),
+    ).resolves.toBe(true);
+  });
+
+  it("returns false for shell heredoc scripts targeting outside cwd", async () => {
+    await expect(
+      isCwdScopedFileOperation("bash <<'EOF'\nrm -rf /tmp\nEOF", cwd),
     ).resolves.toBe(false);
   });
 });
