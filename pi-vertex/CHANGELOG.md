@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.10] - 2026-05-28
+### Fixed
+- Switched `registerProvider("vertex")` `apiKey` from legacy env-var shorthand (`"GOOGLE_CLOUD_PROJECT"`) to explicit env syntax (`"$GOOGLE_CLOUD_PROJECT"`). This removes deprecation warnings and future-proofs provider registration against upcoming removal of implicit env-var detection.
+
 ## [1.1.9] - 2026-05-19
 ### Fixed
 - **Gemini 3/3.5 default thinking preserved** — previously, if no reasoning effort level was specified, we silently overrode Gemini 3/3.5 models to use their lowest thinking level (`MINIMAL`). This severely degraded the intelligence of Gemini 3.5 Flash (defaulting it to no real reasoning/thinking) and Gemini 3 Pro/Flash. We now completely omit `thinkingConfig` when `options.reasoning` is undefined, allowing Gemini 3/3.5 models to use their native GA defaults (`MEDIUM` for 3.5 Flash, `HIGH` for others).

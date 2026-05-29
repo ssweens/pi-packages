@@ -90,8 +90,8 @@ export default function (pi: ExtensionAPI) {
     // Use a placeholder baseUrl (actual URLs built per-request based on model region)
     baseUrl: "https://aiplatform.googleapis.com",
 
-    // Use env var name for detection
-    apiKey: "GOOGLE_CLOUD_PROJECT",
+    // Use explicit env var reference
+    apiKey: "$GOOGLE_CLOUD_PROJECT",
 
     // API type varies by model
     api: "vertex-unified",
