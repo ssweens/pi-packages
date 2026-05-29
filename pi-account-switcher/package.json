@@ -1,0 +1,57 @@
+{
+  "name": "@hieplp/pi-account-switcher",
+  "version": "0.2.3",
+  "type": "module",
+  "description": "Pi extension for quickly switching between multiple accounts/API keys per provider.",
+  "license": "MIT",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi",
+    "account-switcher"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hieplp/pi-account-switcher.git"
+  },
+  "bugs": {
+    "url": "https://github.com/hieplp/pi-account-switcher/issues"
+  },
+  "homepage": "https://github.com/hieplp/pi-account-switcher#readme",
+  "files": [
+    "src",
+    "!src/**/*.test.ts",
+    "README.md",
+    "USAGE.md",
+    "CHANGELOG.md",
+    "INSTALL_AS_PI_PACKAGE.md"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "dependencies": {
+    "@earendil-works/pi-tui": "^0.74.0",
+    "@mariozechner/jiti": "^2.6.5",
+    "zod": "^4.4.3"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "latest",
+    "@earendil-works/pi-coding-agent": "latest",
+    "@types/node": "latest",
+    "prettier": "^3.8.3",
+    "typescript": "latest",
+    "vitest": "latest"
+  },
+  "pi": {
+    "extensions": [
+      "./src/extension.ts"
+    ]
+  }
+}
