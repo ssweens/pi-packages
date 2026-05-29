@@ -1,5 +1,23 @@
 # Tasks
 
+## Current Task: pi-rewind — session rewind-and-prune extension
+- [x] Create `pi-rewind` package in monorepo
+- [x] Implement `/rewind` command with flat selector UI
+- [x] Parse session JSONL, collect kept IDs up to target
+- [x] Rewrite JSONL to remove pruned entries after navigation
+- [x] Add confirmation dialog with delete count
+- [x] Write README and CHANGELOG
+- [x] Commit and push
+- [x] Update this task review section
+
+### Review (pi-rewind)
+- Created `/Users/ssweens/src/pi-packages/pi-rewind/` as a new standalone extension package.
+- `/rewind` command shows a flat list of all user+assistant message turns (newest first).
+- On pick: calls `ctx.navigateTree(targetId)` to update in-memory session state, then rewrites the `.jsonl` session file to permanently remove all entries after the target.
+- `collectKeptIds()` walks the parent chain from target to root and preserves all ancestor IDs plus label entries.
+- Confirmation dialog shows how many entries will be deleted.
+- Package: `@ssweens/pi-rewind` v1.0.0.
+
 ## Current Task: pi-account-switcher add hotkey for account selector
 - [x] Clone `hieplp/pi-account-switcher` fork into workspace
 - [x] Add `Ctrl+Shift+C` shortcut to open account selector

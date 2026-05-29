@@ -1,0 +1,35 @@
+{
+  "name": "@ssweens/pi-rewind",
+  "version": "1.0.0",
+  "description": "Rewind session to a previous point and prune deleted entries",
+  "type": "module",
+  "main": "index.ts",
+  "files": [
+    "index.ts",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "clean": "echo 'nothing to clean'",
+    "build": "echo 'nothing to build'",
+    "check": "echo 'nothing to check'"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "session",
+    "rewind",
+    "prune"
+  ],
+  "author": "ssweens",
+  "license": "MIT",
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
