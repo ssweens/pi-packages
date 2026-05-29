@@ -25,14 +25,14 @@ Huddle Mode is a safety feature that allows free read-only exploration while req
 | `/plan` | Toggle huddle mode on/off (alias) |
 | `--huddle` | CLI flag to start pi in huddle mode |
 | `--plan` | CLI flag alias (backward compat) |
-| `Alt+H` (Option+H on Mac) | Keyboard shortcut to toggle |
+| `Ctrl+H` | Keyboard shortcut to toggle |
 
 ## Workflow
 
 ### 1. Enter Huddle Mode
 
 ```
-/huddle      # or /holup, /plan, Alt+H
+/huddle      # or /holup, /plan, Ctrl+H
 ```
 
 ### 2. Just Act — The System Will Ask

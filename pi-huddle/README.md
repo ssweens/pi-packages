@@ -8,7 +8,7 @@
 pi install @ssweens/pi-huddle
 ```
 
-Huddle mode for [pi](https://github.com/badlogic/pi-mono). Safe exploration with permission gates, plus a powerful `gather_input` tool for structured multi-question elicitation. Toggle with `/huddle`, `/holup`, `/plan`, or `Alt+H`.
+Huddle mode for [pi](https://github.com/badlogic/pi-mono). Safe exploration with permission gates, plus a powerful `gather_input` tool for structured multi-question elicitation. Toggle with `/huddle`, `/holup`, `/plan`, or `Ctrl+H`.
 
 ## Features
 
@@ -18,7 +18,7 @@ Huddle mode for [pi](https://github.com/badlogic/pi-mono). Safe exploration with
 - **Permission gates** — approve or deny individual edit/write operations inline
 - **Bash allowlist** — safe commands execute freely, destructive ones prompt first
 - **Three commands** — `/huddle` (primary), `/holup`, `/plan` all toggle the mode
-- **`Alt+H` shortcut** — Option+H on Mac
+- **`Ctrl+H` shortcut**
 - **CLI flag** — `pi --plan` to start in huddle mode
 - **Session persistence** — huddle state survives session resume
 
@@ -39,7 +39,7 @@ pi install -l /path/to/pi-huddle
 /huddle              # primary command
 /holup               # alias
 /plan                # alias (backward compat)
-Alt+H (Option+H)     # keyboard shortcut
+Ctrl+H               # keyboard shortcut
 ```
 
 ### Start in Huddle Mode
@@ -51,7 +51,7 @@ pi --plan            # alias (backward compat)
 
 ### Workflow
 
-1. **Enter huddle mode** — `/huddle` or `Alt+H`
+1. **Enter huddle mode** — `/huddle` or `Ctrl+H`
 2. **Use `gather_input`** — gather requirements and clarify before acting
 3. **Explore safely** — read, search, and analyze freely
 4. **Approve edits on demand** — each write operation requires approval
@@ -232,7 +232,7 @@ pi-huddle/
 
 Two pi primitives:
 
-- **Extension** — registers `/huddle`, `/holup`, `/plan` commands, `Alt+H` shortcut, `gather_input` + `session_query` tools, permission gates, and context injection
+- **Extension** — registers `/huddle`, `/holup`, `/plan` commands, `Ctrl+H` shortcut, `gather_input` + `session_query` tools, permission gates, and context injection
 - **Skills** — document huddle behavior and prior-session querying patterns so the agent uses them correctly
 
 ## Development

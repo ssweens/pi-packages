@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.1] - 2026-05-28
+### Changed
+- Switched the huddle keyboard toggle shortcut from `Alt+H` to `Ctrl+H` to align with the app's Ctrl-based hotkey conventions.
+- Updated extension comments/docs/skills so shortcut guidance is consistent (`README.md`, `skills/huddle/SKILL.md`, and `extensions/index.ts`).
+
 ## [1.5.0] - 2026-05-22
 ### Added
 - `session_query` tool in `pi-huddle/extensions/session-query.ts` for targeted retrieval from prior `.jsonl` sessions (same workflow used in `pi-handoff` and `pi-compaxxt`).

@@ -6,7 +6,7 @@
  *
  * Features:
  * - /huddle, /holup, or /plan commands to toggle
- * - Alt+P shortcut to toggle
+ * - Ctrl+H shortcut to toggle
  * - Bash restricted to allowlisted commands (others prompt for permission)
  * - edit/write tools prompt for permission during huddle mode
  * - gather_input tool for structured elicitation during planning
@@ -111,7 +111,7 @@ export default function huddleExtension(pi: ExtensionAPI): void {
 		handler: async (_args, ctx) => toggleHuddle(ctx),
 	});
 
-	pi.registerShortcut("alt+h", {
+	pi.registerShortcut("ctrl+h", {
 		description: "Toggle huddle mode",
 		handler: async (ctx) => toggleHuddle(ctx),
 	});

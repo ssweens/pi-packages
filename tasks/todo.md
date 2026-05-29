@@ -1,5 +1,24 @@
 # Tasks
 
+## Current Task: pi-huddle switch toggle shortcut from Alt+H to Ctrl+H
+- [x] Change huddle shortcut registration to `Ctrl+H`
+- [x] Update huddle docs/skill text to reflect `Ctrl+H`
+- [x] Bump `pi-huddle` version and changelog for the shortcut change
+- [x] Run available quality gate(s) for `pi-huddle`
+- [x] Update this task review section
+
+### Review (pi-huddle Ctrl+H shortcut)
+- Updated runtime shortcut binding in `pi-huddle/extensions/index.ts` from `alt+h` to `ctrl+h`.
+- Fixed stale extension header comment typo (`Alt+P`) and aligned it to `Ctrl+H`.
+- Updated user-facing docs and skill references:
+  - `pi-huddle/README.md`
+  - `pi-huddle/skills/huddle/SKILL.md`
+- Bumped package version:
+  - `pi-huddle/package.json`: `1.5.0` → `1.5.1`
+- Updated `pi-huddle/CHANGELOG.md` with a new `1.5.1` entry describing the shortcut change.
+- Quality gate:
+  - `npm pack --dry-run` in `pi-huddle` ✅ (package metadata and contents validated)
+
 ## Current Task: pi-leash dangerous command trust windows + heredoc/pipeline detection
 - [x] Add dangerous-command prompt options for temporary/session trust windows (`w` 5 minutes, `s` session)
 - [x] Restrict trust-window bypass to non-evil allowlisted categories only
