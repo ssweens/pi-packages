@@ -1,5 +1,23 @@
 # Tasks
 
+## Current Task: pi-account-switcher add hotkey for account selector
+- [x] Clone `hieplp/pi-account-switcher` fork into workspace
+- [x] Add `Ctrl+Shift+C` shortcut to open account selector
+- [x] Update README/USAGE docs to include the new shortcut
+- [x] Run available quality gates for the fork
+- [x] Update this task review section
+
+### Review (pi-account-switcher shortcut)
+- Cloned `pi-account-switcher` into `/Users/ssweens/src/pi-packages/pi-account-switcher`.
+- Added `pi.registerShortcut("ctrl+shift+c", ...)` in `src/index.ts`.
+- Shortcut opens the interactive account picker and activates the selected account (same behavior as `/accounts:list`).
+- Updated docs:
+  - `pi-account-switcher/README.md`
+  - `pi-account-switcher/USAGE.md`
+- Quality gates (in `pi-account-switcher`):
+  - `npm run typecheck` ✅
+  - `npm test` ✅
+
 ## Current Task: pi-huddle switch toggle shortcut from Alt+H to Ctrl+H
 - [x] Change huddle shortcut registration to `Ctrl+H`
 - [x] Update huddle docs/skill text to reflect `Ctrl+H`
