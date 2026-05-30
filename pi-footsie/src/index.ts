@@ -1,4 +1,5 @@
 import os from "node:os";
+import { execSync } from "node:child_process";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const VULGARITY_REGEX = /\b(fuck|fucking|fucked|shit|shitty|damn|bitch|asshole|wtf|bullshit|crap|dick|piss|motherfucker)\b/gi;
@@ -41,6 +42,19 @@ function countVulgarityUsage(ctx: any): number {
   return count;
 }
 
+let cachedPiVersion: string | null = null;
+
+function getPiVersion(): string {
+  if (cachedPiVersion !== null) return cachedPiVersion;
+  try {
+    const out = execSync("pi --version", { timeout: 5000, encoding: "utf8" }).trim();
+    cachedPiVersion = out || "unknown";
+  } catch {
+    cachedPiVersion = "unknown";
+  }
+  return cachedPiVersion;
+}
+
 function compactHost(hostname: string): string {
   return hostname.split(".")[0] || hostname;
 }
@@ -56,12 +70,14 @@ export default function (pi: ExtensionAPI) {
 
     const host = compactHost(os.hostname());
     const ip = getLocalIpAddress();
+    const piVersion = getPiVersion();
     const vulgarityCount = countVulgarityUsage(ctx);
     const jarAmount = vulgarityCount * 0.25;
     const jarColor = vulgarityCount >= 5 ? "error" : vulgarityCount > 0 ? "warning" : "muted";
 
     const text =
       `${ctx.ui.theme.fg("text", `${host}@${ip}`)}` +
+      `${ctx.ui.theme.fg("dim", " • ")}${ctx.ui.theme.fg("muted", `pi ${piVersion}`)}` +
       `${ctx.ui.theme.fg("dim", " • ")}${ctx.ui.theme.fg("muted", "swear jar:")}${ctx.ui.theme.fg(jarColor, `$${jarAmount.toFixed(2)}`)}`;
 
     ctx.ui.setStatus("footsie", text);
