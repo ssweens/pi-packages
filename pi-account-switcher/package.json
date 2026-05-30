@@ -1,6 +1,6 @@
 {
-  "name": "@hieplp/pi-account-switcher",
-  "version": "0.2.3",
+  "name": "@ssweens/pi-account-switcher",
+  "version": "0.2.4",
   "type": "module",
   "description": "Pi extension for quickly switching between multiple accounts/API keys per provider.",
   "license": "MIT",
@@ -12,12 +12,13 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hieplp/pi-account-switcher.git"
+    "url": "git+https://github.com/ssweens/pi-packages.git",
+    "directory": "pi-account-switcher"
   },
   "bugs": {
-    "url": "https://github.com/hieplp/pi-account-switcher/issues"
+    "url": "https://github.com/ssweens/pi-packages/issues"
   },
-  "homepage": "https://github.com/hieplp/pi-account-switcher#readme",
+  "homepage": "https://github.com/ssweens/pi-packages/tree/main/pi-account-switcher",
   "files": [
     "src",
     "!src/**/*.test.ts",

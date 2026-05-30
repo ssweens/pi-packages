@@ -1,5 +1,27 @@
 # Tasks
 
+## Current Task: pi-account-switcher publish under @ssweens scope
+- [x] Rename package from `@hieplp/pi-account-switcher` to `@ssweens/pi-account-switcher`
+- [x] Update repository/homepage/bugs metadata for the `pi-packages` monorepo
+- [x] Update npm-facing install docs to use the `@ssweens` scope
+- [x] Run publish-readiness checks (`typecheck`, `test`, `npm pack --dry-run`)
+- [x] Update this task review section
+
+### Review (pi-account-switcher @ssweens publish prep)
+- Updated `pi-account-switcher/package.json` name to `@ssweens/pi-account-switcher`.
+- Bumped version to `0.2.4` so the renamed package has a fresh publishable release.
+- Pointed package metadata at the monorepo:
+  - `repository.url`: `git+https://github.com/ssweens/pi-packages.git`
+  - `repository.directory`: `pi-account-switcher`
+  - `homepage`: `https://github.com/ssweens/pi-packages/tree/main/pi-account-switcher`
+  - `bugs.url`: `https://github.com/ssweens/pi-packages/issues`
+- Updated npm install docs to use `pi install npm:@ssweens/pi-account-switcher` and removed old `hieplp` package references.
+- Refreshed `package-lock.json` so the root package name/version also read `@ssweens/pi-account-switcher` `0.2.4`.
+- Publish-readiness checks passed in `pi-account-switcher`:
+  - `npm run typecheck` ✅
+  - `npm test` ✅ (18 tests passed)
+  - `npm pack --dry-run` ✅ (`@ssweens/pi-account-switcher@0.2.4` tarball generated)
+
 ## Current Task: pi-rewind — session rewind-and-prune extension
 - [x] Create `pi-rewind` package in monorepo
 - [x] Implement `/rewind` command with flat selector UI

@@ -10,29 +10,21 @@ claude/work  ·  claude/personal  ·  openai/team  ·  gemini/testing
 
 ## Install
 
-**From GitHub (recommended)**
+**From npm (recommended)**
 
 ```bash
-pi install git:github.com/hieplp/pi-account-switcher
-```
-
-**From npm**
-
-```bash
-pi install npm:@hieplp/pi-account-switcher
-```
-
-**Test without installing**
-
-```bash
-pi -e git:github.com/hieplp/pi-account-switcher
+pi install npm:@ssweens/pi-account-switcher
 ```
 
 **Project-local install** (writes to `.pi/settings.json`)
 
 ```bash
-pi install -l git:github.com/hieplp/pi-account-switcher
+pi install -l npm:@ssweens/pi-account-switcher
 ```
+
+**Source repository**
+
+This package lives in the [`ssweens/pi-packages`](https://github.com/ssweens/pi-packages/tree/main/pi-account-switcher) monorepo.
 
 **Run from a local checkout**
 
