@@ -1,5 +1,5 @@
 import os from "node:os";
-import { execSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const VULGARITY_REGEX = /\b(fuck|fucking|fucked|shit|shitty|damn|bitch|asshole|wtf|bullshit|crap|dick|piss|motherfucker)\b/gi;
@@ -47,23 +47,11 @@ let cachedPiVersion: string | null = null;
 function getPiVersion(): string {
   if (cachedPiVersion !== null) return cachedPiVersion;
   try {
-    // Try with explicit PATH
-    const env = { ...process.env };
-    const paths = [
-      "/Users/ssweens/.bun/bin",
-      "/Users/ssweens/.pi/agent/bin",
-      "/usr/local/bin",
-      "/usr/bin",
-      "/bin"
-    ];
-    env.PATH = paths.join(":") + ":" + (env.PATH || "");
-    
-    const out = execSync("pi --version", { 
-      timeout: 5000, 
-      encoding: "utf8",
-      env: env
-    }).trim();
-    cachedPiVersion = out || "unknown";
+    // Read version from Pi's package.json
+    const packageJsonPath = "/Users/ssweens/.bun/install/global/node_modules/@earendil-works/pi-coding-agent/package.json";
+    const content = readFileSync(packageJsonPath, "utf8");
+    const pkg = JSON.parse(content);
+    cachedPiVersion = pkg.version || "unknown";
   } catch {
     cachedPiVersion = "unknown";
   }
