@@ -47,8 +47,22 @@ let cachedPiVersion: string | null = null;
 function getPiVersion(): string {
   if (cachedPiVersion !== null) return cachedPiVersion;
   try {
-    // Try the full path from `which pi`
-    const out = execSync("/Users/ssweens/.bun/bin/pi --version", { timeout: 5000, encoding: "utf8" }).trim();
+    // Try with explicit PATH
+    const env = { ...process.env };
+    const paths = [
+      "/Users/ssweens/.bun/bin",
+      "/Users/ssweens/.pi/agent/bin",
+      "/usr/local/bin",
+      "/usr/bin",
+      "/bin"
+    ];
+    env.PATH = paths.join(":") + ":" + (env.PATH || "");
+    
+    const out = execSync("pi --version", { 
+      timeout: 5000, 
+      encoding: "utf8",
+      env: env
+    }).trim();
     cachedPiVersion = out || "unknown";
   } catch {
     cachedPiVersion = "unknown";
