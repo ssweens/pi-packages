@@ -14,6 +14,7 @@
 // Cross-scope reads are explicitly not modeled here.
 
 import path from "node:path";
+import os from "node:os";
 
 import { assertSafeName } from "../domain/name.ts";
 import { getAgentDir } from "../platform/pi-api.ts";
@@ -58,9 +59,9 @@ export interface ScopedLocations {
   readonly skillsStagingDir: string;
   /** `<extensionRoot>/commands-staging/` -- per-command atomic-rename source. */
   readonly commandsStagingDir: string;
-  /** `<extensionRoot>/resources/skills/` -- per-skill atomic-rename target (SK-1). */
+  /** `<os.tmpdir()>/pi-plugins-<scope>-skills` -- per-skill atomic-rename target (SK-1). */
   readonly skillsTargetDir: string;
-  /** `<extensionRoot>/resources/prompts/` -- per-command atomic-rename target (CM-1). */
+  /** `<os.tmpdir()>/pi-plugins-<scope>-prompts` -- per-command atomic-rename target (CM-1). */
   readonly promptsTargetDir: string;
   /** `<extensionRoot>/data/` -- per-marketplace, per-plugin cache root. */
   readonly dataRoot: string;
@@ -125,8 +126,8 @@ export function locationsFor(scope: Scope, cwd: string): ScopedLocations {
   const mcpJsonPath = path.join(scopeRoot, "mcp.json");
   const skillsStagingDir = path.join(extensionRoot, "skills-staging");
   const commandsStagingDir = path.join(extensionRoot, "commands-staging");
-  const skillsTargetDir = path.join(extensionRoot, "resources", "skills");
-  const promptsTargetDir = path.join(extensionRoot, "resources", "prompts");
+  const skillsTargetDir = path.join(os.tmpdir(), `pi-plugins-${scope}-skills`);
+  const promptsTargetDir = path.join(os.tmpdir(), `pi-plugins-${scope}-prompts`);
   const dataRoot = path.join(extensionRoot, "data");
   const sourcesDir = path.join(extensionRoot, "sources");
   // Phase 6 D-03: completion cache root. Sibling of dataRoot, sourcesDir.
