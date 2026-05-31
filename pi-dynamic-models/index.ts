@@ -158,19 +158,30 @@ async function fetchCorralModelDetails(
   baseUrl: string,
   apiKey?: string,
 ): Promise<Map<string, CorralModelDetail>> {
-  const url = `${baseUrl.replace(/\/+$/, "")}/corral/models`;
+  const normalized = baseUrl.replace(/\/+$/, "");
+  const rootCandidate = normalized.replace(/\/v\d+(?:\.\d+)?$/, "");
+  const candidateUrls = Array.from(new Set([
+    `${rootCandidate}/corral/models`,
+    `${normalized}/corral/models`,
+  ]));
+
   const headers: Record<string, string> = { Accept: "application/json" };
-  if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
-  try {
-    const response = await fetch(url, { headers, signal: AbortSignal.timeout(5000) });
-    if (!response.ok) return new Map();
-    const body = (await response.json()) as CorralModelsResponse;
-    const map = new Map<string, CorralModelDetail>();
-    for (const m of body.data ?? []) map.set(m.id, m);
-    return map;
-  } catch {
-    return new Map();
+  if (apiKey && apiKey !== "none") headers["Authorization"] = `Bearer ${apiKey}`;
+
+  for (const url of candidateUrls) {
+    try {
+      const response = await fetch(url, { headers, signal: AbortSignal.timeout(5000) });
+      if (!response.ok) continue;
+      const body = (await response.json()) as CorralModelsResponse;
+      const map = new Map<string, CorralModelDetail>();
+      for (const m of body.data ?? []) map.set(m.id, m);
+      return map;
+    } catch {
+      // try next candidate URL
+    }
   }
+
+  return new Map();
 }
 
 async function fetchRemoteModels(baseUrl: string, apiKey?: string): Promise<RemoteModel[]> {

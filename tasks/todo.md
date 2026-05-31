@@ -1,5 +1,26 @@
 # Tasks
 
+## Current Task: pi-dynamic-models corral contextWindow mismatch with /v1 base URLs
+- [x] Reproduce corral metadata endpoint behavior against configured servers
+- [x] Identify root cause of missing context_size ingestion
+- [x] Patch corral metadata fetch to support /v1 base URLs and root fallback
+- [x] Bump package version and add changelog entry
+- [x] Update README troubleshooting note
+- [x] Update this task review section
+
+### Review (pi-dynamic-models corral contextWindow)
+- Reproduced issue against local corral servers (`192.168.1.52:9999`, `192.168.1.51:9999`).
+- Verified `/v1/models` returns 200, while `/v1/corral/models` returns 404 and `/corral/models` returns 200.
+- Root cause: `fetchCorralModelDetails()` built metadata URL directly from `baseUrl` (including `/v1`), so metadata fetch silently failed and `contextWindow` fell back to default `128000`.
+- Fixed by trying both candidates:
+  - `${baseUrl-root}/corral/models` (preferred for `/v1` bases)
+  - `${baseUrl}/corral/models` (fallback)
+- Also stopped sending `Authorization: Bearer none` when `apiKey` is placeholder `"none"`.
+- Version/docs updates:
+  - `pi-dynamic-models/package.json`: `1.0.0` → `1.0.1`
+  - Added `pi-dynamic-models/CHANGELOG.md`
+  - Updated `pi-dynamic-models/README.md` troubleshooting for `context_size: null` behavior.
+
 ## Current Task: pi-account-switcher publish under @ssweens scope
 - [x] Rename package from `@hieplp/pi-account-switcher` to `@ssweens/pi-account-switcher`
 - [x] Update repository/homepage/bugs metadata for the `pi-packages` monorepo

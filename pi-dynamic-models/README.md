@@ -125,3 +125,5 @@ Discovered models use conservative defaults (`contextWindow: 128000`, `maxTokens
 **Wrong API behavior**: Set the correct `api` field for your server type.
 
 **Token counting or field errors**: Add the appropriate `compat` settings for your server.
+
+**`contextWindow` stays at 128000**: `pi-dynamic-models` uses corral's `/corral/models` `context_size` when available. If your server reports `context_size: null` for a model, the extension falls back to `128000` unless you set `models.<id>.contextWindow` explicitly.
