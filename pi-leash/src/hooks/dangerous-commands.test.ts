@@ -321,6 +321,18 @@ describe("git checkout matcher", () => {
   });
 });
 
+describe("git reset matcher", () => {
+  it("matches git reset", () => {
+    expect(findMatch(["git", "reset", "--hard", "HEAD~1"])).toBe(
+      "undo commits or discard staged/unstaged changes",
+    );
+  });
+
+  it("does not match git log", () => {
+    expect(findMatch(["git", "log", "--oneline"])).toBeUndefined();
+  });
+});
+
 describe("matchDangerousCommand", () => {
   it("returns description and pattern for dangerous commands", () => {
     const result = matchDangerousCommand(["sudo", "apt", "update"]);

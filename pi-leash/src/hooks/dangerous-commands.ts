@@ -285,6 +285,16 @@ const gitCheckoutMatcher: StructuralMatcher = (words) => {
     : undefined;
 };
 
+/**
+ * git reset - undo commits or discard staged/unstaged changes (destructive)
+ */
+const gitResetMatcher: StructuralMatcher = (words) => {
+  if (words[0] !== "git") return undefined;
+  return words[1] === "reset"
+    ? "undo commits or discard staged/unstaged changes"
+    : undefined;
+};
+
 // =============================================================================
 // Matcher Registry
 // =============================================================================
@@ -320,6 +330,7 @@ export const BUILTIN_MATCHERS: StructuralMatcher[] = [
 
   // Version control
   gitCheckoutMatcher,
+  gitResetMatcher,
 ];
 
 /**
@@ -343,6 +354,7 @@ export const BUILTIN_KEYWORD_PATTERNS = new Set([
   "parted",
   "docker run --privileged",
   "git checkout",
+  "git reset",
 ]);
 
 /**
