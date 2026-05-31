@@ -59,7 +59,7 @@
     "extensions": [
       "./extensions/pi-plugins/index.ts"
     ],
-    "image": "https://media.githubusercontent.com/media/ssweens/pi-packages/refs/heads/main/pi-plugins/images/redpi.png"
+    "image": "https://raw.githubusercontent.com/ssweens/pi-packages/main/pi-plugins/images/redpi.svg"
   },
   "repository": {
     "type": "git",

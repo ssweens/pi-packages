@@ -1,7 +1,7 @@
 <!-- markdownlint-disable MD033 MD041 -->
 
 <p align="center">
-  <img src="https://media.githubusercontent.com/media/ssweens/pi-packages/refs/heads/main/pi-plugins/images/redpi.png" alt="Pi Plugins logo" width="360">
+  <img src="https://raw.githubusercontent.com/ssweens/pi-packages/main/pi-plugins/images/redpi.svg" alt="Pi Plugins logo" width="360">
 </p>
 <!-- markdownlint-enable MD033 MD041 -->
 
@@ -11,9 +11,7 @@ Access Claude plugin marketplaces from Pi Coding Agent.
 
 <!-- markdownlint-disable MD033 -->
 
-<p align="center">
-  <img src="https://media.githubusercontent.com/media/ssweens/pi-packages/refs/heads/main/pi-plugins/demos/bootstrap.gif" alt="Bootstrap demo" width="720">
-</p>
+<p align="center"><strong>Demo source:</strong> <code>demos/bootstrap.tape</code> and <code>demos/marketplace-add-plugin-install.tape</code></p>
 <!-- markdownlint-enable MD033 -->
 
 ## Features

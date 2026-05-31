@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+- Removed Git LFS usage for `pi-plugins` demo/logo assets.
+- Switched package/docs image references to the committed SVG asset and kept demo source in `.tape` files.
+- Deleted broken LFS pointer assets that could not be fetched from the server.
+
 ## [0.1.7] - 2026-05-16
 
 - Added `/claude:plugin reinstall` command: re-stages an installed plugin from its cached marketplace manifest without touching the network or changing the recorded version. Supports `reinstall <plugin>@<marketplace>`, `reinstall @<marketplace>`, bare `reinstall`, `--scope user|project`, and `--force` for plugins whose previous agent files were manually edited. Failure preserves the previous installed plugin, resources, and data directory; the plugin data directory is cleaned up only after the replacement and state commit succeed.
