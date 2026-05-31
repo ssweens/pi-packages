@@ -16,7 +16,7 @@ File-based todo tracking skill for [pi](https://github.com/badlogic/pi-mono). To
 
 ## What the skill provides
 
-The `file-todos` skill teaches your agent how to:
+The `pi-file-todos` skill teaches your agent how to:
 
 - **Create todos** from code review findings, PR comments, or feature requests
 - **Name files consistently** using `{id}-{status}-{priority}-{description}.md` conventions
@@ -89,7 +89,7 @@ pi-file-todos/
 ├── README.md
 ├── LICENSE
 └── skills/
-    └── file-todos/
+    └── pi-file-todos/
         ├── SKILL.md              # Full skill instructions
         └── assets/
             └── todo-template.md  # Starter template for new todos
