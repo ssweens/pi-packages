@@ -1,0 +1,49 @@
+{
+	"kind": "Listing",
+	"data": {
+		"children": [
+			{
+				"kind": "t3",
+				"data": {
+					"id": "abc123",
+					"title": "Rust async in 2026",
+					"selftext": "Full post body here.",
+					"author": "alice",
+					"permalink": "/r/rust/comments/abc123/rust_async_in_2026/",
+					"url": "https://external.test/linked-article",
+					"created_utc": 1775779200,
+					"score": 542,
+					"num_comments": 87
+				}
+			},
+			{
+				"kind": "t3",
+				"data": {
+					"id": "def456",
+					"title": "[deleted by author]",
+					"selftext": "",
+					"author": "[deleted]",
+					"permalink": "/r/rust/comments/def456/deleted/",
+					"url": "https://reddit.com/r/rust/comments/def456/deleted/",
+					"created_utc": 1775692800,
+					"score": 3,
+					"num_comments": 1
+				}
+			},
+			{
+				"kind": "t3",
+				"data": {
+					"id": "old789",
+					"title": "Way old post",
+					"selftext": null,
+					"author": "bob",
+					"permalink": "/r/rust/comments/old789/way_old/",
+					"url": "https://reddit.com/r/rust/comments/old789/way_old/",
+					"created_utc": 1600000000,
+					"score": 1,
+					"num_comments": 0
+				}
+			}
+		]
+	}
+}

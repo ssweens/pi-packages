@@ -1,0 +1,99 @@
+{
+	"name": "@ssweens/camoufox-pi",
+	"version": "0.2.2",
+	"description": "PI extension for stealth web search and URL fetching via Camoufox",
+	"type": "module",
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		}
+	},
+	"bin": {
+		"camoufox-pi": "./dist/cli/index.js"
+	},
+	"files": [
+		"dist",
+		"scripts",
+		"skills",
+		"README.md",
+		"LICENSE"
+	],
+	"scripts": {
+		"postinstall": "node scripts/patch-playwright-core.mjs",
+		"build": "tsc -p tsconfig.build.json",
+		"dev": "tsc -p tsconfig.build.json --watch",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"test:coverage": "vitest run --coverage",
+		"lint": "biome check .",
+		"lint:fix": "biome check --write .",
+		"check": "biome check .",
+		"check:fix": "biome check --write .",
+		"fmt": "biome format --write .",
+		"typecheck": "tsc --noEmit",
+		"clean": "rm -rf dist",
+		"prepare": "lefthook install || true"
+	},
+	"keywords": [
+		"pi-package",
+		"pi",
+		"pi-coding-agent",
+		"extension",
+		"camoufox",
+		"stealth",
+		"web-search",
+		"tff",
+		"the-forge-flow"
+	],
+	"author": "ssweens (fork of @the-forge-flow/camoufox-pi by MonsieurBarti)",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/ssweens/pi-packages.git"
+	},
+	"bugs": {
+		"url": "https://github.com/ssweens/pi-packages/issues"
+	},
+	"homepage": "https://github.com/ssweens/pi-packages/tree/main/camoufox-pi#readme",
+	"publishConfig": {
+		"access": "public"
+	},
+	"engines": {
+		"node": ">=22.5.0"
+	},
+	"pi": {
+		"extensions": [
+			"./dist/index.js"
+		]
+	},
+	"peerDependencies": {
+		"@mariozechner/pi-coding-agent": "*",
+		"@mariozechner/pi-ai": "*",
+		"@mariozechner/pi-tui": "*",
+		"@sinclair/typebox": "*"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^1.9.4",
+		"@commitlint/cli": "^19.8.0",
+		"@commitlint/config-conventional": "^19.8.0",
+		"@mariozechner/pi-ai": "latest",
+		"@mariozechner/pi-coding-agent": "latest",
+		"@mariozechner/pi-tui": "latest",
+		"@sinclair/typebox": "^0.34.0",
+		"@types/node": "^22.0.0",
+		"@types/turndown": "^5.0.6",
+		"@vitest/coverage-v8": "^2.1.0",
+		"lefthook": "^2.1.5",
+		"typescript": "^5.7.0",
+		"vitest": "^2.1.0"
+	},
+	"dependencies": {
+		"@napi-rs/keyring": "^1.2.0",
+		"camoufox-js": "^0.9.3",
+		"playwright-core": "^1.59.1",
+		"turndown": "^7"
+	}
+}
