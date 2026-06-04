@@ -64,3 +64,6 @@ Also: when Pi reports a width crash, check `~/.pi/agent/pi-crash.log` line indic
 
 ## Never capture extension ctx in long-lived async callbacks
 In Pi extensions, a `ctx` becomes stale after reload/session replacement. Do not retain command/session `ctx` inside `setInterval`, delayed promises, or other long-lived callbacks. Prefer event-driven updates (`session_start`, `input`, etc.) using fresh callback ctx, or stop timers before any reload/session replacement path.
+
+## Dangerous-command prompts must preserve access to the full command
+If a permission dialog truncates or elides a potentially dangerous command to fit the screen, the user still needs a way to inspect the entire command before approving it. Stable-height rendering is good, but not if it hides critical command content with no recovery path. Any over-height fix for dangerous-command prompts must pair clamping with an explicit full-command inspection affordance (for example: scrollable preview, pager view, expand toggle, or secondary detail view).

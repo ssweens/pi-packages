@@ -1,5 +1,83 @@
 import { describe, expect, it } from "vitest";
-import { isCwdScopedFileOperation } from "./permission-gate";
+import {
+  clampDialogLines,
+  isCwdScopedFileOperation,
+  sliceScrollableLines,
+} from "./permission-gate";
+
+describe("clampDialogLines", () => {
+  it("returns lines unchanged when already within height budget", () => {
+    const lines = ["a", "b", "c"];
+    expect(clampDialogLines(lines, 5, 2, 80, "… truncated …")).toEqual(lines);
+  });
+
+  it("preserves tail controls while truncating oversized dialogs", () => {
+    const lines = [
+      "title",
+      "reason",
+      "source",
+      "long 1",
+      "long 2",
+      "long 3",
+      "long 4",
+      "long 5",
+      "actions",
+      "help",
+      "border",
+    ];
+
+    expect(clampDialogLines(lines, 8, 3, 80, "… truncated …")).toEqual([
+      "title",
+      "reason",
+      "source",
+      "long 1",
+      "… truncated …",
+      "actions",
+      "help",
+      "border",
+    ]);
+  });
+
+  it("handles very small budgets by keeping the truncation marker and tail", () => {
+    const lines = ["1", "2", "3", "4", "5"];
+    expect(clampDialogLines(lines, 3, 3, 80, "… truncated …")).toEqual([
+      "… truncated …",
+      "4",
+      "5",
+    ]);
+  });
+});
+
+describe("sliceScrollableLines", () => {
+  it("returns the visible window and max offset", () => {
+    expect(sliceScrollableLines(["1", "2", "3", "4"], 2, 1)).toEqual({
+      lines: ["2", "3"],
+      offset: 1,
+      maxOffset: 2,
+    });
+  });
+
+  it("clamps offsets that are too small or too large", () => {
+    expect(sliceScrollableLines(["1", "2", "3", "4"], 2, -5)).toEqual({
+      lines: ["1", "2"],
+      offset: 0,
+      maxOffset: 2,
+    });
+    expect(sliceScrollableLines(["1", "2", "3", "4"], 2, 99)).toEqual({
+      lines: ["3", "4"],
+      offset: 2,
+      maxOffset: 2,
+    });
+  });
+
+  it("returns empty output for non-positive viewport heights", () => {
+    expect(sliceScrollableLines(["1", "2"], 0, 0)).toEqual({
+      lines: [],
+      offset: 0,
+      maxOffset: 0,
+    });
+  });
+});
 
 describe("isCwdScopedFileOperation", () => {
   const cwd = "/work/project";

@@ -1,5 +1,33 @@
 # Tasks
 
+## Current Task: pi-leash permission prompt over-height scrollback bug
+- [x] Reproduce and trace why over-height `pi-leash` permission dialogs cause terminal scroll churn and destroy scrollback
+- [x] Implement a stable-height inline rendering strategy for `pi-leash` permission prompts without switching to overlay mode
+- [x] Add regression coverage for the dialog sizing/clamping behavior
+- [x] Run `pi-leash` quality gates and record any environment constraints
+- [x] Update `tasks/todo.md` review notes with the root cause and fix
+- [x] Add a full-command inspection path for truncated dangerous-command prompts
+- [x] Visually verify the prompt in running pi before any commit
+
+### Review (pi-leash over-height permission prompt)
+- Root cause: the dangerous-command and sudo password prompts rendered their full wrapped content inline with no height cap. On very long command/explanation payloads, the component height exceeded the visible terminal budget; pi-tui then kept appending oversized rerenders to the chat stream, causing repeated scroll churn and making scrollback effectively unusable.
+- Fix in `pi-leash/src/hooks/permission-gate.ts`:
+  - Added stable-height helpers: `getDialogMaxRows(...)`, `clampDialogLines(...)`, and `sliceScrollableLines(...)`
+  - Kept both permission-gate dialogs within a fixed inline height budget
+  - Added `v` full-command inspection mode for the dangerous-command prompt. The compact approval dialog can elide the middle of the preview, but pressing `v` opens a stable-height, scrollable full-command view with `↑↓` / `j` `k` / `Home` / `End`, and `Enter` / `Esc` / `v` returns to approval mode.
+- Regression coverage:
+  - extended `pi-leash/src/hooks/permission-gate.test.ts` with `clampDialogLines` tests for unchanged, truncated, and tiny-budget cases
+  - added `sliceScrollableLines` tests for viewport slicing and offset clamping
+- Docs/version:
+  - `pi-leash/package.json`: `1.2.1` → `1.2.2`
+  - updated `pi-leash/CHANGELOG.md`
+  - updated `pi-leash/README.md`
+- Quality gates in this checkout:
+  - `pnpm test` ✅ (175 passing; Vitest also warns about a pre-existing missing vendored sourcemap `src/vendor/aliou-sh/index.js.map`)
+  - `pnpm typecheck` ⚠️ still fails on the same pre-existing `kb.matches("selectConfirm"|"selectCancel")` typing errors in `src/hooks/permission-gate.ts`
+  - `pnpm lint` ⚠️ still fails on pre-existing vendored parser `.js` extension / formatting issues outside this change set; no new functional lint failures beyond the package baseline
+- Live verification: confirmed in a running Pi session that the dangerous-command prompt now exposes `v` full-command inspection, and the user verified the behavior as “Perfect.”
+
 ## Current Task: pi-dynamic-models corral contextWindow mismatch with /v1 base URLs
 - [x] Reproduce corral metadata endpoint behavior against configured servers
 - [x] Identify root cause of missing context_size ingestion

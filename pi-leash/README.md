@@ -162,6 +162,7 @@ When prompted, you can choose:
 - **Allow cwd file ops this session** (`c`) — shown only for cwd-scoped, allowlisted file operations; allows future dangerous file-based commands in the current `cwd` for this session
 - **Allow eligible cmds for 5 min** (`w`) — shown only for cwd-scoped, allowlisted operations; temporarily bypasses prompts for similar eligible dangerous commands
 - **Allow eligible cmds for session** (`s`) — same as above, but until session end
+- **View full command** (`v`) — opens a stable-height, scrollable full-command view so you can inspect the entire dangerous command before deciding
 - **Deny** (`n` / Esc)
 
 `w`/`s`/`c` are intentionally restricted to non-evil categories only:
@@ -178,6 +179,8 @@ The approval prompt now shows:
 - **Source** (`built-in structural`, `custom pattern`, or `fallback substring (parse failed)`)
 - **Trigger** (exact token/pattern that matched, e.g. `rm -rf`)
 
+For very long commands or explanations, the inline prompt clamps itself to a stable height so it stays within the terminal. The compact view may elide the middle of the preview, but the action choices remain visible and `v` opens a scrollable full-command view.
+
 ### Explain commands (opt-in)
 
 If enabled, guardrails calls an LLM before showing the confirmation dialog and displays a short explanation.
@@ -192,7 +195,7 @@ Failures/timeouts degrade gracefully: dialog still shows without explanation.
 
 ### Sudo mode (opt-in)
 
-When enabled, sudo commands prompt for the sudo password and execute securely using `sudo -S`. The password is masked during input and cleared from memory immediately after execution.
+When enabled, sudo commands prompt for the sudo password and execute securely using `sudo -S`. The password is masked during input and cleared from memory immediately after execution. Long sudo commands use the same stable-height inline dialog behavior as the dangerous-command prompt.
 
 Config fields:
 

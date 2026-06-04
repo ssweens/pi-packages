@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.2] - 2026-06-02
+### Fixed
+- Over-height dangerous-command and sudo password prompts now clamp to a stable inline height instead of growing past the terminal. This prevents the repeated scroll churn that destroyed scrollback.
+
+### Added
+- `v` full-command inspection mode in the dangerous-command prompt. Users can open a stable-height, scrollable command viewer before approving a potentially dangerous command.
+- Regression coverage for the dialog height clamping and scroll-window helpers used by the permission gate.
+
 ## [1.2.1] - 2026-05-28
 ### Added
 - **Dangerous-command trust windows** in the permission prompt:
