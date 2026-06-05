@@ -15,11 +15,11 @@ Set your GCP project and credentials. Vertex AI models (Gemini, Claude, Llama, D
 
 ## Features
 
-- **48 models** across 4 categories:
+- **45 models** across 4 categories:
   - **Gemini** (9): 3.1 Pro, 3.1 Flash-Lite, 3 Flash, 2.5 Pro, 2.5 Flash, 2.5 Flash-Lite, 2.0 Flash, 2.0 Flash-Lite
-  - **Claude** (10): Opus 4.7, Opus 4.6, Sonnet 4.6, Opus/Sonnet/Haiku 4.5, Opus 4.1, Opus 4, Sonnet 4, 3.5 Sonnet v2
+  - **Claude** (11): Opus 4.8, Opus 4.7, Opus 4.6, Sonnet 4.6, Opus/Sonnet/Haiku 4.5, Opus 4.1, Opus 4, Sonnet 4, 3.5 Sonnet v2
   - **Llama** (3): 4 Maverick, 4 Scout, 3.3 70B
-  - **Other MaaS** (26): Grok, Gemma, Mistral, DeepSeek, Qwen, OpenAI GPT-OSS, Kimi, MiniMax, GLM
+  - **Other MaaS** (22): Grok 4.3, Grok 4.20, Grok 4.1 Fast, Gemma, Mistral, DeepSeek, Qwen, OpenAI GPT-OSS, Kimi, MiniMax, GLM
 
 - **Unified streaming**: Single provider, multiple model families
 - **Full tool calling support**: All models with multi-turn tool use and proper tool result handling
@@ -86,7 +86,8 @@ pi --provider vertex --model gemini-2.5-pro --version
 
 ```bash
 # Use any supported model
-pi --provider vertex --model claude-opus-4-6
+pi --provider vertex --model claude-opus-4-8
+pi --provider vertex --model grok-4.3
 pi --provider vertex --model gemini-2.5-pro
 pi --provider vertex --model llama-4-maverick
 pi --provider vertex --model deepseek-v3.2
@@ -100,8 +101,11 @@ pi --provider vertex --model claude-sonnet-4-6 --reasoning high
 Add to `~/.bashrc` or `~/.zshrc`:
 
 ```bash
-# Claude 4.6 Opus
-alias pic="GOOGLE_CLOUD_PROJECT=your-project pi --provider vertex --model claude-opus-4-6"
+# Claude 4.8 Opus
+alias pic="GOOGLE_CLOUD_PROJECT=your-project pi --provider vertex --model claude-opus-4-8"
+
+# Grok 4.3
+alias pig4="GOOGLE_CLOUD_PROJECT=your-project pi --provider vertex --model grok-4.3"
 
 # Gemini 2.5 Pro
 alias pig="GOOGLE_CLOUD_PROJECT=your-project pi --provider vertex --model gemini-2.5-pro"
@@ -132,6 +136,7 @@ Prices shown are for the **global** endpoint. Non-global regions (us-east5, euro
 
 | Model | Context | Max Tokens | Input | Reasoning | Price global (in/out) | Price regional (in/out) |
 |-------|---------|------------|-------|-----------|----------------------|------------------------|
+| claude-opus-4-8 | 1M | 128,000 | text, image | ✅ | $5.00/$25.00 | $5.50/$27.50 |
 | claude-opus-4-7 | 1M | 128,000 | text, image | ✅ | $5.00/$25.00 | $5.50/$27.50 |
 | claude-opus-4-6 | 1M | 128,000 | text, image | ✅ | $5.00/$25.00 | $5.50/$27.50 |
 | claude-sonnet-4-6 | 1M | 128,000 | text, image | ✅ | $3.00/$15.00 | $3.30/$16.50 |
@@ -173,6 +178,7 @@ Prices shown are for the **global** endpoint. Non-global regions (us-east5, euro
 | minimax-m2 | 196K | minimaxai | $0.30/$1.20 | global |
 | glm-5 | 200K | zai-org | $1.00/$3.20 | global |
 | glm-4.7 | 200K | zai-org | $0.60/$2.20 | global |
+| grok-4.3 | 200K | xai | $1.25/$2.50 | global |
 | grok-4.20-reasoning | 200K | xai | $1.25/$2.50 | global |
 | grok-4.1-fast-reasoning | 128K | xai | $0.20/$0.50 | global |
 | gemma-4-26b-a4b-it | 262K | google | $0.15/$0.60 | global |

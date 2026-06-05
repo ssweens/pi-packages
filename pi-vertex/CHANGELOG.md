@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.12] - 2026-06-03
+### Added
+- **Claude Opus 4.8** (`claude-opus-4-8`) — added the new Vertex/Gemini Enterprise Agent Platform Anthropic partner model with 1M context, 128K max output tokens, and the same published global/regional pricing tier used by Opus 4.7.
+- **Grok 4.3** (`grok-4.3`) — added the new Vertex/Gemini Enterprise Agent Platform xAI partner model with 200K context, 32,768 max output tokens (conservative default), and the published Google pricing tier for Grok 4.3.
+
 ## [1.1.10] - 2026-05-28
 ### Fixed
 - Switched `registerProvider("vertex")` `apiKey` from legacy env-var shorthand (`"GOOGLE_CLOUD_PROJECT"`) to explicit env syntax (`"$GOOGLE_CLOUD_PROJECT"`). This removes deprecation warnings and future-proofs provider registration against upcoming removal of implicit env-var detection.

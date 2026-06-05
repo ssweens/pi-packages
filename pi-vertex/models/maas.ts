@@ -10,6 +10,25 @@ import type { VertexModelConfig } from "../types.js";
 export const MAAS_MODELS: VertexModelConfig[] = [
   // --- xAI Grok ---
   {
+    id: "grok-4.3",
+    name: "Grok 4.3",
+    apiId: "grok-4.3",
+    publisher: "xai",
+    endpointType: "maas",
+    contextWindow: 200000,
+    maxTokens: 32768,
+    input: ["text", "image"],
+    reasoning: true,
+    tools: true,
+    cost: {
+      input: 1.25,
+      output: 2.50,
+      cacheRead: 0.20,
+      cacheWrite: 0,
+    },
+    region: "global",
+  },
+  {
     id: "grok-4.20-reasoning",
     name: "Grok 4.20 Reasoning",
     apiId: "grok-4.20-reasoning",

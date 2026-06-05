@@ -1,5 +1,39 @@
 # Tasks
 
+## Current Task: pi-vertex add Claude Opus 4.8 and Grok 4.3
+- [x] Add `claude-opus-4-8` to `pi-vertex` with the correct Vertex model ID and published limits
+- [x] Add `grok-4.3` to `pi-vertex` with the correct Vertex model ID and published limits/pricing
+- [x] Update `pi-vertex` README examples/model table for the new models
+- [x] Bump `pi-vertex` version and add changelog entry
+- [x] Run `pi-vertex` package checks and record verification notes
+- [x] Update this task review section
+
+### Review (pi-vertex Claude Opus 4.8 and Grok 4.3)
+- Added `claude-opus-4-8` to `pi-vertex/models/claude.ts` with first-party Google Cloud published values:
+  - model ID / API ID: `claude-opus-4-8`
+  - context window: `1,000,000`
+  - max output tokens: `128,000`
+  - endpoint type: Anthropic MaaS on Vertex
+- Added `grok-4.3` to `pi-vertex/models/maas.ts` with first-party Google Cloud published values:
+  - model ID / API ID: `grok-4.3`
+  - context window: `200,000`
+  - max output tokens: `32,768` (conservative default based on the best available published guidance)
+  - endpoint type: xAI MaaS on Vertex
+  - pricing: `$1.25 / $2.50` global with `$0.20` cached input
+- Updated docs in `pi-vertex/README.md`:
+  - examples now include both `claude-opus-4-8` and `grok-4.3`
+  - model tables/counts now match the live registry (`45` total: `9` Gemini, `11` Claude, `3` Llama, `22` Other MaaS)
+- Updated metadata/docs:
+  - `pi-vertex/package.json`: `1.1.11` → `1.1.12`
+  - `pi-vertex/CHANGELOG.md`: added `1.1.12` entry for both model additions
+  - `pi-vertex/index.ts`: updated usage comment to show both models
+  - `pi-vertex/TEST_COVERAGE.md`: added registry sanity verification note
+- Verification:
+  - `bun -e 'import { ALL_MODELS, getModelById } ...'` ✅ confirmed both `claude-opus-4-8` and `grok-4.3` are exported with the expected IDs and limits
+  - `npm run build` ✅ (`nothing to build` in this package)
+  - `npm run check` ✅ (`nothing to check` in this package)
+  - `npm pack --dry-run` ✅ (`@ssweens/pi-vertex@1.1.12` tarball generated)
+
 ## Current Task: pi-leash permission prompt over-height scrollback bug
 - [x] Reproduce and trace why over-height `pi-leash` permission dialogs cause terminal scroll churn and destroy scrollback
 - [x] Implement a stable-height inline rendering strategy for `pi-leash` permission prompts without switching to overlay mode
