@@ -246,7 +246,7 @@ function mergeConfig(userConfig: GuardrailsConfig): ResolvedConfig {
     explainModel: pg.explainModel ?? null,
     explainTimeout: pg.explainTimeout ?? 5000,
     sudoMode: {
-      enabled: pg.sudoMode?.enabled ?? false,
+      enabled: pg.sudoMode?.enabled ?? true,
       timeout: pg.sudoMode?.timeout ?? 30000,
       preserveEnv: pg.sudoMode?.preserveEnv ?? false,
       cacheEnabled: pg.sudoMode?.cacheEnabled ?? true,
