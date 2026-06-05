@@ -16,7 +16,7 @@
   - endpoint type: Anthropic MaaS on Vertex
 - Added `grok-4.3` to `pi-vertex/models/maas.ts` with first-party Google Cloud published values:
   - model ID / API ID: `grok-4.3`
-  - context window: `200,000`
+  - context window: `1,000,000`
   - max output tokens: `32,768` (conservative default based on the best available published guidance)
   - endpoint type: xAI MaaS on Vertex
   - pricing: `$1.25 / $2.50` global with `$0.20` cached input
