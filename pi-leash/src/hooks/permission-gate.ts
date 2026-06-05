@@ -972,10 +972,16 @@ export function setupPermissionGateHook(
       return;
     }
 
-    // Emit dangerous event (presenter will play sound)
-    emitDangerous(pi, { command, description, pattern: rawPattern });
+    // When sudoMode handles sudo commands, skip the dangerous-command dialog
+    // entirely and let the sudo password prompt serve as confirmation.
+    const sudoMode = config.permissionGate.sudoMode;
+    const isSudoHandled = sudoMode.enabled && isSudoCommand(command);
 
-    if (config.permissionGate.requireConfirmation) {
+    if (!isSudoHandled) {
+      // Emit dangerous event (presenter will play sound)
+      emitDangerous(pi, { command, description, pattern: rawPattern });
+
+      if (config.permissionGate.requireConfirmation) {
       // In print/RPC mode, block by default (safe fallback)
       if (!ctx.hasUI) {
         const reason = `Dangerous command blocked (no UI to confirm): ${description}`;
@@ -1300,9 +1306,9 @@ export function setupPermissionGateHook(
 
         return { block: true, reason: "User denied dangerous command" };
       }
+    }
 
       // Handle sudo mode: if enabled and command is sudo, prompt for password and execute
-      const sudoMode = config.permissionGate.sudoMode;
       if (sudoMode.enabled && isSudoCommand(command)) {
         const maxAttempts = sudoMode.maxRetries;
         let attemptsUsed = 0;

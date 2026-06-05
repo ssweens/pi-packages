@@ -1,5 +1,18 @@
 # Tasks
 
+## Current Task: pi-leash skip dangerous-command dialog for sudo commands when sudoMode is enabled
+- [x] When sudoMode is enabled and command is sudo, skip the dangerous-command dialog and let the sudo password prompt serve as confirmation
+- [x] Run tests to verify no regressions
+- [x] Update this task review section
+
+### Review (pi-leash sudo dangerous-command bypass)
+- Root cause: when sudoMode is enabled, a sudo command triggers two prompts back-to-back: (1) the "Dangerous Command Detected" dialog (because sudo matches the superuser-command pattern) and (2) the sudo password prompt. The user shouldn't see the dangerous command dialog at all — the sudo password prompt IS the confirmation.
+- Fix in `pi-leash/src/hooks/permission-gate.ts`:
+  - Added `isSudoHandled` flag: `sudoMode.enabled && isSudoCommand(command)`
+  - Wrapped the dangerous-command dialog in `if (!isSudoHandled)` so it is skipped when sudoMode handles the command
+  - The sudo handler runs directly without a preceding dangerous-command prompt
+- Regression coverage: `pnpm test` ✅ (175 passing)
+
 ## Current Task: pi-vertex add Claude Opus 4.8 and Grok 4.3
 - [x] Add `claude-opus-4-8` to `pi-vertex` with the correct Vertex model ID and published limits
 - [x] Add `grok-4.3` to `pi-vertex` with the correct Vertex model ID and published limits/pricing
