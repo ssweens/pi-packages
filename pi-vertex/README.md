@@ -180,7 +180,7 @@ Prices shown are for the **global** endpoint. Non-global regions (us-east5, euro
 | glm-4.7 | 200K | zai-org | $0.60/$2.20 | global |
 | grok-4.3 | 1M | xai | $1.25/$2.50 | global |
 | grok-4.20-reasoning | 200K | xai | $1.25/$2.50 | global |
-| grok-4.1-fast-reasoning | 128K | xai | $0.20/$0.50 | global |
+| grok-4.1-fast-reasoning | 2M | xai | $0.20/$0.50 | global |
 | gemma-4-26b-a4b-it | 262K | google | $0.15/$0.60 | global |
 
 ## Regional Endpoints

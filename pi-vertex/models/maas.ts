@@ -53,7 +53,7 @@ export const MAAS_MODELS: VertexModelConfig[] = [
     apiId: "grok-4.1-fast-reasoning",
     publisher: "xai",
     endpointType: "maas",
-    contextWindow: 128000,
+    contextWindow: 2000000,
     maxTokens: 32000,
     input: ["text", "image"],
     reasoning: true,

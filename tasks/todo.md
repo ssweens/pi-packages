@@ -32,9 +32,9 @@
   - `bun -e 'import { ALL_MODELS, getModelById } ...'` ✅ confirmed both `claude-opus-4-8` and `grok-4.3` are exported with the expected IDs and limits
   - `npm run build` ✅ (`nothing to build` in this package)
   - `npm run check` ✅ (`nothing to check` in this package)
-  - `npm pack --dry-run` ✅ (`@ssweens/pi-vertex@1.1.12` tarball generated)
+  - Post-release correction: Grok 4.3 contextWindow updated from 200K to 1M (confirmed via xAI/Oracle docs); fix committed in 3aee938 and pushed to origin/main.
 
-## Current Task: pi-leash permission prompt over-height scrollback bug
+## Next
 - [x] Reproduce and trace why over-height `pi-leash` permission dialogs cause terminal scroll churn and destroy scrollback
 - [x] Implement a stable-height inline rendering strategy for `pi-leash` permission prompts without switching to overlay mode
 - [x] Add regression coverage for the dialog sizing/clamping behavior
