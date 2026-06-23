@@ -16,7 +16,7 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { TextContent } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { GatherInputDialog, type GatherInputDialogResult } from "./lib/gather-input-dialog.js";
+import { GatherInputDialog, type GatherInputDialogResult, type QuestionDef } from "./lib/gather-input-dialog.js";
 import { PermissionDialog, type PermissionDialogResult } from "./lib/permission-dialog.js";
 import { isSafeCommand } from "./lib/utils.js";
 
@@ -92,6 +92,68 @@ export default function huddleExtension(pi: ExtensionAPI): void {
 			ctx.ui.notify("Huddle mode disabled. Full access restored.");
 		}
 		updateStatus(ctx);
+	}
+
+	async function gatherInputRpcFallback(ctx: ExtensionContext, questions: QuestionDef[]): Promise<GatherInputDialogResult> {
+		const answers: Record<string, string> = {};
+		const annotations: Record<string, { markdown?: string }> = {};
+
+		for (const q of questions) {
+			const renderedOptions = q.options.map((opt) => `${opt.label} — ${opt.description}`);
+			const customLabel = q.multiSelect ? "Custom / multiple selections…" : "Custom / freeform answer…";
+			const chatLabel = "Chat about this";
+			const selected = await ctx.ui.select(q.question, [...renderedOptions, customLabel, chatLabel]);
+
+			if (!selected) return null;
+			if (selected === chatLabel) return { chatMode: true };
+
+			if (selected === customLabel) {
+				const answer = await ctx.ui.input(
+					q.question,
+					q.multiSelect ? "Type one or more answers, separated by commas" : "Type your answer",
+				);
+				if (!answer) return null;
+				answers[q.question] = answer.trim() || "(skipped)";
+				continue;
+			}
+
+			const index = renderedOptions.indexOf(selected);
+			const option = index >= 0 ? q.options[index] : undefined;
+			answers[q.question] = option?.label ?? selected;
+			if (option?.markdown) annotations[q.question] = { markdown: option.markdown };
+		}
+
+		return { answers, annotations };
+	}
+
+	async function permissionDialog(ctx: ExtensionContext, tuiTitle: string, rpcTitle: string): Promise<PermissionDialogResult> {
+		const result = await ctx.ui.custom<PermissionDialogResult | undefined>(
+			(tui, t, _kb, done) => {
+				const dialog = new PermissionDialog(tuiTitle, undefined, t);
+				dialog.onDone = (r) => done(r);
+				return {
+					get focused() { return dialog.focused; },
+					set focused(v: boolean) { dialog.focused = v; },
+					render: (w: number) => dialog.render(w),
+					invalidate: () => dialog.invalidate(),
+					handleInput: (data: string) => {
+						dialog.handleInput(data);
+						tui.requestRender();
+					},
+				};
+			},
+		);
+
+		if (result !== undefined) return result;
+
+		const choice = await ctx.ui.select(rpcTitle, ["Allow", "Deny", "Deny with feedback"]);
+		if (!choice) return null;
+		if (choice === "Allow") return { allowed: true };
+		if (choice === "Deny with feedback") {
+			const feedback = await ctx.ui.input("Why are you denying this?", "Optional feedback for the agent");
+			return { allowed: false, feedback: feedback?.trim() || undefined };
+		}
+		return { allowed: false };
 	}
 
 	// Primary command
@@ -181,7 +243,7 @@ Do not use this tool to request plan approval; in huddle mode the user approves 
 		execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
 			const { questions, metadata } = params;
 
-			const result = await ctx.ui.custom<GatherInputDialogResult>(
+			const customResult = await ctx.ui.custom<GatherInputDialogResult | undefined>(
 				(tui, theme, _kb, done) => {
 					const dialog = new GatherInputDialog(questions, theme);
 					dialog.onDone = (r) => done(r);
@@ -197,6 +259,7 @@ Do not use this tool to request plan approval; in huddle mode the user approves 
 					};
 				},
 			);
+			const result = customResult !== undefined ? customResult : await gatherInputRpcFallback(ctx, questions);
 
 			// Cancelled (Esc)
 			if (!result) {
@@ -236,23 +299,9 @@ Do not use this tool to request plan approval; in huddle mode the user approves 
 			const path = event.input.path || event.input.file || "unknown";
 			const theme = ctx.ui.theme;
 			const title = `${theme.fg("warning", theme.bold("⚠ Huddle Mode"))} — ${theme.fg("accent", toolName)}: ${theme.fg("accent", path)}`;
+			const plainTitle = `Huddle Mode — ${toolName}: ${path}`;
 
-			const result = await ctx.ui.custom<PermissionDialogResult>(
-				(tui, t, _kb, done) => {
-					const dialog = new PermissionDialog(title, undefined, t);
-					dialog.onDone = (r) => done(r);
-					return {
-						get focused() { return dialog.focused; },
-						set focused(v: boolean) { dialog.focused = v; },
-						render: (w: number) => dialog.render(w),
-						invalidate: () => dialog.invalidate(),
-						handleInput: (data: string) => {
-							dialog.handleInput(data);
-							tui.requestRender();
-						},
-					};
-				},
-			);
+			const result = await permissionDialog(ctx, title, plainTitle);
 
 			// Cancelled (Esc) - treat as deny
 			if (!result) {
@@ -273,23 +322,9 @@ Do not use this tool to request plan approval; in huddle mode the user approves 
 			if (!isSafeCommand(command)) {
 				const theme = ctx.ui.theme;
 				const title = `${theme.fg("warning", theme.bold("⚠ Huddle Mode"))} — ${theme.fg("accent", command)}`;
+				const plainTitle = `Huddle Mode — bash: ${command}`;
 
-				const result = await ctx.ui.custom<PermissionDialogResult>(
-					(tui, t, _kb, done) => {
-						const dialog = new PermissionDialog(title, undefined, t);
-						dialog.onDone = (r) => done(r);
-						return {
-							get focused() { return dialog.focused; },
-							set focused(v: boolean) { dialog.focused = v; },
-							render: (w: number) => dialog.render(w),
-							invalidate: () => dialog.invalidate(),
-							handleInput: (data: string) => {
-								dialog.handleInput(data);
-								tui.requestRender();
-							},
-						};
-					},
-				);
+				const result = await permissionDialog(ctx, title, plainTitle);
 
 				// Cancelled (Esc) - treat as deny
 				if (!result) {

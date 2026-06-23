@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+### Added
+- Added RPC-safe fallbacks for dangerous-command approval and sudo password prompts. Rich terminal `ctx.ui.custom()` dialogs remain unchanged in the pi TUI; RPC hosts can now answer via supported `select`, `confirm`, and `input` dialogs.
+
 ## [1.2.2] - 2026-06-02
 ### Fixed
 - Over-height dangerous-command and sudo password prompts now clamp to a stable inline height instead of growing past the terminal. This prevents the repeated scroll churn that destroyed scrollback.

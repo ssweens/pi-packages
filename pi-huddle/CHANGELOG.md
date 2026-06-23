@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+### Added
+- Added RPC-safe fallbacks for `gather_input` and huddle permission prompts. Rich `ctx.ui.custom()` dialogs remain unchanged in the pi TUI, while RPC hosts such as Minars can now answer via supported `select` and `input` dialogs instead of receiving an immediate cancelled result.
+
 ## [1.5.1] - 2026-05-28
 ### Changed
 - Switched the huddle keyboard toggle shortcut from `Alt+H` to `Ctrl+H` to align with the app's Ctrl-based hotkey conventions.

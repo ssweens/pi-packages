@@ -346,7 +346,7 @@ async function promptForSudoPassword(
   errorMessage?: string,
   attemptsRemaining?: number,
 ): Promise<SudoPasswordPromptResult | null> {
-  return ctx.ui.custom<SudoPasswordPromptResult | null>(
+  const result = await ctx.ui.custom<SudoPasswordPromptResult | null | undefined>(
     (tui: { terminal?: { rows?: number } }, theme, kb, done) => {
       const container = new Container();
       const yellowBorder = (s: string) => theme.fg("warning", s);
@@ -451,9 +451,9 @@ async function promptForSudoPassword(
         invalidate: () => container.invalidate(),
         handleInput: (data: string) => {
           const confirm =
-            kb.matches(data, "selectConfirm") || isEnterInput(data);
+            kb.matches(data, "selectConfirm" as any) || isEnterInput(data);
           const cancel =
-            kb.matches(data, "selectCancel") || matchesKey(data, Key.escape);
+            kb.matches(data, "selectCancel" as any) || matchesKey(data, Key.escape);
           const backspace =
             matchesKey(data, Key.backspace) || data === "\u007f";
           const tab = matchesKey(data, Key.tab) || data === "\t";
@@ -479,6 +479,29 @@ async function promptForSudoPassword(
       };
     },
   );
+
+  if (result !== undefined) return result;
+
+  const titleParts = [
+    "Sudo Password Required",
+    errorMessage ? `Previous attempt failed: ${errorMessage}` : undefined,
+    attemptsRemaining !== undefined
+      ? `${attemptsRemaining} attempt${attemptsRemaining === 1 ? "" : "s"} remaining`
+      : undefined,
+    `Command: ${command}`,
+  ].filter(Boolean);
+
+  const password = await ctx.ui.input(titleParts.join("\n"), "Enter sudo password");
+  if (!password) return null;
+
+  const remember = cacheEnabled
+    ? await ctx.ui.confirm(
+        "Remember sudo password?",
+        `Keep this password in memory for ${Math.max(1, Math.round(cacheTtlMs / 60000))} min?`,
+      )
+    : false;
+
+  return { password, remember };
 }
 
 interface CommandExplanation {
@@ -1018,7 +1041,7 @@ export function setupPermissionGateHook(
         | "allow-trust-session"
         | "deny";
 
-      const result = await ctx.ui.custom<ConfirmResult>(
+      let result = await ctx.ui.custom<ConfirmResult | undefined>(
         (
           tui: {
             terminal?: { rows?: number; columns?: number };
@@ -1221,9 +1244,9 @@ export function setupPermissionGateHook(
               }
 
               const confirm =
-                kb.matches(data, "selectConfirm") || isEnterInput(data);
+                kb.matches(data, "selectConfirm" as any) || isEnterInput(data);
               const cancel =
-                kb.matches(data, "selectCancel") ||
+                kb.matches(data, "selectCancel" as any) ||
                 matchesKey(data, Key.escape);
 
               if (data === "v" || data === "V") {
@@ -1256,6 +1279,28 @@ export function setupPermissionGateHook(
           };
         },
       );
+
+      if (result === undefined) {
+        const approvalOptions: Array<{ label: string; value: ConfirmResult }> = [
+          { label: "Allow once", value: "allow" },
+          { label: "Allow this exact command for the session", value: "allow-session" },
+          ...(canGrantCwdFileOpsSession
+            ? [{ label: "Allow cwd file operations for this session", value: "allow-cwd-fileops-session" as const }]
+            : []),
+          ...(canGrantTrustWindows
+            ? [
+                { label: "Allow eligible dangerous commands for 5 min", value: "allow-trust-window" as const },
+                { label: "Allow eligible dangerous commands for this session", value: "allow-trust-session" as const },
+              ]
+            : []),
+          { label: "Deny", value: "deny" },
+        ];
+        const selected = await ctx.ui.select(
+          `Dangerous Command Detected\nReason: ${description}\nSource: ${sourceLabel}\nTrigger: ${rawPattern}\nCommand: ${command}`,
+          approvalOptions.map((option) => option.label),
+        );
+        result = approvalOptions.find((option) => option.label === selected)?.value ?? "deny";
+      }
 
       if (result === "allow-session") {
         // Add command to session-allowed set (in-memory only)
