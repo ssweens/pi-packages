@@ -27,5 +27,5 @@ Ask a quick side question about your current coding session without interrupting
 ## Installation
 
 ```bash
-pi install @ssweens/pi-qq
+pi install npm:@ssweens/pi-qq
 ```
