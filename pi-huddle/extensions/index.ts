@@ -86,10 +86,10 @@ export default function huddleExtension(pi: ExtensionAPI): void {
 
 		if (huddleEnabled) {
 			applyHuddleTools();
-			ctx.ui.notify(`Huddle mode enabled. Read freely. Edits/writes will prompt for approval.`);
+			pi.sendMessage({ customType: "huddle", content: "⏸ Huddle mode enabled. Read freely. Edits/writes will prompt for approval.", display: true });
 		} else {
 			restoreNormalTools();
-			ctx.ui.notify("Huddle mode disabled. Full access restored.");
+			pi.sendMessage({ customType: "huddle", content: "▶ Huddle mode disabled. Full access restored.", display: true });
 		}
 		updateStatus(ctx);
 	}
