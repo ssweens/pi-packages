@@ -935,7 +935,7 @@ export function setupPermissionGateHook(
     // Check auto-deny patterns
     for (const pattern of autoDenyPatterns) {
       if (pattern.test(command)) {
-        ctx.ui.notify("Blocked dangerous command (auto-deny)", "error");
+        pi.sendMessage({ customType: "leash", content: "⛔ Blocked dangerous command (auto-deny).", display: true });
 
         const reason =
           "Command matched auto-deny pattern and was blocked automatically.";
@@ -1305,33 +1305,24 @@ export function setupPermissionGateHook(
       if (result === "allow-session") {
         // Add command to session-allowed set (in-memory only)
         sessionAllowedCommands.add(command);
-        ctx.ui.notify("Command allowed for this session", "info");
+        pi.sendMessage({ customType: "leash", content: "✓ Command allowed for this session.", display: true });
       }
 
       if (result === "allow-cwd-fileops-session") {
         sessionAllowCwdFileOps = true;
-        ctx.ui.notify(
-          "CWD-scoped file operations allowed for this session",
-          "info",
-        );
+        pi.sendMessage({ customType: "leash", content: "✓ CWD-scoped file operations allowed for this session.", display: true });
       }
 
       if (result === "allow-trust-window") {
         allowEligibleDangerousUntil = Date.now() + TRUST_WINDOW_MS;
         allowEligibleDangerousForSession = false;
-        ctx.ui.notify(
-          "Eligible dangerous commands allowed for 5 minutes",
-          "info",
-        );
+        pi.sendMessage({ customType: "leash", content: "✓ Eligible dangerous commands allowed for 5 minutes.", display: true });
       }
 
       if (result === "allow-trust-session") {
         allowEligibleDangerousForSession = true;
         allowEligibleDangerousUntil = 0;
-        ctx.ui.notify(
-          "Eligible dangerous commands allowed for this session",
-          "info",
-        );
+        pi.sendMessage({ customType: "leash", content: "✓ Eligible dangerous commands allowed for this session.", display: true });
       }
 
       if (result === "deny") {
@@ -1434,10 +1425,7 @@ export function setupPermissionGateHook(
             }
 
             // All attempts exhausted
-            ctx.ui.notify(
-              `Sudo failed: incorrect password (${maxAttempts} attempt${maxAttempts === 1 ? "" : "s"} exhausted)`,
-              "error",
-            );
+            pi.sendMessage({ customType: "leash", content: `⛔ Sudo failed: incorrect password (${maxAttempts} attempt${maxAttempts === 1 ? "" : "s"} exhausted).`, display: true });
             sudoResults.set(event.toolCallId, sudoResult);
             event.input.command = "true";
             return;
@@ -1450,8 +1438,8 @@ export function setupPermissionGateHook(
         }
       }
     } else {
-      // No confirmation required - just notify and allow
-      ctx.ui.notify(`Dangerous command detected: ${description}`, "warning");
+      // No confirmation required - auto-allowed; write durable audit record
+      pi.sendMessage({ customType: "leash", content: `⚠ Dangerous command auto-allowed: ${description}.`, display: true });
     }
 
     return;
