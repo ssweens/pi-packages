@@ -156,24 +156,21 @@ export default function piRecap(pi: ExtensionAPI) {
         timestamp: Date.now(),
       };
 
-      // Get API key
+      // Get API key and headers — some providers use headers instead of apiKey
       const auth = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model);
       if (!auth.ok) {
         return { ok: false, error: `API key retrieval failed: ${auth.error}` };
       }
-      const apiKey = auth.apiKey;
-      if (!apiKey) {
-        return { ok: false, error: "API key is empty" };
-      }
 
       // Make the side LLM call (no tools)
+      // Pass both apiKey and headers — matches how pi's own agent-session.ts works
       const response = await complete(
         ctx.model,
         {
           systemPrompt: RECAP_PROMPT,
           messages: [userMessage],
         },
-        { apiKey },
+        { apiKey: auth.apiKey, headers: auth.headers },
       );
 
       if (response.stopReason === "error") {
