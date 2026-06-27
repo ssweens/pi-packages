@@ -12,7 +12,7 @@
 
 import { complete, type Message } from "@mariozechner/pi-ai";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { buildSessionContext, convertToLlm } from "@mariozechner/pi-coding-agent";
+import { buildSessionContext, convertToLlm, serializeConversation } from "@mariozechner/pi-coding-agent";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -104,7 +104,11 @@ export default function piRecap(pi: ExtensionAPI) {
 
     isGenerating = true;
     try {
-      // Build conversation context
+      // Build conversation context and serialize to a single user message.
+      // We serialize the conversation to text (like pi-handoff does) rather
+      // than passing the raw message array. Raw messages end with an assistant
+      // message, which causes most LLM APIs (especially Anthropic) to reject
+      // the request — they expect the last message to be from the user.
       const branch = ctx.sessionManager.getBranch();
       const leafId = ctx.sessionManager.getLeafId();
       const { messages } = buildSessionContext(branch, leafId);
@@ -113,6 +117,17 @@ export default function piRecap(pi: ExtensionAPI) {
       if (llmMessages.length === 0) {
         return { ok: false, error: `convertToLlm returned 0 messages (branch has ${branch.length} entries)` };
       }
+
+      const conversationText = serializeConversation(llmMessages);
+      if (!conversationText.trim()) {
+        return { ok: false, error: "serializeConversation returned empty text" };
+      }
+
+      const userMessage: Message = {
+        role: "user",
+        content: [{ type: "text", text: `## Conversation\n\n${conversationText}` }],
+        timestamp: Date.now(),
+      };
 
       // Get API key
       const auth = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model);
@@ -129,7 +144,7 @@ export default function piRecap(pi: ExtensionAPI) {
         ctx.model,
         {
           systemPrompt: RECAP_PROMPT,
-          messages: llmMessages as Message[],
+          messages: [userMessage],
         },
         { apiKey },
       );
