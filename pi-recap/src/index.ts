@@ -29,6 +29,31 @@ const RECAP_CUSTOM_TYPE = "pi-recap";
 const WIDGET_NAME = "pi-recap";
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Filter LLM messages to only human-readable content.
+ * Strips tool calls and tool results — keeps only user text and assistant text.
+ * Thinking content is excluded (internal reasoning, not user-visible).
+ */
+function filterToReadableMessages(messages: Message[]): Message[] {
+  const filtered: Message[] = [];
+  for (const msg of messages) {
+    if (msg.role === "user") {
+      filtered.push(msg);
+    } else if (msg.role === "assistant") {
+      const textOnly = msg.content.filter((c: any) => c.type === "text");
+      if (textOnly.length > 0) {
+        filtered.push({ ...msg, content: textOnly });
+      }
+    }
+    // Skip toolResult entirely
+  }
+  return filtered;
+}
+
+// ---------------------------------------------------------------------------
 // Extension
 // ---------------------------------------------------------------------------
 
@@ -118,7 +143,9 @@ export default function piRecap(pi: ExtensionAPI) {
         return { ok: false, error: `convertToLlm returned 0 messages (branch has ${branch.length} entries)` };
       }
 
-      const conversationText = serializeConversation(llmMessages);
+      // Filter to readable text only — strip tool calls, tool results, thinking
+      const readableMessages = filterToReadableMessages(llmMessages);
+      const conversationText = serializeConversation(readableMessages);
       if (!conversationText.trim()) {
         return { ok: false, error: "serializeConversation returned empty text" };
       }
