@@ -8,13 +8,6 @@
  * 2. On any user input, cancel the timer and clear any visible recap
  * 3. If the timer fires, generate a recap via a side LLM call
  * 4. Show the recap as an ephemeral widget above the editor
- *
- * Gating (matches Claude Code's away-summary approach):
- * - ≥3 user turns in the session
- * - ≥2 new user messages since the last recap
- * - No draft text in the editor
- * - Model is available
- * - Recap is enabled
  */
 
 import { complete, type Message } from "@mariozechner/pi-ai";
@@ -49,14 +42,11 @@ export default function piRecap(pi: ExtensionAPI) {
   let userTurnCount = 0;
   let messagesSinceLastRecap = 0;
   let recapCount = 0;
-  let isGenerating = false; // guard against concurrent generation
-  let lastRecapTime = 0;
+  let isGenerating = false;
+  let agentEndCount = 0; // track how many agent_end events we receive
 
   // ── Helpers ─────────────────────────────────────────────────────────────
 
-  /**
-   * Cancel the pending idle timer (if any).
-   */
   function cancelTimer() {
     if (idleTimer !== null) {
       clearTimeout(idleTimer);
@@ -64,16 +54,14 @@ export default function piRecap(pi: ExtensionAPI) {
     }
   }
 
-  /**
-   * Clear any visible recap widget.
-   */
   function clearRecapWidget(ctx: any) {
-    ctx.ui.setWidget(WIDGET_NAME, undefined);
+    try {
+      ctx.ui.setWidget(WIDGET_NAME, undefined);
+    } catch {
+      // ignore — may not be available in all modes
+    }
   }
 
-  /**
-   * Count user messages in the current branch (for reconstruction).
-   */
   function countUserTurns(ctx: any): number {
     let count = 0;
     for (const entry of ctx.sessionManager.getBranch()) {
@@ -84,9 +72,6 @@ export default function piRecap(pi: ExtensionAPI) {
     return count;
   }
 
-  /**
-   * Restore recap count from custom entries in the session.
-   */
   function restoreRecapCount(ctx: any): number {
     for (const entry of ctx.sessionManager.getEntries()) {
       if (entry.type === "custom" && entry.customType === RECAP_CUSTOM_TYPE) {
@@ -97,31 +82,25 @@ export default function piRecap(pi: ExtensionAPI) {
   }
 
   /**
-   * Check all gates to decide whether we should generate a recap.
+   * Check all gates. Returns a string describing the failure reason,
+   * or null if all gates pass.
    */
-  function shouldGenerate(ctx: any): boolean {
-    if (!enabled) return false;
-    if (userTurnCount < MIN_USER_TURNS) return false;
-    if (messagesSinceLastRecap < MIN_MESSAGES_SINCE_RECAP) return false;
-    if (!ctx.model) return false;
-    if (isGenerating) return false;
-
-    // Check for draft text — if user is mid-composition, don't interrupt
-    try {
-      const draft = ctx.ui.getEditorText();
-      if (draft && draft.trim().length > 0) return false;
-    } catch {
-      // In non-TUI modes, getEditorText may not be available
-    }
-
-    return true;
+  function checkGates(ctx: any): string | null {
+    if (!enabled) return "recap is disabled";
+    if (userTurnCount < MIN_USER_TURNS) return `userTurnCount (${userTurnCount}) < ${MIN_USER_TURNS}`;
+    if (messagesSinceLastRecap < MIN_MESSAGES_SINCE_RECAP) return `messagesSinceLastRecap (${messagesSinceLastRecap}) < ${MIN_MESSAGES_SINCE_RECAP}`;
+    if (!ctx.model) return "ctx.model is null/undefined";
+    if (isGenerating) return "already generating";
+    return null;
   }
 
   /**
    * Generate a recap via side LLM call.
+   * Returns the recap text on success, or a description of what failed.
    */
-  async function generateRecap(ctx: any) {
-    if (!shouldGenerate(ctx)) return;
+  async function generateRecap(ctx: any): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
+    const gateFailure = checkGates(ctx);
+    if (gateFailure) return { ok: false, error: `Gate failed: ${gateFailure}` };
 
     isGenerating = true;
     try {
@@ -131,12 +110,19 @@ export default function piRecap(pi: ExtensionAPI) {
       const { messages } = buildSessionContext(branch, leafId);
       const llmMessages = convertToLlm(messages);
 
-      if (llmMessages.length === 0) return;
+      if (llmMessages.length === 0) {
+        return { ok: false, error: `convertToLlm returned 0 messages (branch has ${branch.length} entries)` };
+      }
 
       // Get API key
       const auth = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model);
-      if (!auth.ok) return;
+      if (!auth.ok) {
+        return { ok: false, error: `API key retrieval failed: ${auth.error}` };
+      }
       const apiKey = auth.apiKey;
+      if (!apiKey) {
+        return { ok: false, error: "API key is empty" };
+      }
 
       // Make the side LLM call (no tools)
       const response = await complete(
@@ -145,10 +131,15 @@ export default function piRecap(pi: ExtensionAPI) {
           systemPrompt: RECAP_PROMPT,
           messages: llmMessages as Message[],
         },
-        { apiKey, signal: ctx.signal },
+        { apiKey },
       );
 
-      if (response.stopReason === "error" || response.stopReason === "aborted") return;
+      if (response.stopReason === "error") {
+        return { ok: false, error: `LLM error: ${(response as any).errorMessage ?? "unknown"}` };
+      }
+      if (response.stopReason === "aborted") {
+        return { ok: false, error: "LLM call was aborted" };
+      }
 
       // Extract text from response
       const text = response.content
@@ -157,22 +148,27 @@ export default function piRecap(pi: ExtensionAPI) {
         .join("\n")
         .trim();
 
-      if (!text) return;
+      if (!text) {
+        return { ok: false, error: `LLM returned empty text. stopReason=${response.stopReason}, content types=[${response.content.map(c => c.type).join(",")}]` };
+      }
 
-      // Format recap line
+      // Format and show recap
       const suffix = recapCount < DISABLE_HINT_LIMIT ? " (disable recaps in /config)" : "";
       const recapLine = `※ recap: ${text}${suffix}`;
 
-      // Show via widget (ephemeral — never written to transcript)
       ctx.ui.setWidget(WIDGET_NAME, [recapLine]);
 
       // Update counters
       recapCount++;
       messagesSinceLastRecap = 0;
-      lastRecapTime = Date.now();
 
-      // Persist recap count (survives session reload)
+      // Persist recap count
       pi.appendEntry(RECAP_CUSTOM_TYPE, { count: recapCount });
+
+      return { ok: true, text };
+    } catch (err) {
+      const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+      return { ok: false, error: `Exception: ${msg}` };
     } finally {
       isGenerating = false;
     }
@@ -182,28 +178,35 @@ export default function piRecap(pi: ExtensionAPI) {
    * Start the idle timer after agent completion.
    */
   function startIdleTimer(ctx: any) {
-    if (!shouldGenerate(ctx)) return;
+    const gateFailure = checkGates(ctx);
+    if (gateFailure) return; // silently skip — normal case for first few turns
 
     cancelTimer();
-    idleTimer = setTimeout(() => {
+    idleTimer = setTimeout(async () => {
       idleTimer = null;
-      generateRecap(ctx);
+      const result = await generateRecap(ctx);
+      if (!result.ok) {
+        // Fire-and-forget notify — user can see why recap failed
+        try {
+          ctx.ui.notify(`[pi-recap] ${result.error}`, "warning");
+        } catch {
+          // swallow — non-TUI mode
+        }
+      }
     }, idleThresholdMs);
   }
 
   // ── Event handlers ──────────────────────────────────────────────────────
 
-  // Reconstruct state on session start
   pi.on("session_start", async (_event, ctx) => {
     userTurnCount = countUserTurns(ctx);
     recapCount = restoreRecapCount(ctx);
     messagesSinceLastRecap = 0;
-    lastRecapTime = 0;
+    agentEndCount = 0;
     cancelTimer();
     clearRecapWidget(ctx);
   });
 
-  // On user input: cancel timer, clear recap, track turns
   pi.on("input", async (event, ctx) => {
     if (event.source !== "interactive") return;
 
@@ -214,12 +217,11 @@ export default function piRecap(pi: ExtensionAPI) {
     messagesSinceLastRecap++;
   });
 
-  // After agent completion: start idle timer
   pi.on("agent_end", async (_event, ctx) => {
+    agentEndCount++;
     startIdleTimer(ctx);
   });
 
-  // Cleanup on shutdown
   pi.on("session_shutdown", async (_event, _ctx) => {
     cancelTimer();
   });
@@ -227,9 +229,57 @@ export default function piRecap(pi: ExtensionAPI) {
   // ── Commands ────────────────────────────────────────────────────────────
 
   pi.registerCommand("recap", {
-    description: "Toggle away recap or set idle threshold",
+    description: "Toggle away recap, set threshold, or test",
     handler: async (args, ctx) => {
       const arg = args.trim().toLowerCase();
+
+      if (arg === "test") {
+        // Force-generate a recap right now, bypassing all gates
+        ctx.ui.notify("[pi-recap] Force-testing recap generation...", "info");
+
+        isGenerating = false; // reset guard
+        const savedEnabled = enabled;
+        const savedTurns = userTurnCount;
+        const savedMsgs = messagesSinceLastRecap;
+
+        // Temporarily relax gates
+        enabled = true;
+        userTurnCount = 999;
+        messagesSinceLastRecap = 999;
+
+        const result = await generateRecap(ctx);
+
+        // Restore original state
+        enabled = savedEnabled;
+        userTurnCount = savedTurns;
+        messagesSinceLastRecap = savedMsgs;
+
+        if (result.ok) {
+          ctx.ui.notify(`[pi-recap] Success! Recap shown above editor.`, "info");
+        } else {
+          ctx.ui.notify(`[pi-recap] FAILED: ${result.error}`, "error");
+        }
+        return;
+      }
+
+      if (arg === "debug") {
+        const gateFailure = checkGates(ctx);
+        const thresholdSec = Math.round(idleThresholdMs / 1000);
+        const lines = [
+          `enabled: ${enabled}`,
+          `threshold: ${thresholdSec}s`,
+          `userTurnCount: ${userTurnCount} (need >= ${MIN_USER_TURNS})`,
+          `messagesSinceLastRecap: ${messagesSinceLastRecap} (need >= ${MIN_MESSAGES_SINCE_RECAP})`,
+          `recapCount: ${recapCount}`,
+          `isGenerating: ${isGenerating}`,
+          `agentEndCount: ${agentEndCount}`,
+          `timer active: ${idleTimer !== null}`,
+          `model: ${ctx.model ? `${(ctx.model as any).provider}/${(ctx.model as any).id}` : "null"}`,
+          `gates: ${gateFailure ?? "ALL PASS"}`,
+        ];
+        ctx.ui.notify(lines.join("\n"), "info");
+        return;
+      }
 
       if (!arg || arg === "on") {
         if (!enabled) {
@@ -276,7 +326,7 @@ export default function piRecap(pi: ExtensionAPI) {
       }
 
       ctx.ui.notify(
-        "Usage: /recap [on|off|status|<threshold>]  e.g. /recap 3m, /recap 30s",
+        "Usage: /recap [on|off|status|debug|test|<threshold>]\n  e.g. /recap test, /recap debug, /recap 3m, /recap 30s",
         "error",
       );
     },
