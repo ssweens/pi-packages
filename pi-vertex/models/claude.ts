@@ -11,6 +11,33 @@
 import type { VertexModelConfig } from "../types.js";
 
 export const CLAUDE_MODELS: VertexModelConfig[] = [
+  // Claude Fable 5 (Mythos-class)
+  {
+    id: "claude-fable-5",
+    name: "Claude Fable 5",
+    apiId: "claude-fable-5",
+    publisher: "anthropic",
+    endpointType: "maas",
+    contextWindow: 1000000,
+    maxTokens: 128000,
+    input: ["text", "image", "file"],
+    reasoning: true,
+    tools: true,
+    cost: {
+      input: 10.00,
+      output: 50.00,
+      cacheRead: 1.00,
+      cacheWrite: 12.50,
+    },
+    costRegional: {
+      input: 11.00,
+      output: 55.00,
+      cacheRead: 1.10,
+      cacheWrite: 13.75,
+    },
+    region: "global",
+  },
+
   // Claude 4.8 series
   {
     id: "claude-opus-4-8",

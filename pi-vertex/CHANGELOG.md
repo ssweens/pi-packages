@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.13] - 2026-06-09
+### Added
+- **Claude Fable 5** (`claude-fable-5`) — Anthropic's first public Mythos-class model, positioned above Opus 4.8. 1M context, 128K max output, text/image/file input, reasoning (adaptive thinking always on), tools. $10/$50 per 1M tokens (global), $1/1M cache read, 10% regional premium. Available on Vertex AI Model Garden.
+
 ## [1.1.12] - 2026-06-03
 ### Added
 - **Claude Opus 4.8** (`claude-opus-4-8`) — added the new Vertex/Gemini Enterprise Agent Platform Anthropic partner model with 1M context, 128K max output tokens, and the same published global/regional pricing tier used by Opus 4.7.
