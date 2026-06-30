@@ -1,5 +1,25 @@
 # Tasks
 
+## Current Task: pi-dynamic-models configurable model sources for ClinePass
+- [x] Add configurable model source URL/path support to `pi-dynamic-models`
+- [x] Update the ClinePass config example to use `modelsSource`
+- [x] Bump package version and add changelog entry
+- [x] Verify the updated discovery flow against the live ClinePass endpoint and standard `/v1/models`
+- [x] Update this task review section
+
+### Review (pi-dynamic-models configurable model sources for ClinePass)
+- Added `modelsSource` support to `pi-dynamic-models` so providers can point at arbitrary catalog endpoints and specify JSON paths for the item array and per-item fields.
+- The extension now defaults to `GET {baseUrl}/models` when `modelsSource` is omitted, so standard OpenAI-style providers keep working.
+- ClinePass is now configured through the live config file with:
+  - `modelsSource.url = https://api.cline.bot/api/v1/ai/cline/recommended-models`
+  - `modelsSource.itemsPath = clinePass`
+  - `idPath = id`, `namePath = name`
+- Verification:
+  - Imported the extension successfully with `bun` ✅
+  - Ran the extension against the live ClinePass recommended-models endpoint with a mock `pi` object ✅
+  - Confirmed `clinepass` registers 10 models from the `clinePass` array and resolves the API key from `"$CLINE_API_KEY"` ✅
+  - Confirmed the JSON path helper covers both `clinePass` item arrays and OpenAI-style `{ data: [...] }` payloads ✅
+
 ## Current Task: pi-vertex add Claude Opus 4.8 and Grok 4.3
 - [x] Add `claude-opus-4-8` to `pi-vertex` with the correct Vertex model ID and published limits
 - [x] Add `grok-4.3` to `pi-vertex` with the correct Vertex model ID and published limits/pricing

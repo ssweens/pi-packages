@@ -1,5 +1,15 @@
 # Lessons Learned
 
+## NEVER commit before verifying + NEVER commit without explicit user permission
+- **Verify first, always.** Run the actual command/behavior. Tests passing ≠ behavior correct.
+- **Then ask**: "May I commit?" Do not auto-commit.
+- AGENTS.md is explicit: "Suggest git add and git commit commands — Then ask user permission."
+- Violation of this is not a minor slip. It wastes the user's time and forces rollbacks.
+
+## Trace the layer the user pointed at before going lower
+When the user points to an extension/package, inspect that package’s code path first. Don’t jump to core runtime behavior until you’ve proven the extension delegates there; otherwise you waste time diagnosing the wrong layer and miss the actual bug in the extension itself.
+
+
 ## Alphabetizing Model Lists
 When a package provides a large number of models (like `pi-vertex` with 40+ models), it is better for UX to sort them alphabetically by their display name rather than by provider/category or registration order. This makes it easier for users to find specific models in lists.
 

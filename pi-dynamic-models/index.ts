@@ -2,7 +2,7 @@
  * pi-dynamic-models — Dynamic model discovery for Pi coding agent
  *
  * Reads ~/.pi/agent/settings/pi-dynamic-models.json and registers each configured
- * server as a named provider by fetching GET {baseUrl}/models at startup.
+ * server as a named provider by fetching a configurable model source at startup.
  *
  * Config file (~/.pi/agent/settings/pi-dynamic-models.json):
  *
@@ -39,7 +39,7 @@
  *                        but not returned by the server are still registered.
  *
  * Discovery + override merge logic:
- *   1. Fetch all model IDs from GET {baseUrl}/models
+ *   1. Fetch all model IDs from the configured source (default: GET {baseUrl}/models)
  *   2. Union with model IDs listed in config "models"
  *   3. For each: use configured fields if present, otherwise use defaults
  *
@@ -50,6 +50,7 @@
 
 import { getAgentDir } from "@mariozechner/pi-coding-agent";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { execSync } from "node:child_process";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
@@ -58,6 +59,31 @@ function truncatePlain(text: string, width: number): string {
   if (text.length <= width) return text;
   if (width === 1) return "…";
   return `${text.slice(0, width - 1)}…`;
+}
+
+function resolveConfiguredApiKey(apiKey?: string): string | undefined {
+  if (!apiKey || apiKey === "none") return undefined;
+
+  if (apiKey.startsWith("!")) {
+    try {
+      const resolved = execSync(apiKey.slice(1), {
+        encoding: "utf-8",
+        timeout: 10_000,
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
+      return resolved || undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  const templateMatch = apiKey.match(/^\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))$/);
+  if (templateMatch) {
+    const envName = templateMatch[1] ?? templateMatch[2];
+    return process.env[envName] || undefined;
+  }
+
+  return process.env[apiKey] ?? apiKey;
 }
 
 // Mirrors OpenAICompletionsCompat from @mariozechner/pi-ai
@@ -83,25 +109,31 @@ interface ModelOverride {
   maxTokens?: number;
 }
 
+interface ModelSourceConfig {
+  url: string;
+  itemsPath?: string;
+  idPath?: string;
+  namePath?: string;
+}
+
 interface ServerConfig {
   provider: string;
   baseUrl: string;
   apiKey?: string;
   api?: string;
   compat?: OpenAICompat;
+  modelsSource?: ModelSourceConfig;
   models?: Record<string, ModelOverride>;
 }
 
-interface RemoteModel {
+interface DiscoveredModel {
   id: string;
-  object?: string;
-  created?: number;
-  owned_by?: string;
+  name?: string;
 }
 
 interface ModelsResponse {
   object?: string;
-  data: RemoteModel[];
+  data: DiscoveredModel[];
 }
 
 /** Shape returned by GET {baseUrl}/corral/models */
@@ -154,6 +186,38 @@ function loadConfig(): ServerConfig[] {
   return parseConfigFile(configPath);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function getValueAtPath(value: unknown, path?: string): unknown {
+  const normalizedPath = path?.trim();
+  if (!normalizedPath || normalizedPath === ".") return value;
+
+  let current: unknown = value;
+  for (const part of normalizedPath.split(".").filter(Boolean)) {
+    if (current === null || current === undefined) return undefined;
+    if (Array.isArray(current) && /^\d+$/.test(part)) {
+      current = current[Number(part)];
+      continue;
+    }
+    if (!isRecord(current)) return undefined;
+    current = current[part];
+  }
+  return current;
+}
+
+function toOptionalString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function readItemsAtPath(value: unknown, path?: string): unknown[] {
+  const scoped = getValueAtPath(value, path);
+  if (Array.isArray(scoped)) return scoped;
+  if (!path && isRecord(value) && Array.isArray(value.data)) return value.data;
+  return [];
+}
+
 async function fetchCorralModelDetails(
   baseUrl: string,
   apiKey?: string,
@@ -184,8 +248,15 @@ async function fetchCorralModelDetails(
   return new Map();
 }
 
-async function fetchRemoteModels(baseUrl: string, apiKey?: string): Promise<RemoteModel[]> {
-  const url = `${baseUrl.replace(/\/+$/, "")}/models`;
+async function fetchModelsFromSource(
+  source: ModelSourceConfig,
+  apiKey?: string,
+): Promise<DiscoveredModel[]> {
+  const url = source.url.trim();
+  if (!url) {
+    throw new Error("model source url is required");
+  }
+
   const headers: Record<string, string> = { Accept: "application/json" };
   if (apiKey) {
     headers["Authorization"] = `Bearer ${apiKey}`;
@@ -201,12 +272,19 @@ async function fetchRemoteModels(baseUrl: string, apiKey?: string): Promise<Remo
   }
 
   const body = (await response.json()) as ModelsResponse;
+  const items = readItemsAtPath(body, source.itemsPath);
+  const idPath = source.idPath?.trim() || "id";
+  const namePath = source.namePath?.trim() || "name";
 
-  // Servers may return a plain array or the standard {object:"list", data:[...]} shape
-  if (Array.isArray(body)) {
-    return body as RemoteModel[];
-  }
-  return body.data ?? [];
+  return items.flatMap((item) => {
+    if (!isRecord(item)) return [];
+    const id = toOptionalString(getValueAtPath(item, idPath))?.trim();
+    if (!id) return [];
+    return [{
+      id,
+      name: toOptionalString(getValueAtPath(item, namePath))?.trim() || id,
+    }];
+  });
 }
 
 export default async function (pi: ExtensionAPI): Promise<void> {
@@ -216,65 +294,76 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   const startupLines: string[] = [];
 
   await Promise.all(
-    servers.map(async ({ provider, baseUrl, apiKey, api, compat, models: modelOverrides }) => {
-      // Fetch remote model IDs and corral metadata in parallel
-      let fetchedIds: string[] = [];
-      let corralDetails = new Map<string, CorralModelDetail>();
+    servers.map(async ({ provider, baseUrl, apiKey, api, compat, modelsSource, models: modelOverrides }) => {
+      const resolvedApiKey = resolveConfiguredApiKey(apiKey);
+      const normalizedBaseUrl = baseUrl.replace(/\/+$/, "");
+      const source = modelsSource?.url
+        ? modelsSource
+        : { url: `${normalizedBaseUrl}/models` };
+
+      // Fetch source model IDs first; corral metadata is additive only.
+      // If the source fetch fails but explicit models exist, keep those.
+      let fetchedModels: DiscoveredModel[] = [];
       try {
-        const [fetched, details] = await Promise.all([
-          fetchRemoteModels(baseUrl, apiKey),
-          fetchCorralModelDetails(baseUrl, apiKey),
-        ]);
-        fetchedIds = fetched.map((m) => m.id);
-        corralDetails = details;
+        fetchedModels = await fetchModelsFromSource(source, resolvedApiKey);
       } catch (err) {
         if (modelOverrides && Object.keys(modelOverrides).length > 0) {
-          startupLines.push(`   [pi-dynamic-models] Could not reach ${baseUrl}/models (${err}), using configured models only`);
+          startupLines.push(`   [pi-dynamic-models] Could not reach ${source.url} (${err}), using configured models only`);
         } else {
-          startupLines.push(`   [pi-dynamic-models] Could not reach ${baseUrl}/models: ${err}`);
+          startupLines.push(`   [pi-dynamic-models] Could not reach ${source.url}: ${err}`);
           return;
         }
       }
 
+      let corralDetails = new Map<string, CorralModelDetail>();
+      try {
+        corralDetails = await fetchCorralModelDetails(baseUrl, resolvedApiKey);
+      } catch {
+        // Optional metadata only.
+      }
+
       // Union of fetched IDs and explicitly configured IDs
-      const allIds = new Set<string>([...fetchedIds, ...Object.keys(modelOverrides ?? {})]);
+      const allIds = new Set<string>([...fetchedModels.map((m) => m.id), ...Object.keys(modelOverrides ?? {})]);
 
       if (allIds.size === 0) {
         startupLines.push(`   [pi-dynamic-models] No models for provider "${provider}"`);
         return;
       }
 
+      const discoveredById = new Map(fetchedModels.map((model) => [model.id, model]));
+
       pi.registerProvider(provider, {
-        baseUrl: baseUrl.replace(/\/+$/, ""),
-        // Supports literal keys, env var names, and !shell-commands —
-        // same resolution as models.json. Placeholder "none" for open servers.
-        apiKey: apiKey ?? "none",
-        authHeader: !!apiKey,
+        baseUrl: normalizedBaseUrl,
+        // Supports literal keys, env var names, $ENV_VAR references, and !shell-commands.
+        apiKey: resolvedApiKey,
+        authHeader: !!resolvedApiKey,
         api: api ?? "openai-completions",
         models: Array.from(allIds).sort((a, b) => a.localeCompare(b)).map((id) => {
           const override = modelOverrides?.[id];
           const corral = corralDetails.get(id);
+          const discovered = discoveredById.get(id);
           return {
             id,
-            name:          override?.name          ?? id,
-            reasoning:     override?.reasoning     ?? false,
-            input:         override?.input         ?? (["text"] as ("text" | "image")[]),
+            name: override?.name ?? discovered?.name ?? id,
+            reasoning: override?.reasoning ?? false,
+            input: override?.input ?? (["text"] as ("text" | "image")[]),
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             // Priority: manual config override > corral's live context_size > default
             contextWindow: override?.contextWindow ?? corral?.context_size ?? 128_000,
-            maxTokens:     override?.maxTokens     ?? 16_384,
+            maxTokens: override?.maxTokens ?? 16_384,
             // compat is only meaningful for openai-completions but harmless elsewhere
             ...(compat ? { compat } : {}),
           };
         }),
       });
 
-      const fetchedNote = fetchedIds.length > 0 ? `${fetchedIds.length} discovered` : "0 discovered";
+      const fetchedNote = fetchedModels.length > 0 ? `${fetchedModels.length} discovered` : "0 discovered";
       const overrideNote = Object.keys(modelOverrides ?? {}).length > 0
         ? `, ${Object.keys(modelOverrides!).length} configured`
         : "";
+      const sourceNote = modelsSource?.url ? ` via ${source.url}` : " via /models";
       startupLines.push(
-        `   [pi-dynamic-models] Provider "${provider}": ${fetchedNote}${overrideNote}, ${allIds.size} total (${api ?? "openai-completions"})`
+        `   [pi-dynamic-models] Provider "${provider}": ${fetchedNote}${overrideNote}, ${allIds.size} total (${api ?? "openai-completions"})${sourceNote}`
       );
     })
   );

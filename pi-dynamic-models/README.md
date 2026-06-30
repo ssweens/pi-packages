@@ -4,7 +4,7 @@
 pi install @ssweens/pi-dynamic-models
 ```
 
-Dynamic model discovery for [pi](https://github.com/badlogic/pi-mono). Point it at any OpenAI-compatible, Anthropic, or Google API server and it fetches available models at startup — no manual model list needed.
+Dynamic model discovery for [pi](https://github.com/badlogic/pi-mono). Point it at any OpenAI-compatible API server or model-catalog endpoint and it fetches available models at startup — no manual model list needed.
 
 ![pi-dynamic-models selector](screenshot.png)
 
@@ -39,6 +39,18 @@ Create `~/.pi/agent/settings/pi-dynamic-models.json`:
     }
   },
   {
+    "provider": "clinepass",
+    "baseUrl": "https://api.cline.bot/api/v1",
+    "apiKey": "$CLINE_API_KEY",
+    "api": "openai-completions",
+    "modelsSource": {
+      "url": "https://api.cline.bot/api/v1/ai/cline/recommended-models",
+      "itemsPath": "clinePass",
+      "idPath": "id",
+      "namePath": "name"
+    }
+  },
+  {
     "provider": "my-proxy",
     "baseUrl": "http://localhost:8082",
     "apiKey": "secret",
@@ -54,8 +66,9 @@ Create `~/.pi/agent/settings/pi-dynamic-models.json`:
 | `provider` | ✓ | Name shown in the model selector |
 | `baseUrl` | ✓ | Server URL, including `/v1` if needed |
 | `api` | | Pi API type (default: `openai-completions`). See below. |
-| `apiKey` | | Literal key, env var name, or `!shell-command` — same resolution as `models.json`. Omit for open servers. |
+| `apiKey` | | Literal key, env var name, `$ENV_VAR`, or `!shell-command`. Omit for open servers. |
 | `compat` | | OpenAI compat overrides applied to every model. See below. |
+| `modelsSource` | | Optional model catalog endpoint + JSON paths (`url`, `itemsPath`, `idPath`, `namePath`). Defaults to GET `{baseUrl}/models` and `data` when omitted; top-level arrays work by omitting `itemsPath` or setting it to `""`. |
 | `models` | | Per-model metadata keyed by model ID. Overrides defaults for discovered models. Models listed here but not returned by the server are still registered. |
 
 #### `models` override fields (all optional)
@@ -123,6 +136,10 @@ Discovered models use conservative defaults (`contextWindow: 128000`, `maxTokens
 **No models appear**: Check that the config file exists at `~/.pi/agent/settings/pi-dynamic-models.json` and the server is reachable.
 
 **Wrong API behavior**: Set the correct `api` field for your server type.
+
+**API key not resolving**: `apiKey` is resolved before the provider is registered. Raw env var names like `CLINE_API_KEY` work, and `$CLINE_API_KEY` / `${CLINE_API_KEY}` are also supported.
+
+**Custom catalog not loading**: Set `modelsSource.url` to the catalog endpoint and `modelsSource.itemsPath` to the array field (for ClinePass, `clinePass`).
 
 **Token counting or field errors**: Add the appropriate `compat` settings for your server.
 
