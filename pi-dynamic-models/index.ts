@@ -300,6 +300,8 @@ export default async function (pi: ExtensionAPI): Promise<void> {
       const source = modelsSource?.url
         ? modelsSource
         : { url: `${normalizedBaseUrl}/models` };
+      const registrationApiKey = resolvedApiKey ?? apiKey ?? "none";
+      const useAuthHeader = Boolean(resolvedApiKey);
 
       // Fetch source model IDs first; corral metadata is additive only.
       // If the source fetch fails but explicit models exist, keep those.
@@ -335,8 +337,8 @@ export default async function (pi: ExtensionAPI): Promise<void> {
       pi.registerProvider(provider, {
         baseUrl: normalizedBaseUrl,
         // Supports literal keys, env var names, $ENV_VAR references, and !shell-commands.
-        apiKey: resolvedApiKey,
-        authHeader: !!resolvedApiKey,
+        apiKey: registrationApiKey,
+        authHeader: useAuthHeader,
         api: api ?? "openai-completions",
         models: Array.from(allIds).sort((a, b) => a.localeCompare(b)).map((id) => {
           const override = modelOverrides?.[id];
