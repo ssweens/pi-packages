@@ -1,7 +1,7 @@
 // edge/handlers/marketplace/update.ts
 //
 // Thin-shim handler factory for
-// `/claude:plugin marketplace update [<name>] [--scope user|project]`.
+// `/plugin marketplace update [<name>] [--scope user|project]`.
 //
 // Two forms via optional positional:
 //   - bare    -> updateAllMarketplaces
@@ -21,7 +21,7 @@ import { parseCommandArgs } from "../../args-schema.ts";
 import type { ExtensionCommandContext } from "../../../platform/pi-api.ts";
 import type { EdgeDeps } from "../../types.ts";
 
-const USAGE = "Usage: /claude:plugin marketplace update [<name>] [--scope user|project]";
+const USAGE = "Usage: /plugin marketplace update [<name>] [--scope user|project]";
 
 export function makeMarketplaceUpdateHandler(
   deps: EdgeDeps,

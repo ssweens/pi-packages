@@ -1,6 +1,6 @@
 // tests/edge/completions/normalize.test.ts
 //
-// TC-7 coverage for normalizeCompletionWhitespace + isClaudePluginCommandLine
+// TC-7 coverage for normalizeCompletionWhitespace + isPluginCommandLine
 // (both ported verbatim from V1 completions.ts in Plan 06-02).
 
 import assert from "node:assert/strict";
@@ -8,6 +8,7 @@ import { test } from "node:test";
 
 import {
   isClaudePluginCommandLine,
+  isPluginCommandLine,
   normalizeCompletionWhitespace,
 } from "../../../extensions/pi-plugins/edge/completions/normalize.ts";
 
@@ -63,26 +64,32 @@ test("TC-7 :: normalize is idempotent (stacked wrapper safe)", () => {
   assert.equal(second.cursorCol, first.cursorCol);
 });
 
-test("isClaudePluginCommandLine :: matches /claude:plugin", () => {
+test("isPluginCommandLine :: matches /plugin", () => {
+  assert.equal(isPluginCommandLine("/plugin"), true);
+});
+
+test("isPluginCommandLine :: matches /plugin install", () => {
+  assert.equal(isPluginCommandLine("/plugin install foo@bar"), true);
+});
+
+test("isPluginCommandLine :: matches /plugin:42 install (collision suffix)", () => {
+  assert.equal(isPluginCommandLine("/plugin:42 install foo@bar"), true);
+});
+
+test("isPluginCommandLine :: does not match /other-extension", () => {
+  assert.equal(isPluginCommandLine("/other-extension install foo"), false);
+});
+
+test("isPluginCommandLine :: does not match plugin (no leading slash)", () => {
+  assert.equal(isPluginCommandLine("plugin install foo"), false);
+});
+
+test("isPluginCommandLine :: does not match /plugin-extra", () => {
+  assert.equal(isPluginCommandLine("/plugin-extra install"), false);
+});
+
+// Backward compatibility
+test("isClaudePluginCommandLine (deprecated) :: still works for backward compat", () => {
   assert.equal(isClaudePluginCommandLine("/claude:plugin"), true);
-});
-
-test("isClaudePluginCommandLine :: matches /claude:plugin install", () => {
   assert.equal(isClaudePluginCommandLine("/claude:plugin install foo@bar"), true);
-});
-
-test("isClaudePluginCommandLine :: matches /claude:plugin:42 install (collision suffix)", () => {
-  assert.equal(isClaudePluginCommandLine("/claude:plugin:42 install foo@bar"), true);
-});
-
-test("isClaudePluginCommandLine :: does not match /other-extension", () => {
-  assert.equal(isClaudePluginCommandLine("/other-extension install foo"), false);
-});
-
-test("isClaudePluginCommandLine :: does not match claude:plugin (no leading slash)", () => {
-  assert.equal(isClaudePluginCommandLine("claude:plugin install foo"), false);
-});
-
-test("isClaudePluginCommandLine :: does not match /claude:plugin-extra", () => {
-  assert.equal(isClaudePluginCommandLine("/claude:plugin-extra install"), false);
 });

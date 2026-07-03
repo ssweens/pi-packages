@@ -1,7 +1,7 @@
 // edge/handlers/marketplace/add.ts
 //
 // Thin-shim handler factory for
-// `/claude:plugin marketplace add <source> [--scope user|project]`.
+// `/plugin marketplace add <source> [--scope user|project]`.
 // Delegates to `addMarketplace` orchestrator, threading deps.gitOps through.
 
 import { addMarketplace } from "../../../orchestrators/marketplace/add.ts";
@@ -11,7 +11,7 @@ import { parseCommandArgs } from "../../args-schema.ts";
 import type { ExtensionCommandContext } from "../../../platform/pi-api.ts";
 import type { EdgeDeps } from "../../types.ts";
 
-const USAGE = "Usage: /claude:plugin marketplace add <source> [--scope user|project]";
+const USAGE = "Usage: /plugin marketplace add <source> [--scope user|project]";
 
 export function makeAddHandler(
   deps: EdgeDeps,

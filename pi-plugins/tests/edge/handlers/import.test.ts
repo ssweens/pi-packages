@@ -128,6 +128,6 @@ test("import handler rejects positional input with usage and does not call orche
   assert.equal(notifications[0]?.severity, "error");
   assert.match(
     notifications[0]?.message ?? "",
-    /Usage: \/claude:plugin import \[--scope user\|project\]/,
+    /Usage: \/plugin import \[--scope user\|project\]/,
   );
 });

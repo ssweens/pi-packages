@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { registerClaudePluginCommand } from "../../extensions/pi-plugins/edge/register.ts";
+import { registerPluginCommand } from "../../extensions/pi-plugins/edge/register.ts";
 import { locationsFor } from "../../extensions/pi-plugins/persistence/locations.ts";
 import { loadState } from "../../extensions/pi-plugins/persistence/state-io.ts";
 
@@ -110,7 +110,7 @@ function registerImportCommand(cwd: string, gitOps: GitOps) {
     { name: "subagent" },
     { name: "mcp", sourceInfo: { source: "pi-mcp-adapter" } },
   ]);
-  registerClaudePluginCommand(mock.pi, {
+  registerPluginCommand(mock.pi, {
     gitOps,
     pluginUpdate: () => Promise.resolve({ partition: "unchanged", name: "unused" }),
   });
@@ -120,7 +120,7 @@ function registerImportCommand(cwd: string, gitOps: GitOps) {
   return { command, ctx, notifications };
 }
 
-test("/claude:plugin import imports enabled Claude settings across both scopes", async () => {
+test("/plugin import imports enabled Claude settings across both scopes", async () => {
   await withImportFixture(async ({ cwd }) => {
     const gitOps = fixtureGitOps();
     const { command, ctx, notifications } = registerImportCommand(cwd, gitOps);
@@ -167,7 +167,7 @@ test("/claude:plugin import imports enabled Claude settings across both scopes",
   });
 });
 
-test("/claude:plugin import --scope project narrows writes to project scope", async () => {
+test("/plugin import --scope project narrows writes to project scope", async () => {
   await withImportFixture(async ({ cwd }) => {
     const { command, ctx, notifications } = registerImportCommand(cwd, fixtureGitOps());
 
@@ -184,7 +184,7 @@ test("/claude:plugin import --scope project narrows writes to project scope", as
   });
 });
 
-test("/claude:plugin import reports source mismatches and skips dependent plugins", async () => {
+test("/plugin import reports source mismatches and skips dependent plugins", async () => {
   await withImportFixture(async ({ cwd }) => {
     const { command, ctx, notifications } = registerImportCommand(cwd, fixtureGitOps());
 

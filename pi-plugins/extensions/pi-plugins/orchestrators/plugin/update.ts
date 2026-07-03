@@ -131,7 +131,7 @@ export interface UpdatePluginsOptions {
   /**
    * AG-7 opt-in flag. Default false: re-staged agents omit `model:` and
    * Pi picks its own default. The edge handler sets this to `true` only
-   * when the user supplies `--map-model` on `/claude:plugin update`.
+   * when the user supplies `--map-model` on `/plugin update`.
    * The marketplace autoupdate cascade (`updateSinglePlugin`) does NOT
    * accept this flag; cascade-driven re-installs always omit `model:`.
    */

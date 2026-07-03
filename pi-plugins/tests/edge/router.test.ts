@@ -23,16 +23,40 @@ interface NotifyRecord {
   severity?: string;
 }
 
-function makeCtx(): { ctx: ExtensionCommandContext; notifications: NotifyRecord[] } {
+function makeCtx(options: { menuSelections?: (string | undefined)[]; inputValues?: string[] } = {}): {
+  ctx: ExtensionCommandContext;
+  notifications: NotifyRecord[];
+  customCalls: number;
+  inputCalls: string[];
+} {
   const notifications: NotifyRecord[] = [];
+  const menuSelections = [...(options.menuSelections ?? [])];
+  const inputValues = [...(options.inputValues ?? [])];
+  const inputCalls: string[] = [];
+  let customCalls = 0;
   const ctx = {
     ui: {
       notify: (m: string, s?: string): void => {
         notifications.push(s === undefined ? { message: m } : { message: m, severity: s });
       },
+      custom: (): Promise<string | undefined> => {
+        customCalls++;
+        return Promise.resolve(menuSelections.shift());
+      },
+      input: (title: string): Promise<string | undefined> => {
+        inputCalls.push(title);
+        return Promise.resolve(inputValues.shift());
+      },
     },
   } as unknown as ExtensionCommandContext;
-  return { ctx, notifications };
+  return {
+    ctx,
+    notifications,
+    get customCalls() {
+      return customCalls;
+    },
+    inputCalls,
+  };
 }
 
 interface HandlerCall {
@@ -67,22 +91,18 @@ function makeHandlers(): { handlers: SubcommandHandlers; calls: HandlerCall[] } 
   return { handlers, calls };
 }
 
-test("AP-3 :: empty input emits TOP_LEVEL_USAGE at error severity", async () => {
-  const { ctx, notifications } = makeCtx();
+test("AP-3 :: empty input opens the top-level TUI menu instead of emitting usage", async () => {
+  const testCtx = makeCtx({ menuSelections: [undefined] });
   const { handlers, calls } = makeHandlers();
-  await routeClaudePlugin("", handlers, ctx);
+  await routeClaudePlugin("", handlers, testCtx.ctx);
   assert.deepEqual(calls, []);
-  assert.equal(notifications.length, 1);
-  assert.equal(notifications[0]?.severity, "error");
-  // notifyUsageError emits `${message}\n\n${usageBlock}` -- assert the
-  // Usage block is present in the surfaced message.
-  assert.ok(notifications[0]?.message.includes(TOP_LEVEL_USAGE));
+  assert.deepEqual(testCtx.notifications, []);
+  assert.equal(testCtx.customCalls, 1);
   assert.ok(
     TOP_LEVEL_USAGE.includes(
       "reinstall [<plugin>@<marketplace> | @<marketplace>] [--scope user|project] [--force]",
     ),
   );
-  assert.ok(notifications[0]?.message.includes("import"));
 });
 
 test("AP-3 :: unknown subcommand emits Unknown subcommand: + TOP_LEVEL_USAGE at error severity", async () => {
@@ -96,14 +116,14 @@ test("AP-3 :: unknown subcommand emits Unknown subcommand: + TOP_LEVEL_USAGE at 
   assert.ok(notifications[0]?.message.includes(TOP_LEVEL_USAGE));
 });
 
-test("AP-3 :: marketplace with empty rest emits MARKETPLACE_USAGE at error severity", async () => {
-  const { ctx, notifications } = makeCtx();
+test("AP-3 :: marketplace with empty rest opens marketplace TUI menu", async () => {
+  const testCtx = makeCtx({ menuSelections: [undefined] });
   const { handlers, calls } = makeHandlers();
-  await routeClaudePlugin("marketplace", handlers, ctx);
+  await routeClaudePlugin("marketplace", handlers, testCtx.ctx);
   assert.deepEqual(calls, []);
-  assert.equal(notifications.length, 1);
-  assert.equal(notifications[0]?.severity, "error");
-  assert.ok(notifications[0]?.message.includes(MARKETPLACE_USAGE));
+  assert.deepEqual(testCtx.notifications, []);
+  assert.equal(testCtx.customCalls, 1);
+  assert.ok(MARKETPLACE_USAGE.includes("marketplace <add|remove|rm|list|ls|update|autoupdate|noautoupdate>"));
 });
 
 test("AP-3 :: marketplace with unknown verb emits Unknown subcommand: + MARKETPLACE_USAGE", async () => {
@@ -116,6 +136,84 @@ test("AP-3 :: marketplace with unknown verb emits Unknown subcommand: + MARKETPL
   assert.ok(notifications[0]?.message.startsWith('Unknown marketplace subcommand: "bogus".'));
   assert.ok(notifications[0]?.message.includes(MARKETPLACE_USAGE));
 });
+
+test("menu path :: selecting marketplace then list dispatches marketplaceList without usage", async () => {
+  const testCtx = makeCtx({ menuSelections: ["marketplace", "list"] });
+  const { handlers, calls } = makeHandlers();
+  await routeClaudePlugin("", handlers, testCtx.ctx);
+  assert.deepEqual(calls, [{ name: "marketplaceList", args: "" }]);
+  assert.deepEqual(testCtx.notifications, []);
+  assert.equal(testCtx.customCalls, 2);
+});
+
+test("menu path :: marketplace add prompts for source before dispatch", async () => {
+  const testCtx = makeCtx({ menuSelections: ["add"], inputValues: ["gh:owner/repo"] });
+  const { handlers, calls } = makeHandlers();
+  await routeClaudePlugin("marketplace", handlers, testCtx.ctx);
+  assert.deepEqual(calls, [{ name: "marketplaceAdd", args: "gh:owner/repo" }]);
+  assert.deepEqual(testCtx.notifications, []);
+  assert.deepEqual(testCtx.inputCalls, ["Add marketplace"]);
+});
+
+test("menu path :: top-level install prompts for plugin ref before dispatch", async () => {
+  const testCtx = makeCtx({ menuSelections: ["install"], inputValues: ["foo@bar"] });
+  const { handlers, calls } = makeHandlers();
+  await routeClaudePlugin("", handlers, testCtx.ctx);
+  assert.deepEqual(calls, [{ name: "install", args: "foo@bar" }]);
+  assert.deepEqual(testCtx.notifications, []);
+  assert.deepEqual(testCtx.inputCalls, ["Install plugin"]);
+});
+
+test("menu path :: top-level uninstall prompts for plugin ref before dispatch", async () => {
+  const testCtx = makeCtx({ menuSelections: ["uninstall"], inputValues: ["foo@bar"] });
+  const { handlers, calls } = makeHandlers();
+  await routeClaudePlugin("", handlers, testCtx.ctx);
+  assert.deepEqual(calls, [{ name: "uninstall", args: "foo@bar" }]);
+  assert.deepEqual(testCtx.notifications, []);
+  assert.deepEqual(testCtx.inputCalls, ["Uninstall plugin"]);
+});
+
+for (const [selection, expected] of [
+  ["bootstrap", "bootstrap"],
+  ["update", "update"],
+  ["reinstall", "reinstall"],
+  ["list", "list"],
+  ["import", "import"],
+] as const) {
+  test(`menu path :: top-level ${selection} dispatches without usage`, async () => {
+    const testCtx = makeCtx({ menuSelections: [selection] });
+    const { handlers, calls } = makeHandlers();
+    await routeClaudePlugin("", handlers, testCtx.ctx);
+    assert.deepEqual(calls, [{ name: expected, args: "" }]);
+    assert.deepEqual(testCtx.notifications, []);
+    assert.deepEqual(testCtx.inputCalls, []);
+  });
+}
+
+test("menu path :: marketplace remove prompts for name before dispatch", async () => {
+  const testCtx = makeCtx({ menuSelections: ["remove"], inputValues: ["official"] });
+  const { handlers, calls } = makeHandlers();
+  await routeClaudePlugin("marketplace", handlers, testCtx.ctx);
+  assert.deepEqual(calls, [{ name: "marketplaceRemove", args: "official" }]);
+  assert.deepEqual(testCtx.notifications, []);
+  assert.deepEqual(testCtx.inputCalls, ["Remove marketplace"]);
+});
+
+for (const [selection, expected] of [
+  ["list", "marketplaceList"],
+  ["update", "marketplaceUpdate"],
+  ["autoupdate", "marketplaceAutoupdate"],
+  ["noautoupdate", "marketplaceNoautoupdate"],
+] as const) {
+  test(`menu path :: marketplace ${selection} dispatches without usage`, async () => {
+    const testCtx = makeCtx({ menuSelections: [selection] });
+    const { handlers, calls } = makeHandlers();
+    await routeClaudePlugin("marketplace", handlers, testCtx.ctx);
+    assert.deepEqual(calls, [{ name: expected, args: "" }]);
+    assert.deepEqual(testCtx.notifications, []);
+    assert.deepEqual(testCtx.inputCalls, []);
+  });
+}
 
 test("routeClaudePlugin :: dispatches bootstrap to handlers.bootstrap", async () => {
   const { ctx, notifications } = makeCtx();

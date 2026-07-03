@@ -42,37 +42,37 @@ pi install @ssweens/pi-plugins
 Bootstrap the offical Claude plugin marketplace (`anthropics/claude-plugins-official`).
 
 ```text
-/claude:plugin bootstrap
+/plugin bootstrap
 ```
 
 List plugins available for installation.
 
 ```text
-/claude:plugin list --available
+/plugin list --available
 ```
 
 Install a plugin.
 
 ```text
-/claude:plugin install pr-review-toolkit@claude-plugins-official
+/plugin install pr-review-toolkit@claude-plugins-official
 ```
 
 Add another marketplace.
 
 ```text
-/claude:plugin marketplace add upstash/context7
+/plugin marketplace add upstash/context7
 ```
 
 List its plugins.
 
 ```text
-/claude:plugin list context7-marketplace --available
+/plugin list context7-marketplace --available
 ```
 
 Add another plugin.
 
 ```text
-/claude:plugin context7-plugin@context7-marketplace
+/plugin context7-plugin@context7-marketplace
 ```
 
 Then reload.
@@ -117,77 +117,77 @@ The user scope is inherited, so it is possible to install a plugin from a user-s
 
 It is also possible to install the same plugin in both user and project scopes; the plugin in the user scope takes precedence.
 
-## `/claude:plugin` reference
+## `/plugin` reference
 
-This extension mirrors Claude Code's `/plugin` command. Use `/claude:plugin` in Pi for marketplace and plugin operations, then run `/reload` after installing, uninstalling, updating, or reinstalling plugins so Pi discovers the changed resources.
+This extension mirrors Claude Code's `/plugin` command. Use `/plugin` in Pi for marketplace and plugin operations, then run `/reload` after installing, uninstalling, updating, or reinstalling plugins so Pi discovers the changed resources.
 
 ### Marketplace
 
 Add a marketplace from a GitHub repository `owner/repo` shorthand.
 
 ```text
-/claude:plugin marketplace add upstash/context7
+/plugin marketplace add upstash/context7
 ```
 
 Add the same marketplace from a GitHub URL.
 
 ```text
-/claude:plugin marketplace add https://github.com/upstash/context7-marketplace
+/plugin marketplace add https://github.com/upstash/context7-marketplace
 ```
 
 Add a marketplace from a GitHub SSH URL, including private repositories your SSH agent can access.
 
 ```text
-/claude:plugin marketplace add git@github.com:upstash/context7-marketplace.git
-/claude:plugin marketplace add ssh://git@github.com/upstash/context7-marketplace.git
+/plugin marketplace add git@github.com:upstash/context7-marketplace.git
+/plugin marketplace add ssh://git@github.com/upstash/context7-marketplace.git
 ```
 
 Pin a GitHub marketplace to a branch, tag, or commit with a `#ref` suffix.
 
 ```text
-/claude:plugin marketplace add https://github.com/upstash/context7-marketplace#v1.0.30
-/claude:plugin marketplace add git@github.com:upstash/context7-marketplace.git#v1.0.30
+/plugin marketplace add https://github.com/upstash/context7-marketplace#v1.0.30
+/plugin marketplace add git@github.com:upstash/context7-marketplace.git#v1.0.30
 ```
 
 Add a marketplace from the local filesystem. The path may be a directory containing `.claude-plugin/marketplace.json` or a direct path to a `marketplace.json` file.
 
 ```text
-/claude:plugin marketplace add ~/my-marketplace
-/claude:plugin marketplace add ~/my-marketplace/.claude-plugin/marketplace.json
+/plugin marketplace add ~/my-marketplace
+/plugin marketplace add ~/my-marketplace/.claude-plugin/marketplace.json
 ```
 
 Add a marketplace local to the current project with `--scope project`. The default scope is `user`.
 
 ```text
-/claude:plugin marketplace add upstash/context7-marketplace --scope project
+/plugin marketplace add upstash/context7-marketplace --scope project
 ```
 
 List configured marketplaces.
 
 ```text
-/claude:plugin marketplace list
-/claude:plugin marketplace ls
+/plugin marketplace list
+/plugin marketplace ls
 ```
 
 Update one marketplace, or all marketplaces if a name is omitted.
 
 ```text
-/claude:plugin marketplace update context7-marketplace
-/claude:plugin marketplace update
+/plugin marketplace update context7-marketplace
+/plugin marketplace update
 ```
 
 Remove a marketplace and all plugins installed from it.
 
 ```text
-/claude:plugin marketplace remove context7-marketplace
-/claude:plugin marketplace rm context7-marketplace
+/plugin marketplace remove context7-marketplace
+/plugin marketplace rm context7-marketplace
 ```
 
 Toggle marketplace plugin auto-updates. When the marketplace is updated manually, installed plugins are automatically updated.
 
 ```text
-/claude:plugin marketplace autoupdate context7-marketplace
-/claude:plugin marketplace noautoupdate context7-marketplace
+/plugin marketplace autoupdate context7-marketplace
+/plugin marketplace noautoupdate context7-marketplace
 ```
 
 ### Plugin
@@ -195,51 +195,51 @@ Toggle marketplace plugin auto-updates. When the marketplace is updated manually
 List plugins available for installation. Omit the marketplace name to list across configured marketplaces.
 
 ```text
-/claude:plugin list context7-marketplace --available
-/claude:plugin list --available
+/plugin list context7-marketplace --available
+/plugin list --available
 ```
 
 Filter the list by plugin status, installed, available for installation, or unavailable to install.
 
 ```text
-/claude:plugin list --installed
-/claude:plugin list --available
-/claude:plugin list --unavailable
+/plugin list --installed
+/plugin list --available
+/plugin list --unavailable
 ```
 
 Install a plugin, using the `<plugin>@<marketplace>` format.
 
 ```text
-/claude:plugin install context7-plugin@context7-marketplace
+/plugin install context7-plugin@context7-marketplace
 ```
 
 Install in the project scope instead of the user scope.
 
 ```text
-/claude:plugin install context7-plugin@context7-marketplace --scope project
+/plugin install context7-plugin@context7-marketplace --scope project
 ```
 
 Update one installed plugin, every installed plugin from one marketplace, or all installed plugins.
 
 ```text
-/claude:plugin update context7-plugin@context7-marketplace
-/claude:plugin update @context7-marketplace
-/claude:plugin update
+/plugin update context7-plugin@context7-marketplace
+/plugin update @context7-marketplace
+/plugin update
 ```
 
 Reinstall one installed plugin, every installed plugin from one marketplace, or all installed plugins. Reinstall uses the cached marketplace manifest and the installed record's existing version; it does not fetch, pull, or otherwise sync the marketplace from the network:
 
 ```text
-/claude:plugin reinstall pr-review-toolkit@claude-plugins-official
-/claude:plugin reinstall @claude-plugins-official
-/claude:plugin reinstall
+/plugin reinstall pr-review-toolkit@claude-plugins-official
+/plugin reinstall @claude-plugins-official
+/plugin reinstall
 ```
 
 Limit reinstall to one scope with `--scope user` or `--scope project`. The flag can appear before or after the target:
 
 ```text
-/claude:plugin reinstall --scope project
-/claude:plugin reinstall @claude-plugins-official --scope user
+/plugin reinstall --scope project
+/plugin reinstall @claude-plugins-official --scope user
 ```
 
 The `--scope` flag selects which installed plugin records and generated resources are reinstalled; the marketplace reference identifies the source marketplace. For an explicit plugin target, reinstall reports `not installed` in the selected scope instead of failing just because that marketplace is configured in another scope.
@@ -247,7 +247,7 @@ The `--scope` flag selects which installed plugin records and generated resource
 Use `--force` only when reinstalling a plugin whose own previous agent files were manually edited or otherwise look foreign. `--force` can overwrite that plugin's previous agent content, but it does not override other-plugin ownership conflicts, unsafe names, path-containment failures, or MCP server name collisions:
 
 ```text
-/claude:plugin reinstall pr-review-toolkit@claude-plugins-official --force
+/plugin reinstall pr-review-toolkit@claude-plugins-official --force
 ```
 
 Reinstall targets installed plugins only. If no installed plugins match the selected target set, the command reports `No plugins installed.` and does not emit a reload hint. Plugin data directories are deleted only after replacement resources and `state.json` commit successfully; if reinstall fails, the previous plugin state, resources, and data remain available.
@@ -258,7 +258,7 @@ Reinstall targets installed plugins only. If no installed plugins match the sele
 Uninstall a plugin.
 
 ```text
-/claude:plugin uninstall context7-plugin@context7-marketplace
+/plugin uninstall context7-plugin@context7-marketplace
 ```
 
 Reload Pi after changes.
@@ -272,14 +272,14 @@ Reload Pi after changes.
 Bootstrap is a convenience one-shot setup of the official Anthropic marketplace in the user scope with autoupdate enabled.
 
 ```text
-/claude:plugin bootstrap
+/plugin bootstrap
 ```
 
 This is equivalent to running.
 
 ```text
-/claude:plugin marketplace add anthropics/claude-plugins-marketplace
-/claude:plugin marketplace autoupdate anthropics/claude-plugins-marketplace
+/plugin marketplace add anthropics/claude-plugins-marketplace
+/plugin marketplace autoupdate anthropics/claude-plugins-marketplace
 ```
 
 ### Import
@@ -287,14 +287,14 @@ This is equivalent to running.
 Import is a convenience command to import marketplaces and plugins already defined in Claude Code settings.
 
 ```text
-/claude:plugin import
+/plugin import
 ```
 
 By default, marketplaces and plugins are added in accordance to the scope that they're defined in Claude Code. It's also possible to limit the import to a specific scope.
 
 ```text
-/claude:plugin import --scope user
-/claude:plugin import --scope project
+/plugin import --scope user
+/plugin import --scope project
 ```
 
 Plugins that are not available for installation in Pi because of unsupported components are skipped with a warning.

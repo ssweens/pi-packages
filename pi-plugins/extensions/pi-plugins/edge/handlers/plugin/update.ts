@@ -1,7 +1,7 @@
 // edge/handlers/plugin/update.ts
 //
 // Thin-shim handler factory for
-// `/claude:plugin update [<plugin>@<marketplace> | @<marketplace>] [--scope user|project] [--map-model]`.
+// `/plugin update [<plugin>@<marketplace> | @<marketplace>] [--scope user|project] [--map-model]`.
 //
 // Three positional forms:
 //   - bare (no positional) -> target = { kind: "all" }
@@ -23,7 +23,7 @@ import type { UpdatePluginsTarget } from "../../../orchestrators/plugin/update.t
 import type { ExtensionAPI, ExtensionCommandContext } from "../../../platform/pi-api.ts";
 
 const USAGE =
-  "Usage: /claude:plugin update [<plugin>@<marketplace> | @<marketplace>] [--scope user|project] [--map-model]";
+  "Usage: /plugin update [<plugin>@<marketplace> | @<marketplace>] [--scope user|project] [--map-model]";
 
 export function makeUpdateHandler(
   pi: ExtensionAPI,

@@ -55,7 +55,7 @@ import type { Scope } from "../../shared/types.ts";
 
 /**
  * Options bag for {@link listPlugins}. Phase 6 edge layer constructs this
- * from `/claude:plugin list` argv parsing.
+ * from `/plugin list` argv parsing.
  */
 export interface ListPluginsOptions {
   readonly ctx: ExtensionContext;

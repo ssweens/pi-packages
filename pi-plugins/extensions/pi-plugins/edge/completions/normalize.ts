@@ -12,15 +12,16 @@
 //     when either side of the cursor is not a space, so non-trailing-space
 //     completions and end-of-line cases are safe.
 //
-//   * `isClaudePluginCommandLine` -- true when `line` is invoking
-//     `/claude:plugin`. Accepts Pi's collision-suffix form `:\d+` that gets
+//   * `isPluginCommandLine` -- true when `line` is invoking
+//     `/plugin`. Accepts Pi's collision-suffix form `:\d+` that gets
 //     applied when multiple extensions register the same command name.
 //     Used by `register.ts` (Plan 06-05) to scope the post-processor to
 //     our own command.
 //
-//   * `CLAUDE_PLUGIN_LINE` regex (module-private) -- single source of truth
+//   * `PLUGIN_LINE` regex (module-private) -- single source of truth
 //     for the match shape.
 
+const PLUGIN_LINE = /^\/plugin(?::\d+)?(?:\s|$)/;
 const CLAUDE_PLUGIN_LINE = /^\/claude:plugin(?::\d+)?(?:\s|$)/;
 
 export function normalizeCompletionWhitespace(result: {
@@ -43,6 +44,11 @@ export function normalizeCompletionWhitespace(result: {
   return { lines, cursorLine: result.cursorLine, cursorCol: result.cursorCol };
 }
 
+export function isPluginCommandLine(line: string): boolean {
+  return PLUGIN_LINE.test(line);
+}
+
+/** @deprecated Use isPluginCommandLine */
 export function isClaudePluginCommandLine(line: string): boolean {
   return CLAUDE_PLUGIN_LINE.test(line);
 }

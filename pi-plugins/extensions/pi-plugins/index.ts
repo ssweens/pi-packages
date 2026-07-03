@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 
-import { registerClaudeMarketplaceTools, registerClaudePluginCommand } from "./edge/register.ts";
+import { registerClaudeMarketplaceTools, registerPluginCommand } from "./edge/register.ts";
 import { aggregateDiscoveredResources } from "./orchestrators/discover.ts";
 import { DEFAULT_GIT_OPS } from "./orchestrators/marketplace/shared.ts";
 import { updateSinglePlugin } from "./orchestrators/plugin/update.ts";
@@ -29,7 +29,7 @@ export default function claudeMarketplaceExtension(pi: ExtensionAPI): void {
     };
   });
 
-  registerClaudePluginCommand(pi, {
+  registerPluginCommand(pi, {
     gitOps: DEFAULT_GIT_OPS,
     pluginUpdate: updateSinglePlugin,
   });

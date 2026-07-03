@@ -77,3 +77,18 @@ In Pi extensions, a `ctx` becomes stale after reload/session replacement. Do not
 
 ## Dangerous-command prompts must preserve access to the full command
 If a permission dialog truncates or elides a potentially dangerous command to fit the screen, the user still needs a way to inspect the entire command before approving it. Stable-height rendering is good, but not if it hides critical command content with no recovery path. Any over-height fix for dangerous-command prompts must pair clamping with an explicit full-command inspection affordance (for example: scrollable preview, pager view, expand toggle, or secondary detail view).
+
+## Slash-command TUI conversions must cover every selected path
+When converting a raw CLI slash command into a menu/TUI, do not only replace the top-level empty-args error. Every menu item must either:
+- complete the action without dropping into usage text,
+- open a submenu for nested command groups, or
+- prompt for required arguments before invoking the handler.
+
+Specifically, never make a menu item route to a handler with empty args if that handler only emits usage errors. Exercise each selectable menu path manually before calling the UX done.
+
+## Do not equate cached marketplace copies with the user’s intended source
+When pi-plugins state points at a cache/bridge path (for example `.cache/blackbook/pi-bridge-marketplaces/...`), do not call it “the marketplace source” without tracing provenance. Distinguish:
+- the state-recorded installed source,
+- the bridge/cache copy used at install time,
+- the real repo/path the user is referring to.
+Before answering “where did this come from,” grep state/history/config for the cached path and inspect marketplace manifests and timestamps.

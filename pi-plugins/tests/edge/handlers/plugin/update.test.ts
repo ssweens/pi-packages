@@ -124,7 +124,7 @@ test("shim :: invalid ref (no @, not bare) emits USAGE", async () => {
     await handler("no-at-sign", ctx);
     assert.equal(notifications.length, 1);
     assert.equal(notifications[0]!.severity, "error");
-    assert.match(notifications[0]!.message, /Usage: \/claude:plugin update/);
+    assert.match(notifications[0]!.message, /Usage: \/plugin update/);
   });
 });
 
@@ -141,7 +141,7 @@ test("shim :: bare form + --map-model is accepted; control reaches updatePlugins
     // Bare form with --map-model: empty state -> PUP-1 silent success.
     // Critically, no USAGE error.
     assert.equal(notifications.length, 1);
-    assert.doesNotMatch(notifications[0]!.message, /Usage: \/claude:plugin update/);
+    assert.doesNotMatch(notifications[0]!.message, /Usage: \/plugin update/);
     assert.match(notifications[0]!.message, /No plugins installed\./);
   });
 });
@@ -153,7 +153,7 @@ test("shim :: @<mp> form + --map-model is accepted; control reaches updatePlugin
     await handler("@mymkt --map-model", ctx);
     assert.equal(notifications.length, 1);
     assert.equal(notifications[0]!.severity, "error");
-    assert.doesNotMatch(notifications[0]!.message, /Usage: \/claude:plugin update/);
+    assert.doesNotMatch(notifications[0]!.message, /Usage: \/plugin update/);
     assert.match(notifications[0]!.message, /mymkt/);
     assert.match(notifications[0]!.message, /not found/);
   });
@@ -166,7 +166,7 @@ test("shim :: pl@<mp> form + --map-model is accepted; control reaches updatePlug
     await handler("myplug@mymkt --map-model", ctx);
     assert.equal(notifications.length, 1);
     assert.equal(notifications[0]!.severity, "error");
-    assert.doesNotMatch(notifications[0]!.message, /Usage: \/claude:plugin update/);
+    assert.doesNotMatch(notifications[0]!.message, /Usage: \/plugin update/);
     assert.match(notifications[0]!.message, /mymkt/);
     assert.match(notifications[0]!.message, /not found/);
   });
@@ -179,7 +179,7 @@ test("shim :: rejects unknown long flag with USAGE", async () => {
     await handler("--bogus-flag", ctx);
     assert.equal(notifications.length, 1);
     assert.equal(notifications[0]!.severity, "error");
-    assert.match(notifications[0]!.message, /Usage: \/claude:plugin update/);
+    assert.match(notifications[0]!.message, /Usage: \/plugin update/);
   });
 });
 
@@ -190,6 +190,6 @@ test("shim :: rejects unknown long flag on pl@mp form with USAGE", async () => {
     await handler("myplug@mymkt --bogus-flag", ctx);
     assert.equal(notifications.length, 1);
     assert.equal(notifications[0]!.severity, "error");
-    assert.match(notifications[0]!.message, /Usage: \/claude:plugin update/);
+    assert.match(notifications[0]!.message, /Usage: \/plugin update/);
   });
 });

@@ -10,7 +10,7 @@ import { parseArgs } from "../../args.ts";
 import type { GitOps } from "../../../orchestrators/marketplace/shared.ts";
 import type { ExtensionAPI, ExtensionCommandContext } from "../../../platform/pi-api.ts";
 
-const USAGE = "Usage: /claude:plugin import [--scope user|project]";
+const USAGE = "Usage: /plugin import [--scope user|project]";
 
 export interface ImportHandlerDeps {
   readonly gitOps: GitOps;

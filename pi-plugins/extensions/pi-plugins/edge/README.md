@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The user-facing command surface. Phase 6 lands argument parsing for `/claude:plugin <subcommand>`, completion providers, the `pi_plugins_list` LLM tool, and the dispatch table that maps subcommands to orchestrators.
+The user-facing command surface. Phase 6 lands argument parsing for `/plugin <subcommand>`, completion providers, the `pi_plugins_list` LLM tool, and the dispatch table that maps subcommands to orchestrators.
 
 ## Allowed Imports
 

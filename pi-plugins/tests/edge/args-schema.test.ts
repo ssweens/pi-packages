@@ -30,11 +30,11 @@ test("parseCommandArgs :: required positional missing emits usage via notifyErro
   const { notifyError, calls } = makeNotifyErrorSpy();
   const schema = {
     positional: [{ name: "ref" }] as const satisfies readonly PositionalSpec[],
-    usage: "Usage: /claude:plugin install <ref>",
+    usage: "Usage: /plugin install <ref>",
   };
   const result = parseCommandArgs("", schema, notifyError);
   assert.equal(result, undefined);
-  assert.deepEqual(calls, ["Usage: /claude:plugin install <ref>"]);
+  assert.deepEqual(calls, ["Usage: /plugin install <ref>"]);
 });
 
 test("parseCommandArgs :: optional positional missing returns parsed with property undefined", () => {
@@ -44,7 +44,7 @@ test("parseCommandArgs :: optional positional missing returns parsed with proper
       { name: "name" },
       { name: "extra", required: false },
     ] as const satisfies readonly PositionalSpec[],
-    usage: "Usage: /claude:plugin marketplace update [<name>]",
+    usage: "Usage: /plugin marketplace update [<name>]",
   };
   const result = parseCommandArgs("my-marketplace", schema, notifyError);
   assert.deepEqual(calls, []);
@@ -57,7 +57,7 @@ test("parseCommandArgs :: tokenizer throw routes through notifyError + returns u
   const { notifyError, calls } = makeNotifyErrorSpy();
   const schema = {
     positional: [{ name: "ref" }] as const satisfies readonly PositionalSpec[],
-    usage: "Usage: /claude:plugin install <ref>",
+    usage: "Usage: /plugin install <ref>",
   };
   const result = parseCommandArgs("--scope foo", schema, notifyError);
   assert.equal(result, undefined);

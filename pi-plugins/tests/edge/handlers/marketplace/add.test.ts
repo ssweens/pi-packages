@@ -79,7 +79,7 @@ test("shim :: missing source positional emits USAGE; no orchestrator call", asyn
     await handler("", ctx);
     assert.equal(notifications.length, 1);
     assert.equal(notifications[0]!.severity, "error");
-    assert.match(notifications[0]!.message, /Usage: \/claude:plugin marketplace add/);
+    assert.match(notifications[0]!.message, /Usage: \/plugin marketplace add/);
     // No git operations -- the orchestrator was never invoked.
     assert.equal(gitMock.state.cloneCalls.length, 0);
   });

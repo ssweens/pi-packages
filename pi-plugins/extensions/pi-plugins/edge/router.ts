@@ -24,7 +24,8 @@
 // `register.ts` (Plan 06-05) builds the `SubcommandHandlers` record from
 // `EdgeDeps` and passes it in.
 
-import { notifyUsageError } from "../shared/notify.ts";
+import { showMarketplaceMenu, showPluginMenu } from "./plugin-menu.ts";
+import { notifyError, notifyUsageError } from "../shared/notify.ts";
 
 import type { ExtensionCommandContext } from "../platform/pi-api.ts";
 
@@ -76,7 +77,7 @@ export const MARKETPLACE_SUBCOMMANDS = [
 ] as const;
 
 export const TOP_LEVEL_USAGE =
-  "Usage: /claude:plugin <bootstrap|install|uninstall|update|reinstall|list|ls|import|marketplace> ...\n" +
+  "Usage: /plugin <bootstrap|install|uninstall|update|reinstall|list|ls|import|marketplace> ...\n" +
   "  bootstrap                                          add anthropics/claude-plugins-official to user scope and enable autoupdate\n" +
   "  install <plugin>@<marketplace> [--scope user|project]\n" +
   "  uninstall <plugin>@<marketplace> [--scope user|project]\n" +
@@ -87,7 +88,7 @@ export const TOP_LEVEL_USAGE =
   "  marketplace <add|remove|rm|list|ls|update|autoupdate|noautoupdate> ...";
 
 export const MARKETPLACE_USAGE =
-  "Usage: /claude:plugin marketplace <add|remove|rm|list|ls|update|autoupdate|noautoupdate> ...\n" +
+  "Usage: /plugin marketplace <add|remove|rm|list|ls|update|autoupdate|noautoupdate> ...\n" +
   "  add <source> [--scope user|project]\n" +
   "  remove <name> [--scope user|project]   (alias: rm)\n" +
   "  list [--scope user|project]            (alias: ls)\n" +
@@ -114,6 +115,115 @@ function peelToken(args: string): [string, string] {
   return [trimmed.slice(0, match.index), trimmed.slice(match.index + match[0].length)];
 }
 
+function quoteArg(arg: string): string | undefined {
+  if (/^[^\s'"]+$/.test(arg)) {
+    return arg;
+  }
+
+  if (!arg.includes("'")) {
+    return `'${arg}'`;
+  }
+
+  if (!arg.includes('"')) {
+    return `"${arg}"`;
+  }
+
+  return undefined;
+}
+
+async function promptRequiredArg(
+  ctx: ExtensionCommandContext,
+  title: string,
+  placeholder: string,
+): Promise<string | undefined> {
+  const value = await ctx.ui.input(title, placeholder);
+  const trimmed = value?.trim();
+  if (trimmed === undefined || trimmed === "") {
+    return undefined;
+  }
+
+  const quoted = quoteArg(trimmed);
+  if (quoted === undefined) {
+    notifyError(
+      ctx,
+      "Input cannot contain both single and double quotes. Use the slash command form with your own quoting.",
+    );
+    return undefined;
+  }
+
+  return quoted;
+}
+
+async function routeSelectedTopLevel(
+  selected: string,
+  handlers: SubcommandHandlers,
+  ctx: ExtensionCommandContext,
+): Promise<void> {
+  switch (selected) {
+    case "bootstrap":
+      return handlers.bootstrap("", ctx);
+    case "install": {
+      const ref = await promptRequiredArg(
+        ctx,
+        "Install plugin",
+        "plugin@marketplace (for example: pr-review-toolkit@claude-plugins-official)",
+      );
+      return ref === undefined ? undefined : handlers.install(ref, ctx);
+    }
+    case "uninstall": {
+      const ref = await promptRequiredArg(
+        ctx,
+        "Uninstall plugin",
+        "plugin@marketplace (for example: pr-review-toolkit@claude-plugins-official)",
+      );
+      return ref === undefined ? undefined : handlers.uninstall(ref, ctx);
+    }
+    case "update":
+      return handlers.update("", ctx);
+    case "reinstall":
+      return handlers.reinstall("", ctx);
+    case "list":
+      return handlers.list("", ctx);
+    case "import":
+      return handlers.import("", ctx);
+    case "marketplace":
+      return routeMarketplace("", handlers, ctx);
+    default:
+      return;
+  }
+}
+
+async function routeSelectedMarketplace(
+  selected: string,
+  handlers: SubcommandHandlers,
+  ctx: ExtensionCommandContext,
+): Promise<void> {
+  switch (selected) {
+    case "add": {
+      const source = await promptRequiredArg(
+        ctx,
+        "Add marketplace",
+        "source (Git URL, local path, or gh:owner/repo)",
+      );
+      return source === undefined ? undefined : handlers.marketplaceAdd(source, ctx);
+    }
+    case "remove": {
+      const name = await promptRequiredArg(ctx, "Remove marketplace", "marketplace name");
+      return name === undefined ? undefined : handlers.marketplaceRemove(name, ctx);
+    }
+    case "list":
+      return handlers.marketplaceList("", ctx);
+    case "update":
+      return handlers.marketplaceUpdate("", ctx);
+    case "autoupdate":
+      return handlers.marketplaceAutoupdate("", ctx);
+    case "noautoupdate":
+      return handlers.marketplaceNoautoupdate("", ctx);
+    default:
+      return;
+  }
+}
+
 export async function routeClaudePlugin(
   args: string,
   handlers: SubcommandHandlers,
@@ -122,8 +232,11 @@ export async function routeClaudePlugin(
   const [head, rest] = peelToken(args);
 
   if (head === "") {
-    notifyUsageError(ctx, "Usage error.", TOP_LEVEL_USAGE);
-    return;
+    const selected = await showPluginMenu(ctx);
+    if (selected === undefined) {
+      return;
+    }
+    return routeSelectedTopLevel(selected, handlers, ctx);
   }
 
   switch (head) {
@@ -158,8 +271,11 @@ export async function routeMarketplace(
   const [head, rest] = peelToken(args);
 
   if (head === "") {
-    notifyUsageError(ctx, "marketplace requires a subcommand.", MARKETPLACE_USAGE);
-    return;
+    const selected = await showMarketplaceMenu(ctx);
+    if (selected === undefined) {
+      return;
+    }
+    return routeSelectedMarketplace(selected, handlers, ctx);
   }
 
   switch (head) {

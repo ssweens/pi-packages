@@ -1,6 +1,6 @@
 // edge/handlers/plugin/reinstall.ts
 //
-// Thin-shim handler factory for `/claude:plugin reinstall`.
+// Thin-shim handler factory for `/plugin reinstall`.
 // Target forms mirror update:
 //   - bare (no positional)       -> target = { kind: "all" }
 //   - `@<marketplace>`           -> target = { kind: "marketplace", marketplace }
@@ -21,7 +21,7 @@ import type { ReinstallPluginsTarget } from "../../../orchestrators/plugin/reins
 import type { ExtensionAPI, ExtensionCommandContext } from "../../../platform/pi-api.ts";
 
 const USAGE =
-  "Usage: /claude:plugin reinstall [<plugin>@<marketplace> | @<marketplace>] [--scope user|project] [--force]";
+  "Usage: /plugin reinstall [<plugin>@<marketplace> | @<marketplace>] [--scope user|project] [--force]";
 
 export function makeReinstallHandler(
   pi: ExtensionAPI,

@@ -1,7 +1,7 @@
 // edge/handlers/plugin/list.ts
 //
 // Thin-shim handler factory for
-// `/claude:plugin list [<marketplace>] [--installed] [--available] [--unavailable] [--scope user|project]`.
+// `/plugin list [<marketplace>] [--installed] [--available] [--unavailable] [--scope user|project]`.
 //
 // Plugin list needs richer flag handling than parseCommandArgs offers: three
 // boolean filter flags (--installed / --available / --unavailable) in addition
@@ -19,7 +19,7 @@ import { parseArgs } from "../../args.ts";
 import type { ExtensionCommandContext } from "../../../platform/pi-api.ts";
 
 const USAGE =
-  "Usage: /claude:plugin list [<marketplace>] [--installed] [--available] [--unavailable] [--scope user|project]";
+  "Usage: /plugin list [<marketplace>] [--installed] [--available] [--unavailable] [--scope user|project]";
 
 const BOOLEAN_FLAGS = new Set(["--installed", "--available", "--unavailable"]);
 

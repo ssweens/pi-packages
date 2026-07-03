@@ -1,6 +1,6 @@
 // edge/handlers/plugin/bootstrap.ts
 //
-// Quick 260516-02r: thin-shim handler factory for `/claude:plugin bootstrap`.
+// Quick 260516-02r: thin-shim handler factory for `/plugin bootstrap`.
 //
 // Delegates to `bootstrapClaudePlugin`, threading `deps.gitOps` through.
 // Idempotent end-to-end -- both composed orchestrators are idempotent.
@@ -24,7 +24,7 @@ import { parseArgs } from "../../args.ts";
 import type { ExtensionCommandContext } from "../../../platform/pi-api.ts";
 import type { EdgeDeps } from "../../types.ts";
 
-const USAGE = "Usage: /claude:plugin bootstrap";
+const USAGE = "Usage: /plugin bootstrap";
 
 export function makeBootstrapHandler(
   deps: EdgeDeps,

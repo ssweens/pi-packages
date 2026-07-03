@@ -1,9 +1,9 @@
 // edge/handlers/marketplace/autoupdate.ts
 //
 // Dual-form thin-shim handler factory for
-// `/claude:plugin marketplace autoupdate [<name>] [--scope user|project]`
+// `/plugin marketplace autoupdate [<name>] [--scope user|project]`
 // and
-// `/claude:plugin marketplace noautoupdate [<name>] [--scope user|project]`.
+// `/plugin marketplace noautoupdate [<name>] [--scope user|project]`.
 //
 // Phase 4 D-01 ships a SINGLE `setMarketplaceAutoupdate` orchestrator
 // parameterized by `enable: boolean`. The edge layer maps the two slash
@@ -18,8 +18,8 @@ import type { ExtensionCommandContext } from "../../../platform/pi-api.ts";
 
 function usageFor(enable: boolean): string {
   return enable
-    ? "Usage: /claude:plugin marketplace autoupdate [<name>] [--scope user|project]"
-    : "Usage: /claude:plugin marketplace noautoupdate [<name>] [--scope user|project]";
+    ? "Usage: /plugin marketplace autoupdate [<name>] [--scope user|project]"
+    : "Usage: /plugin marketplace noautoupdate [<name>] [--scope user|project]";
 }
 
 export function makeAutoupdateHandler(

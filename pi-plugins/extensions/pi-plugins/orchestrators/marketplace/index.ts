@@ -3,7 +3,7 @@
 // Barrel re-export for the marketplace orchestrators layer (Phase 4).
 // Exposes the cross-subcommand helpers from `shared.ts` plus the five
 // per-subcommand entry points that Phase 6's edge layer wires into
-// /claude:plugin marketplace <subcommand>.
+// /plugin marketplace <subcommand>.
 
 // Cross-subcommand helpers (from shared.ts).
 export {

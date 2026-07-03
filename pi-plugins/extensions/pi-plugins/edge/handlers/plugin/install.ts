@@ -1,6 +1,6 @@
 // edge/handlers/plugin/install.ts
 //
-// Thin-shim handler factory for `/claude:plugin install <plugin>@<marketplace>`.
+// Thin-shim handler factory for `/plugin install <plugin>@<marketplace>`.
 //
 // Plan 260516-08j: the previous `parseRequiredPluginMarketplaceRef` delegation
 // only understands `--scope`. With the introduction of the boolean
@@ -24,7 +24,7 @@ import { parsePositionalsWithFlags, splitPluginMarketplaceRef } from "./shared.t
 import type { ExtensionAPI, ExtensionCommandContext } from "../../../platform/pi-api.ts";
 
 const USAGE =
-  "Usage: /claude:plugin install <plugin>@<marketplace> [--scope user|project] [--map-model]";
+  "Usage: /plugin install <plugin>@<marketplace> [--scope user|project] [--map-model]";
 
 /**
  * Factory: returns the async handler closed over `pi` (required by

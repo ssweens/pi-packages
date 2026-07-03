@@ -4,7 +4,7 @@
 //
 // Composes the two already-idempotent orchestrators
 // (`addMarketplace` + `setMarketplaceAutoupdate`) under hard-coded
-// user scope so a new Pi user can run `/claude:plugin bootstrap` and
+// user scope so a new Pi user can run `/plugin bootstrap` and
 // land in a working state with the canonical Anthropic marketplace
 // configured and tracking upstream.
 //

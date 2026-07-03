@@ -73,7 +73,7 @@ test("shim :: missing positional emits USAGE via notifyError; no orchestrator ca
     await handler("", ctx);
     assert.equal(notifications.length, 1);
     assert.equal(notifications[0]!.severity, "error");
-    assert.match(notifications[0]!.message, /Usage: \/claude:plugin install/);
+    assert.match(notifications[0]!.message, /Usage: \/plugin install/);
   });
 });
 
@@ -84,7 +84,7 @@ test("shim :: invalid ref (no @) emits USAGE + format error; no orchestrator cal
     await handler("no-at-sign", ctx);
     assert.equal(notifications.length, 1);
     assert.equal(notifications[0]!.severity, "error");
-    assert.match(notifications[0]!.message, /Usage: \/claude:plugin install/);
+    assert.match(notifications[0]!.message, /Usage: \/plugin install/);
   });
 });
 
@@ -95,7 +95,7 @@ test("shim :: invalid ref (leading @) emits USAGE + format error", async () => {
     await handler("@just-marketplace", ctx);
     assert.equal(notifications.length, 1);
     assert.equal(notifications[0]!.severity, "error");
-    assert.match(notifications[0]!.message, /Usage: \/claude:plugin install/);
+    assert.match(notifications[0]!.message, /Usage: \/plugin install/);
   });
 });
 
@@ -106,7 +106,7 @@ test("shim :: invalid ref (trailing @) emits USAGE + format error", async () => 
     await handler("plugin@", ctx);
     assert.equal(notifications.length, 1);
     assert.equal(notifications[0]!.severity, "error");
-    assert.match(notifications[0]!.message, /Usage: \/claude:plugin install/);
+    assert.match(notifications[0]!.message, /Usage: \/plugin install/);
   });
 });
 
@@ -151,7 +151,7 @@ test("shim :: --map-model flag is accepted and control reaches installPlugin", a
     // hermetic state.
     assert.equal(notifications.length, 1);
     assert.equal(notifications[0]!.severity, "error");
-    assert.doesNotMatch(notifications[0]!.message, /Usage: \/claude:plugin install/);
+    assert.doesNotMatch(notifications[0]!.message, /Usage: \/plugin install/);
     assert.match(notifications[0]!.message, /not found in marketplace "mymkt"/);
   });
 });
@@ -174,6 +174,6 @@ test("shim :: rejects unknown long flag with USAGE", async () => {
     await handler("myplug@mymkt --bogus-flag", ctx);
     assert.equal(notifications.length, 1);
     assert.equal(notifications[0]!.severity, "error");
-    assert.match(notifications[0]!.message, /Usage: \/claude:plugin install/);
+    assert.match(notifications[0]!.message, /Usage: \/plugin install/);
   });
 });

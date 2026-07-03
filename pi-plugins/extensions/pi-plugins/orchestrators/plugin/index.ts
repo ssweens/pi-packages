@@ -4,7 +4,7 @@
 // orchestrators/marketplace/index.ts: cross-subcommand helpers from
 // shared.ts (PI-6 guard + the CrossPluginGeneratedNames shape) plus the
 // four per-subcommand entrypoints (install / uninstall / update / list)
-// that Phase 6's edge layer wires into /claude:plugin <subcommand>.
+// that Phase 6's edge layer wires into /plugin <subcommand>.
 
 // Cross-subcommand helpers (from shared.ts).
 export { assertNoCrossPluginConflicts } from "./shared.ts";

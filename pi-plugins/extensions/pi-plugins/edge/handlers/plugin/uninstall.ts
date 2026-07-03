@@ -1,7 +1,7 @@
 // edge/handlers/plugin/uninstall.ts
 //
 // Thin-shim handler factory for
-// `/claude:plugin uninstall <plugin>@<marketplace> [--scope user|project]`.
+// `/plugin uninstall <plugin>@<marketplace> [--scope user|project]`.
 // Identical Pattern 1 shape as install.ts; delegates to `uninstallPlugin`.
 
 import { uninstallPlugin } from "../../../orchestrators/plugin/uninstall.ts";
@@ -10,7 +10,7 @@ import { parseRequiredPluginMarketplaceRef } from "./shared.ts";
 
 import type { ExtensionAPI, ExtensionCommandContext } from "../../../platform/pi-api.ts";
 
-const USAGE = "Usage: /claude:plugin uninstall <plugin>@<marketplace> [--scope user|project]";
+const USAGE = "Usage: /plugin uninstall <plugin>@<marketplace> [--scope user|project]";
 
 export function makeUninstallHandler(
   pi: ExtensionAPI,

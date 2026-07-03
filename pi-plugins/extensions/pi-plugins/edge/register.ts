@@ -1,16 +1,16 @@
 // edge/register.ts
 //
 // Plan 06-05 D-04: two registration helpers Phase 7's `index.ts` will
-// call to wire the `/claude:plugin` slash-command surface and the two
+// call to wire the `/plugin` slash-command surface and the two
 // read-only LLM tools onto the Pi extension API.
 //
-//   - registerClaudePluginCommand(pi, deps):
-//       * pi.registerCommand("claude:plugin", { handler, getArgumentCompletions, description })
-//         -- routes through routeClaudePlugin; arg completions go through
+//   - registerPluginCommand(pi, deps):
+//       * pi.registerCommand("plugin", { handler, getArgumentCompletions, description })
+//         -- routes through routePlugin; arg completions go through
 //         getArgumentCompletions + makeLocationsResolver(process.cwd()).
 //       * pi.on("session_start", ...) -- installs the TC-7 autocomplete
 //         wrapper that scopes normalizeCompletionWhitespace to lines
-//         matching isClaudePluginCommandLine.
+//         matching isPluginCommandLine.
 //
 //   - registerClaudeMarketplaceTools(pi):
 //       * delegates to registerListMarketplacesTool + registerListPluginsTool.
@@ -35,7 +35,7 @@
 import { makeLocationsResolver } from "../orchestrators/edge-deps.ts";
 
 import {
-  isClaudePluginCommandLine,
+  isPluginCommandLine,
   normalizeCompletionWhitespace,
 } from "./completions/normalize.ts";
 import { getArgumentCompletions } from "./completions/provider.ts";
@@ -59,11 +59,11 @@ import type { EdgeDeps } from "./types.ts";
 import type { ExtensionAPI } from "../platform/pi-api.ts";
 
 const COMMAND_DESCRIPTION =
-  "Manage Claude plugin marketplaces and plugins. Bootstrap, install, " +
+  "Manage plugin marketplaces and plugins. Bootstrap, install, " +
   "uninstall, list, import, update, and reinstall plugins from configured marketplaces.";
 
 /**
- * Wire the `/claude:plugin` slash command + the TC-7 autocomplete
+ * Wire the `/plugin` slash command + the TC-7 autocomplete
  * normalization onto `pi`. Idempotency: Pi's extension API does NOT
  * dedupe; callers MUST invoke this exactly once per session lifecycle
  * (Phase 7's `index.ts` is the single call site).
@@ -72,7 +72,7 @@ const COMMAND_DESCRIPTION =
  * add/update/remove handlers per D-04 EdgeDeps; Phase 7 supplies the live
  * implementations.
  */
-export function registerClaudePluginCommand(pi: ExtensionAPI, deps: EdgeDeps): void {
+export function registerPluginCommand(pi: ExtensionAPI, deps: EdgeDeps): void {
   const handlers: SubcommandHandlers = {
     bootstrap: makeBootstrapHandler(deps),
     install: makeInstallHandler(pi),
@@ -89,7 +89,7 @@ export function registerClaudePluginCommand(pi: ExtensionAPI, deps: EdgeDeps): v
     marketplaceNoautoupdate: makeAutoupdateHandler(false),
   };
 
-  pi.registerCommand("claude:plugin", {
+  pi.registerCommand("plugin", {
     description: COMMAND_DESCRIPTION,
     handler: (args, ctx) => routeClaudePlugin(args, handlers, ctx),
     // Pitfall 3: this `process.cwd()` is the single sanctioned site in
@@ -111,7 +111,7 @@ export function registerClaudePluginCommand(pi: ExtensionAPI, deps: EdgeDeps): v
       applyCompletion: (lines, line, col, item, prefix) => {
         const result = current.applyCompletion(lines, line, col, item, prefix);
         const original = lines[line] ?? "";
-        if (!isClaudePluginCommandLine(original)) {
+        if (!isPluginCommandLine(original)) {
           return result;
         }
 

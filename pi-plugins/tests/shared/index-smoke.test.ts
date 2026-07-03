@@ -72,7 +72,7 @@ test("registers command, read-only tools, session_start, and resources_discover 
   const tools = log.filter((e) => e.type === "tool");
 
   assert.equal(commands.length, 1, `expected exactly 1 command, got ${JSON.stringify(commands)}`);
-  assert.equal(commands[0]!.name, "claude:plugin");
+  assert.equal(commands[0]!.name, "plugin");
   assert.deepEqual(events.map((e) => e.name).sort(), ["resources_discover", "session_start"]);
   assert.equal(
     tools.length,

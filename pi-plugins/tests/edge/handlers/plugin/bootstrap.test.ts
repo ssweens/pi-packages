@@ -143,7 +143,7 @@ test("bootstrap handler (positional argument): rejected with usage error, orches
     await handler("foo", ctx);
 
     assert.equal(notifications.length, 1);
-    assert.equal(notifications[0]?.message, "Usage: /claude:plugin bootstrap");
+    assert.equal(notifications[0]?.message, "Usage: /plugin bootstrap");
     assert.equal(notifications[0]?.severity, "error");
     // Orchestrator never invoked -> clone never attempted.
     assert.equal(gitState.cloneCalls.length, 0);

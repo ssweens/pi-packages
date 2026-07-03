@@ -10,11 +10,11 @@ test("PRL-01/03/04/05/13/14/15/16: README documents reinstall command forms and 
   const readme = await readFile(path.join(REPO_ROOT, "README.md"), "utf8");
 
   for (const expected of [
-    "/claude:plugin reinstall pr-review-toolkit@claude-plugins-official",
-    "/claude:plugin reinstall @claude-plugins-official",
-    "/claude:plugin reinstall",
-    "/claude:plugin reinstall --scope project",
-    "/claude:plugin reinstall pr-review-toolkit@claude-plugins-official --force",
+    "/plugin reinstall pr-review-toolkit@claude-plugins-official",
+    "/plugin reinstall @claude-plugins-official",
+    "/plugin reinstall",
+    "/plugin reinstall --scope project",
+    "/plugin reinstall pr-review-toolkit@claude-plugins-official --force",
     "cached marketplace manifest",
     "does not fetch, pull, or otherwise sync the marketplace from the network",
     "installed record's existing version",

@@ -113,7 +113,7 @@ export type InstallPluginOutcome =
  * Controls how `installPlugin` surfaces notifications.
  *
  * - `"standalone"` (default): fires `notifyError`/`notifySuccess`/`notifyWarning`
- *   directly and appends a reload hint. Use for direct `/claude:plugin install`.
+ *   directly and appends a reload hint. Use for direct `/plugin install`.
  * - `"orchestrated"`: suppresses all notifications, returns the typed outcome,
  *   and collects post-commit warnings in `outcome.postCommitWarnings`. Use when
  *   a parent orchestrator (e.g. import) owns the full notification surface.
@@ -135,7 +135,7 @@ export interface InstallPluginOptions {
   /**
    * AG-7 opt-in flag. Default false: generated agents omit `model:` and
    * Pi picks its own default. The edge handler sets this to `true` only
-   * when the user supplies `--map-model` on `/claude:plugin install`.
+   * when the user supplies `--map-model` on `/plugin install`.
    */
   readonly mapModel?: boolean;
 }
@@ -422,7 +422,7 @@ export async function installPlugin(opts: InstallPluginOptions): Promise<Install
             resolved: c.resolved,
             agentsSourceDir: pickAgentsSourceDir(c.resolved),
             knownSkills: c.stagedSkillNames,
-            // AG-7 opt-in: `--map-model` on /claude:plugin install threads
+            // AG-7 opt-in: `--map-model` on /plugin install threads
             // the flag down to here. When the user did not pass the flag
             // we explicitly default to false so generated agents omit
             // `model:` (the new default per 260516-08j).

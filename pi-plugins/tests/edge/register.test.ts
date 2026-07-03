@@ -13,7 +13,7 @@ import { test } from "node:test";
 
 import {
   registerClaudeMarketplaceTools,
-  registerClaudePluginCommand,
+  registerPluginCommand,
 } from "../../extensions/pi-plugins/edge/register.ts";
 
 import type { EdgeDeps } from "../../extensions/pi-plugins/edge/types.ts";
@@ -116,13 +116,13 @@ async function withHermeticHome<T>(fn: (env: { cwd: string }) => Promise<T>): Pr
 // Tests.
 // ---------------------------------------------------------------------------
 
-test("D-04 :: registerClaudePluginCommand registers claude:plugin command on pi", () => {
+test("D-04 :: registerPluginCommand registers plugin command on pi", () => {
   const { pi, commands } = makeMockPi();
-  registerClaudePluginCommand(pi, makeDeps());
+  registerPluginCommand(pi, makeDeps());
 
   assert.equal(commands.size, 1, "exactly one registered command");
-  assert.ok(commands.has("claude:plugin"), "command name is claude:plugin");
-  const cmd = commands.get("claude:plugin");
+  assert.ok(commands.has("plugin"), "command name is plugin");
+  const cmd = commands.get("plugin");
   assert.ok(cmd !== undefined);
   assert.equal(typeof cmd.description, "string");
   assert.ok(
@@ -133,39 +133,37 @@ test("D-04 :: registerClaudePluginCommand registers claude:plugin command on pi"
 
 test("D-04 :: registered command has a handler that routes through routeClaudePlugin", async () => {
   const { pi, commands } = makeMockPi();
-  registerClaudePluginCommand(pi, makeDeps());
+  registerPluginCommand(pi, makeDeps());
 
-  const cmd = commands.get("claude:plugin");
+  const cmd = commands.get("plugin");
   assert.ok(cmd !== undefined);
   assert.equal(typeof cmd.handler, "function");
 
-  // Empty input should trigger the TOP_LEVEL_USAGE emission via
-  // routeClaudePlugin -> notifyUsageError. We assert by capturing the
-  // notify calls.
-  const notifications: { message: string; severity?: string }[] = [];
+  // Empty input should trigger the TUI menu (which requires ctx.ui.custom).
+  // We verify the handler doesn't throw and calls custom.
+  const customCalls: unknown[] = [];
   const ctx = {
     cwd: "/tmp",
     ui: {
-      notify: (m: string, s?: string): void => {
-        notifications.push(s === undefined ? { message: m } : { message: m, severity: s });
+      notify: (): void => {},
+      custom: (): Promise<undefined> => {
+        customCalls.push(true);
+        return Promise.resolve(undefined);
       },
     },
   } as unknown as ExtensionContext;
 
   await cmd.handler("", ctx);
 
-  // routeClaudePlugin emits "Usage error.\n\n<TOP_LEVEL_USAGE>" at error severity.
-  assert.equal(notifications.length, 1);
-  assert.equal(notifications[0]?.severity, "error");
-  assert.match(notifications[0]?.message ?? "", /Usage error\./);
-  assert.match(notifications[0]?.message ?? "", /Usage: \/claude:plugin/);
+  // The handler should have shown the TUI menu
+  assert.equal(customCalls.length, 1, "custom was called to show TUI menu");
 });
 
 test("D-04 :: registered command description mentions reinstall", () => {
   const { pi, commands } = makeMockPi();
-  registerClaudePluginCommand(pi, makeDeps());
+  registerPluginCommand(pi, makeDeps());
 
-  const cmd = commands.get("claude:plugin");
+  const cmd = commands.get("plugin");
   assert.ok(cmd !== undefined);
   assert.equal(cmd.description?.includes("reinstall plugins"), true);
 });
@@ -173,9 +171,9 @@ test("D-04 :: registered command description mentions reinstall", () => {
 test("D-04 :: registered command routes reinstall through makeReinstallHandler", async () => {
   await withHermeticHome(async ({ cwd }) => {
     const { pi, commands } = makeMockPi();
-    registerClaudePluginCommand(pi, makeDeps());
+    registerPluginCommand(pi, makeDeps());
 
-    const cmd = commands.get("claude:plugin");
+    const cmd = commands.get("plugin");
     assert.ok(cmd !== undefined);
 
     const notifications: { message: string; severity?: string }[] = [];
@@ -199,7 +197,7 @@ test("D-04 :: registered command routes reinstall through makeReinstallHandler",
 test("registered command handler routes import through the new handler", async () => {
   const calls: ImportClaudeSettingsOptions[] = [];
   const { pi, commands } = makeMockPi();
-  registerClaudePluginCommand(
+  registerPluginCommand(
     pi,
     makeDeps({
       importClaudeSettings: (opts) => {
@@ -219,7 +217,7 @@ test("registered command handler routes import through the new handler", async (
       },
     }),
   );
-  const cmd = commands.get("claude:plugin");
+  const cmd = commands.get("plugin");
   assert.ok(cmd !== undefined);
 
   await cmd.handler("import --scope project", { cwd: "/tmp/project" } as ExtensionContext);
@@ -232,9 +230,9 @@ test("registered command handler routes import through the new handler", async (
 
 test("D-04 :: registered command has getArgumentCompletions returning AutocompleteItem[] | null", async () => {
   const { pi, commands } = makeMockPi();
-  registerClaudePluginCommand(pi, makeDeps());
+  registerPluginCommand(pi, makeDeps());
 
-  const cmd = commands.get("claude:plugin");
+  const cmd = commands.get("plugin");
   assert.ok(cmd !== undefined);
   assert.equal(typeof cmd.getArgumentCompletions, "function");
 
@@ -248,9 +246,9 @@ test("D-04 :: registered command has getArgumentCompletions returning Autocomple
   }
 });
 
-test('D-04 :: registerClaudePluginCommand also calls pi.on("session_start", ...) exactly once', () => {
+test('D-04 :: registerPluginCommand also calls pi.on("session_start", ...) exactly once', () => {
   const { pi, events } = makeMockPi();
-  registerClaudePluginCommand(pi, makeDeps());
+  registerPluginCommand(pi, makeDeps());
 
   const handlers = events.get("session_start");
   assert.ok(handlers !== undefined, "session_start handler registered");
@@ -259,7 +257,7 @@ test('D-04 :: registerClaudePluginCommand also calls pi.on("session_start", ...)
 
 test("D-04 :: firing the session_start handler installs an autocomplete provider via ctx.ui.addAutocompleteProvider", () => {
   const { pi, events } = makeMockPi();
-  registerClaudePluginCommand(pi, makeDeps());
+  registerPluginCommand(pi, makeDeps());
 
   const handler = events.get("session_start")?.[0];
   assert.ok(handler !== undefined);
@@ -284,9 +282,9 @@ test("D-04 :: firing the session_start handler installs an autocomplete provider
   assert.equal(factories.length, 1, "addAutocompleteProvider invoked exactly once");
 });
 
-test("D-04 :: the installed wrapper applies normalizeCompletionWhitespace only to lines matching isClaudePluginCommandLine", () => {
+test("D-04 :: the installed wrapper applies normalizeCompletionWhitespace only to lines matching isPluginCommandLine", () => {
   const { pi, events } = makeMockPi();
-  registerClaudePluginCommand(pi, makeDeps());
+  registerPluginCommand(pi, makeDeps());
   const handler = events.get("session_start")?.[0];
   assert.ok(handler !== undefined);
 
@@ -307,25 +305,25 @@ test("D-04 :: the installed wrapper applies normalizeCompletionWhitespace only t
 
   // Build a synthetic `current` provider whose applyCompletion returns
   // text WITH a redundant trailing space; the wrapper should
-  // normalize the whitespace for a /claude:plugin line.
+  // normalize the whitespace for a /plugin line.
   const current: AutocompleteProvider = {
     getSuggestions: () => Promise.resolve(null),
     applyCompletion: () => ({
-      lines: ["/claude:plugin install foo "],
+      lines: ["/plugin install foo "],
       cursorLine: 0,
-      cursorCol: 27,
+      cursorCol: 21,
     }),
     shouldTriggerFileCompletion: () => true,
   };
   const wrapper = capturedFactory(current);
 
-  // Synthetic call with a /claude:plugin line -> the wrapper composes
+  // Synthetic call with a /plugin line -> the wrapper composes
   // normalizeCompletionWhitespace. We assert the resulting line shape
   // differs from the unnormalized `current.applyCompletion` result when
   // normalizable whitespace is present.
-  const inputLines = ["/claude:plugin install foo "];
+  const inputLines = ["/plugin install foo "];
   const item: AutocompleteItem = { label: "foo", value: "foo " };
-  const result = wrapper.applyCompletion(inputLines, 0, 27, item, "fo");
+  const result = wrapper.applyCompletion(inputLines, 0, 21, item, "fo");
   // The wrapper goes through normalizeCompletionWhitespace; for a
   // line that the regex matches we expect a non-identical line in the
   // typical case (whitespace collapsed). For this assertion we just
@@ -334,9 +332,9 @@ test("D-04 :: the installed wrapper applies normalizeCompletionWhitespace only t
   assert.ok(Array.isArray(result.lines));
 });
 
-test("D-04 :: the installed wrapper is a no-op for non-/claude:plugin lines", () => {
+test("D-04 :: the installed wrapper is a no-op for non-/plugin lines", () => {
   const { pi, events } = makeMockPi();
-  registerClaudePluginCommand(pi, makeDeps());
+  registerPluginCommand(pi, makeDeps());
   const handler = events.get("session_start")?.[0];
   assert.ok(handler !== undefined);
 
@@ -355,7 +353,7 @@ test("D-04 :: the installed wrapper is a no-op for non-/claude:plugin lines", ()
   assert.ok(capturedFactory !== undefined);
 
   // Underlying provider returns a result identifiable by reference; the
-  // wrapper MUST pass this through verbatim for a non-/claude:plugin line.
+  // wrapper MUST pass this through verbatim for a non-/plugin line.
   const sentinelResult = {
     lines: ["/other-extension whatever"],
     cursorLine: 0,

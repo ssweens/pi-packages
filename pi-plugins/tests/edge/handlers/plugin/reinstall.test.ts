@@ -179,7 +179,7 @@ test("shim :: --scope works before and after reinstall ref", async () => {
     await handler("--scope project", first.ctx);
     assert.equal(first.notifications.length, 1);
     assert.match(first.notifications[0]?.message ?? "", /No plugins installed\./);
-    assert.doesNotMatch(first.notifications[0]?.message ?? "", /Usage: \/claude:plugin reinstall/);
+    assert.doesNotMatch(first.notifications[0]?.message ?? "", /Usage: \/plugin reinstall/);
 
     const second = makeCtx(cwd);
     await handler("myplug@mymkt --scope project", second.ctx);
@@ -235,7 +235,7 @@ test("shim :: invalid ref unknown flag and extra positionals emit reinstall usag
       await handler(args, ctx);
       assert.equal(notifications.length, 1, args);
       assert.equal(notifications[0]?.severity, "error", args);
-      assert.match(notifications[0]?.message ?? "", /Usage: \/claude:plugin reinstall/, args);
+      assert.match(notifications[0]?.message ?? "", /Usage: \/plugin reinstall/, args);
       assert.doesNotMatch(notifications[0]?.message ?? "", /Reinstalled plugin/, args);
     }
   });
@@ -248,6 +248,6 @@ test("shim :: parseArgs failure (invalid --scope value) surfaces error with rein
     await handler("--scope bogus", ctx);
     assert.equal(notifications.length, 1);
     assert.equal(notifications[0]?.severity, "error");
-    assert.match(notifications[0]?.message ?? "", /Usage: \/claude:plugin reinstall/);
+    assert.match(notifications[0]?.message ?? "", /Usage: \/plugin reinstall/);
   });
 });
