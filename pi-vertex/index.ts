@@ -27,7 +27,7 @@
  *   pi --provider vertex --model llama-4-maverick
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ProviderModelConfig } from "@mariozechner/pi-coding-agent";
 import type { Model, Api } from "@mariozechner/pi-ai";
 import { ALL_MODELS, getModelById } from "./models/index.js";
 import { hasAdcCredentials, resolveProjectId } from "./auth.js";
@@ -36,15 +36,17 @@ import { streamVertex } from "./streaming/index.js";
 import type { VertexModelConfig } from "./types.js";
 
 /**
- * Convert Vertex model config to Pi model format
+ * Convert Vertex model config to Pi's per-model provider config.
+ * No `baseUrl`/`provider` here: those live on the provider config passed to
+ * registerProvider, and per-model entries must omit baseUrl so pi-coding-agent's
+ * `definition.baseUrl ?? providerConfig.baseUrl` fallback can apply (an explicit
+ * "" defeats that nullish-coalescing fallback and fails provider registration).
  */
-function toPiModel(config: VertexModelConfig): Model<Api> {
+function toPiModel(config: VertexModelConfig): ProviderModelConfig {
   return {
     id: config.id,
     name: config.name,
     api: "vertex-unified",
-    provider: "vertex",
-    baseUrl: "", // Will be set dynamically
     reasoning: config.reasoning,
     input: config.input,
     cost: config.cost,

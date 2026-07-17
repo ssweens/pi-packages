@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.14] - 2026-07-17
+### Fixed
+- **Provider registration failing with `"baseUrl" is required when defining custom models"`** — `toPiModel()` set `baseUrl: ""` on every per-model entry passed to `registerProvider`. Since `??` only falls through on `null`/`undefined`, that empty string beat the provider-level `baseUrl` fallback in pi-coding-agent's resolution (`definition.baseUrl ?? providerConfig.baseUrl`), so every model resolved to an empty URL and the extension failed to load. Per-model entries now correctly omit `baseUrl` (and `provider`, which isn't part of the per-model shape either), letting them inherit the provider's `baseUrl`.
+
 ## [1.1.13] - 2026-06-09
 ### Added
 - **Claude Fable 5** (`claude-fable-5`) — Anthropic's first public Mythos-class model, positioned above Opus 4.8. 1M context, 128K max output, text/image/file input, reasoning (adaptive thinking always on), tools. $10/$50 per 1M tokens (global), $1/1M cache read, 10% regional premium. Available on Vertex AI Model Garden.
