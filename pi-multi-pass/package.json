@@ -1,0 +1,44 @@
+{
+  "name": "@ssweens/pi-multi-pass",
+  "version": "1.3.1",
+  "type": "module",
+  "description": "Multi-subscription OAuth extension for Pi with rotation pools and rate-limit failover.",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "oauth",
+    "multi-subscription",
+    "rate-limit",
+    "failover"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ssweens/pi-packages.git",
+    "directory": "pi-multi-pass"
+  },
+  "bugs": {
+    "url": "https://github.com/ssweens/pi-packages/issues"
+  },
+  "homepage": "https://github.com/ssweens/pi-packages/tree/main/pi-multi-pass#readme",
+  "files": [
+    "extensions",
+    "README.md",
+    "screenshot.png",
+    "CHANGELOG.md",
+    "TEST_COVERAGE.md"
+  ],
+  "scripts": {
+    "test": "node --experimental-strip-types --test tests/*.mjs"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": ">=0.80.10",
+    "@earendil-works/pi-tui": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/multi-sub.ts"
+    ]
+  }
+}

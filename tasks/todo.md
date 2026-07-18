@@ -1,5 +1,21 @@
 # Tasks
 
+## Current Task: vendor and repair pi-multi-pass
+- [x] Vendor `pi-multi-pass@1.3.0` into `pi-multi-pass/` with monorepo package metadata
+- [x] Apply PR #21’s Pi 0.80.8+ authentication compatibility migration
+- [x] Port every supported OAuth subscription flow to Pi 0.80.10’s provider-auth API
+- [x] Add focused regression coverage for old/new auth facade behavior, logout persistence, and OAuth adapters
+- [x] Update package and root documentation, changelog, and test-coverage notes
+- [x] Verify tests, package loading, and the `/subs` command against Pi 0.80.10
+- [x] Update this task review section
+
+### Review (pi-multi-pass vendor and repair)
+- Vendored `pi-multi-pass@1.3.0` as `@ssweens/pi-multi-pass@1.3.1`.
+- Replaced the removed `ModelRegistry.authStorage` access with a compatibility facade using current provider auth status and Pi's live logout runtime; it does not mutate `auth.json` directly.
+- Vendored maintained Anthropic, Codex, and Copilot OAuth flows plus their callback adapter, so these subscriptions no longer depend on removed Pi OAuth exports.
+- Removed Gemini CLI and Antigravity from the selectable provider set because Pi 0.80.10 no longer ships their OAuth providers; legacy entries are filtered before menus and pools.
+- Verification: `npm test` (7 passing checks), isolated Pi `/subs status` with a retired Google entry (no legacy flow invoked), `npm pack --dry-run`, and live iTerm screenshot at `pi-multi-pass/screenshot.png` confirming `/subs add` offers the three maintained providers.
+
 ## Current Task: pi-dynamic-models configurable model sources for ClinePass
 - [x] Add configurable model source URL/path support to `pi-dynamic-models`
 - [x] Update the ClinePass config example to use `modelsSource`
