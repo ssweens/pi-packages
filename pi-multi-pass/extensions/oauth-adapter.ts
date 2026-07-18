@@ -55,7 +55,31 @@ export function createLegacyOAuthProvider(
 					}
 					if (typeof notification.message === "string") callbacks.onProgress?.(notification.message);
 				},
-				prompt(prompt) {
+				async prompt(prompt) {
+					if (prompt.type === "select" && Array.isArray(prompt.options)) {
+						if (!callbacks.onSelect) {
+							throw new Error("Pi does not support OAuth login-method selection.");
+						}
+
+						const options = prompt.options.flatMap((option) => {
+							if (
+								typeof option !== "object" ||
+								option === null ||
+								typeof (option as { id?: unknown }).id !== "string" ||
+								typeof (option as { label?: unknown }).label !== "string"
+							) {
+								return [];
+							}
+							return [option as { id: string; label: string }];
+						});
+						const selected = await callbacks.onSelect({
+							message: String(prompt.message ?? "Select an OAuth login method"),
+							options,
+						});
+						if (selected === undefined) throw new Error("Login cancelled");
+						return selected;
+					}
+
 					return callbacks.onPrompt({
 						message: String(prompt.message ?? "Continue OAuth login"),
 						placeholder: typeof prompt.placeholder === "string" ? prompt.placeholder : undefined,

@@ -16,7 +16,7 @@ pi install /path/to/pi-packages/pi-multi-pass
 
 ## Pi compatibility
 
-Requires Pi `0.80.10` or newer. This fork uses Pi's current provider-auth status API and its live logout path, so `/subs`, `/pool`, and automatic failover do not depend on the removed `ModelRegistry.authStorage` property.
+Requires Pi `0.80.10` or newer. This fork uses Pi's current provider-auth status API and its live logout path, so `/subs`, `/pool`, and automatic failover do not depend on the removed `ModelRegistry.authStorage` property. ChatGPT Codex login preserves Pi's browser/device-code selector.
 
 ## Features
 

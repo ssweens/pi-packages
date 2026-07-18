@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.3.2] - 2026-07-18
+
+- Fixed ChatGPT Codex subscription login by preserving Pi's browser/device-code selection prompt through the OAuth compatibility adapter.
+- Cancelling that selector now terminates the login cleanly instead of passing an empty login method to the OAuth flow.
+
 ## [1.3.1] - 2026-07-18
 
 - Vendored `pi-multi-pass@1.3.0` into the `@ssweens` Pi package collection.

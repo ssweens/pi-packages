@@ -1,5 +1,18 @@
 # Tasks
 
+## Current Task: fix pi-multi-pass Codex login-method selection
+- [x] Preserve OAuth select prompts through the legacy callback adapter
+- [x] Add regression coverage for Codex browser/device selection and cancellation
+- [x] Run package tests and verify the real Pi provider-composer callback path
+- [x] Update this task review section
+
+### Review (pi-multi-pass Codex login-method selection)
+- Root cause: the Pi 0.80-compatible OAuth adapter downgraded Codex's structured `select` prompt into a plain text prompt. The returned blank text reached the Codex OAuth flow as an unknown login method.
+- Fixed `extensions/oauth-adapter.ts` to forward selector message and option IDs through `OAuthLoginCallbacks.onSelect`, preserving both browser and device-code choices. Selector cancellation now reports `Login cancelled` before OAuth receives a method.
+- Added `tests/oauth-adapter-check.mjs` for browser selection, device-code selection, and cancellation.
+- Verified Pi's current provider-composer source forwards `onSelect` to `callbacks.prompt({ type: "select", ...prompt })`.
+- Verification: `node --experimental-strip-types --check extensions/oauth-adapter.ts` and `npm test` (10 passing checks).
+
 ## Current Task: vendor and repair pi-multi-pass
 - [x] Vendor `pi-multi-pass@1.3.0` into `pi-multi-pass/` with monorepo package metadata
 - [x] Apply PR #21’s Pi 0.80.8+ authentication compatibility migration

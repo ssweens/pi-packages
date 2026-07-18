@@ -7,7 +7,8 @@
   - legacy `ModelRegistry.authStorage`
   - Pi 0.80.8+ configured-auth status and live `ModelRuntime.logout()` bridge
   - non-stored credentials are never falsely reported as logged out
-  - browser-auth and device-code notifications, prompts, and token refresh through the OAuth adapter
+  - browser-auth and device-code notifications, text prompts, and token refresh through the OAuth adapter
+- `tests/oauth-adapter-check.mjs` verifies ChatGPT Codex browser and device-code selection IDs are passed through Pi's selector callback, while a cancelled selection stops login cleanly.
 
 ## Manual verification
 
