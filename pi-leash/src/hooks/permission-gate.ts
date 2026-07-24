@@ -46,12 +46,6 @@ const CWD_BYPASS_ELIGIBLE_DESCRIPTIONS = new Set([
   "recursive ownership change", // chown -R
 ]);
 
-const TRUST_WINDOW_ELIGIBLE_DESCRIPTIONS = new Set([
-  "recursive force delete", // rm -rf
-  "insecure recursive permissions", // chmod -R 777
-  "recursive ownership change", // chown -R
-]);
-
 const TRUST_WINDOW_MS = 5 * 60 * 1000;
 const HEREDOC_MAX_PARSE_DEPTH = 2;
 const MIN_DIALOG_ROWS = 12;
@@ -81,6 +75,52 @@ interface DangerMatch {
   description: string;
   pattern: string;
   source: DangerMatchSource;
+}
+
+/**
+ * Explicit temporary grants for dangerous-command reasons.
+ *
+ * A command may match several reasons. It may bypass the confirmation dialog
+ * only when every matched reason has an active grant, so approving one reason
+ * can never silently approve another.
+ */
+export class DangerousReasonTrust {
+  private readonly timedReasons = new Map<string, number>();
+  private readonly sessionReasons = new Set<string>();
+
+  grantForWindow(reason: string, now = Date.now()): void {
+    this.sessionReasons.delete(reason);
+    this.timedReasons.set(reason, now + TRUST_WINDOW_MS);
+  }
+
+  grantForSession(reason: string): void {
+    this.timedReasons.delete(reason);
+    this.sessionReasons.add(reason);
+  }
+
+  allows(
+    matches: readonly Pick<DangerMatch, "description">[],
+    now = Date.now(),
+  ): boolean {
+    if (matches.length === 0) return false;
+
+    return matches.every(({ description }) => {
+      if (this.sessionReasons.has(description)) return true;
+
+      const expiresAt = this.timedReasons.get(description);
+      if (expiresAt === undefined) return false;
+      if (expiresAt <= now) {
+        this.timedReasons.delete(description);
+        return false;
+      }
+      return true;
+    });
+  }
+
+  clear(): void {
+    this.timedReasons.clear();
+    this.sessionReasons.clear();
+  }
 }
 
 interface SudoExecutionResult {
@@ -878,11 +918,9 @@ export function setupPermissionGateHook(
   // file-based bash operations whose extracted file targets are all inside cwd.
   let sessionAllowCwdFileOps = false;
 
-  // Trust windows for repetitive, non-evil dangerous commands.
-  // - 5-minute window (`w`)
-  // - session-long window (`s`)
-  let allowEligibleDangerousForSession = false;
-  let allowEligibleDangerousUntil = 0;
+  // Explicit grants from `w` and `s`, keyed by the reason shown in the
+  // approval dialog. These never imply consent for another danger reason.
+  const dangerousReasonTrust = new DangerousReasonTrust();
 
   // Captured sudo execution output keyed by tool call id.
   // We inject this via tool_result after replacing the original bash command with a noop.
@@ -897,6 +935,7 @@ export function setupPermissionGateHook(
   // actually exits.
   pi.on("session_shutdown", async () => {
     clearPasswordCache();
+    dangerousReasonTrust.clear();
   });
 
   pi.on("tool_result", async (event) => {
@@ -973,10 +1012,6 @@ export function setupPermissionGateHook(
     const allCwdBypassEligible = matches.every((m) =>
       CWD_BYPASS_ELIGIBLE_DESCRIPTIONS.has(m.description),
     );
-    const allTrustWindowEligible = matches.every((m) =>
-      TRUST_WINDOW_ELIGIBLE_DESCRIPTIONS.has(m.description),
-    );
-
     const cwdScopedDangerous = await isCwdScopedFileOperation(command, ctx.cwd);
 
     // Check session-wide cwd-scoped file-operation allowance.
@@ -984,16 +1019,9 @@ export function setupPermissionGateHook(
       return;
     }
 
-    // Check trust windows for eligible non-evil dangerous commands.
-    const now = Date.now();
-    if (allowEligibleDangerousUntil <= now) {
-      allowEligibleDangerousUntil = 0;
-    }
-    const trustWindowActive =
-      allowEligibleDangerousForSession || allowEligibleDangerousUntil > now;
-    if (trustWindowActive && allTrustWindowEligible && cwdScopedDangerous) {
-      return;
-    }
+    // A multi-reason command still prompts unless every reason was explicitly
+    // trusted. A grant for "rm -rf", for example, never grants "sudo".
+    if (dangerousReasonTrust.allows(matches)) return;
 
     // Emit dangerous event (presenter will play sound)
     emitDangerous(pi, { command, description, pattern: rawPattern });
@@ -1030,8 +1058,6 @@ export function setupPermissionGateHook(
 
       const canGrantCwdFileOpsSession =
         allCwdBypassEligible && cwdScopedDangerous;
-
-      const canGrantTrustWindows = allTrustWindowEligible && cwdScopedDangerous;
 
       type ConfirmResult =
         | "allow"
@@ -1122,12 +1148,8 @@ export function setupPermissionGateHook(
                   canGrantCwdFileOpsSession
                     ? "c: allow cwd file ops this session"
                     : "",
-                  canGrantTrustWindows
-                    ? "w: allow eligible cmds for 5 min"
-                    : "",
-                  canGrantTrustWindows
-                    ? "s: allow eligible cmds for session"
-                    : "",
+                  `w: allow ${description} for 5 min`,
+                  `s: allow ${description} for session`,
                   "v: view full command",
                   "n/esc: deny",
                 ]
@@ -1262,15 +1284,9 @@ export function setupPermissionGateHook(
                 (data === "c" || data === "C")
               ) {
                 done("allow-cwd-fileops-session");
-              } else if (
-                canGrantTrustWindows &&
-                (data === "w" || data === "W")
-              ) {
+              } else if (data === "w" || data === "W") {
                 done("allow-trust-window");
-              } else if (
-                canGrantTrustWindows &&
-                (data === "s" || data === "S")
-              ) {
+              } else if (data === "s" || data === "S") {
                 done("allow-trust-session");
               } else if (cancel || data === "n" || data === "N") {
                 done("deny");
@@ -1287,12 +1303,8 @@ export function setupPermissionGateHook(
           ...(canGrantCwdFileOpsSession
             ? [{ label: "Allow cwd file operations for this session", value: "allow-cwd-fileops-session" as const }]
             : []),
-          ...(canGrantTrustWindows
-            ? [
-                { label: "Allow eligible dangerous commands for 5 min", value: "allow-trust-window" as const },
-                { label: "Allow eligible dangerous commands for this session", value: "allow-trust-session" as const },
-              ]
-            : []),
+          { label: `Allow ${description} for 5 min`, value: "allow-trust-window" },
+          { label: `Allow ${description} for this session`, value: "allow-trust-session" },
           { label: "Deny", value: "deny" },
         ];
         const selected = await ctx.ui.select(
@@ -1314,15 +1326,13 @@ export function setupPermissionGateHook(
       }
 
       if (result === "allow-trust-window") {
-        allowEligibleDangerousUntil = Date.now() + TRUST_WINDOW_MS;
-        allowEligibleDangerousForSession = false;
-        pi.sendMessage({ customType: "leash", content: "✓ Eligible dangerous commands allowed for 5 minutes.", display: true });
+        dangerousReasonTrust.grantForWindow(description);
+        pi.sendMessage({ customType: "leash", content: `✓ ${description} allowed for 5 minutes.`, display: true });
       }
 
       if (result === "allow-trust-session") {
-        allowEligibleDangerousForSession = true;
-        allowEligibleDangerousUntil = 0;
-        pi.sendMessage({ customType: "leash", content: "✓ Eligible dangerous commands allowed for this session.", display: true });
+        dangerousReasonTrust.grantForSession(description);
+        pi.sendMessage({ customType: "leash", content: `✓ ${description} allowed for this session.`, display: true });
       }
 
       if (result === "deny") {

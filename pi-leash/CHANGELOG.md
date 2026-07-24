@@ -3,8 +3,13 @@
 All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
+
+## [1.2.3] - 2026-07-18
 ### Added
 - Added RPC-safe fallbacks for dangerous-command approval and sudo password prompts. Rich terminal `ctx.ui.custom()` dialogs remain unchanged in the pi TUI; RPC hosts can now answer via supported `select`, `confirm`, and `input` dialogs.
+
+### Changed
+- Dangerous-command five-minute and session approvals now apply only to the displayed danger reason. Commands with an additional untrusted reason still require confirmation.
 
 ## [1.2.2] - 2026-06-02
 ### Fixed

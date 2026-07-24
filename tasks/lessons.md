@@ -1,5 +1,13 @@
 # Lessons Learned
 
+## Scope labels must match the user’s requested trust unit
+For permission shortcuts, distinguish exact-command, reason/category, cwd, and session scopes in both state and visible copy. Do not report a reason-scoped implementation as complete until the active dialog label is verified against the requested trust unit.
+
+
+## Do not turn a focused extension change into repeated live-agent experiments
+When the requested behavior is already directly testable through the extension’s unit/integration surface, do not launch multiple Pi windows or consume provider calls trying to force a model-driven UI path. State the verification limitation once, use deterministic tests, and ask before any live runtime experiment that can create churn or cost.
+
+
 ## NEVER commit before verifying + NEVER commit without explicit user permission
 - **Verify first, always.** Run the actual command/behavior. Tests passing ≠ behavior correct.
 - **Then ask**: "May I commit?" Do not auto-commit.

@@ -160,17 +160,17 @@ When prompted, you can choose:
 - **Allow** (`y` / Enter) — allow this command now
 - **Allow for session** (`a`) — allow this exact command string for the current session
 - **Allow cwd file ops this session** (`c`) — shown only for cwd-scoped, allowlisted file operations; allows future dangerous file-based commands in the current `cwd` for this session
-- **Allow eligible cmds for 5 min** (`w`) — shown only for cwd-scoped, allowlisted operations; temporarily bypasses prompts for similar eligible dangerous commands
-- **Allow eligible cmds for session** (`s`) — same as above, but until session end
+- **Allow _[displayed reason]_ for 5 min** (`w`) — temporarily auto-accept future commands matching only that displayed **Reason**
+- **Allow _[displayed reason]_ for session** (`s`) — same scope, until session end
 - **View full command** (`v`) — opens a stable-height, scrollable full-command view so you can inspect the entire dangerous command before deciding
 - **Deny** (`n` / Esc)
 
-`w`/`s`/`c` are intentionally restricted to non-evil categories only:
+`w` and `s` are reason-scoped: approving **recursive force delete**, for example, never approves **superuser command**, filesystem tools, container flags, custom patterns, or any other reason. A command matching multiple reasons still prompts until every one of its reasons has an active grant.
+
+`c` remains intentionally restricted to non-evil, cwd-scoped file operations only:
 - `rm -rf`
 - `chmod -R ...` (world-writable patterns)
 - `chown -R ...`
-
-They do **not** bypass for privilege escalation, disk/filesystem tools (`sudo`, `dd`, `mkfs`, `wipefs`, partitioning, etc.), `shred`, or dangerous container flags.
 
 Danger detection and cwd-scope checks parse full shell structure (AST), including pipelines and shell heredoc payloads (e.g. `bash <<'EOF' ... EOF`).
 

@@ -1,5 +1,19 @@
 # Tasks
 
+## Current Task: scope pi-leash dangerous-command trust to its matched reason
+- [x] Model five-minute and session trust grants by dangerous-command reason
+- [x] Keep multi-reason commands gated unless every reason has an active grant
+- [x] Update the approval dialog and RPC fallback labels without adding interaction steps
+- [x] Add regression coverage, run quality gates, and render the inline dialog component in the hook test
+- [x] Update this task review section
+
+### Review (pi-leash reason-scoped dangerous-command trust)
+- Replaced the previous eligible-command-wide trust flags with `DangerousReasonTrust`, an in-memory grant store keyed by the permission dialog’s displayed reason.
+- `w` now grants that reason for five minutes; `s` grants that reason for the session. A command that matches more than one reason bypasses confirmation only when every matched reason has a grant.
+- The inline and RPC fallback labels now name the concrete detected scope: for example, `Allow recursive force delete for 5 min` / `Allow recursive force delete for this session`.
+- Added deterministic coverage that registers the actual Pi `tool_call` hook against a fake event host, selects the real RPC fallback option, verifies same-reason bypass, and confirms different plus multi-reason commands remain blocked when denied. The test also renders the actual inline component and asserts its `w` label.
+- Verification: `pnpm test` (179 passing), `pnpm typecheck` passed, `pnpm exec biome check src/hooks/permission-gate.test.ts` passed, and `npm pack --dry-run` passed. `pnpm lint` remains blocked by pre-existing vendored import-extension, emoji, and formatting diagnostics outside this change; the new test was formatted cleanly.
+
 ## Current Task: fix pi-multi-pass Codex login-method selection
 - [x] Preserve OAuth select prompts through the legacy callback adapter
 - [x] Add regression coverage for Codex browser/device selection and cancellation
