@@ -72,4 +72,10 @@ export interface StreamOptions {
   temperature?: number;
   reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh";
   signal?: AbortSignal;
+  /** Optional callback for inspecting or replacing provider payloads before sending.
+   *  Called by pi's extension system to emit before_provider_request events. */
+  onPayload?: (payload: unknown, model: unknown) => unknown | undefined | Promise<unknown | undefined>;
+  /** Optional callback invoked after an HTTP response is received.
+   *  Called by pi's extension system to emit after_provider_response events. */
+  onResponse?: (response: { status: number; headers: Record<string, string> }, model: unknown) => void | Promise<void>;
 }

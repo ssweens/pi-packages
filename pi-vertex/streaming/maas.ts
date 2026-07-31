@@ -239,6 +239,12 @@ async function streamAnthropic(
     }
   }
 
+  // Notify extensions (e.g. pi-otel) before the provider request.
+  const nextParams = await options?.onPayload?.(params, model);
+  if (nextParams !== undefined) {
+    Object.assign(params, nextParams);
+  }
+
   const output: any = {
     role: "assistant",
     content: [],
@@ -324,6 +330,9 @@ async function streamAnthropic(
   if (output.content.some((b: any) => b.type === "toolCall")) {
     output.stopReason = "toolUse";
   }
+
+  // Notify extensions after the provider response.
+  await options?.onResponse?.({ status: 200, headers: {} }, model);
 
   stream.push({ type: "done", reason: output.stopReason, message: output });
 }

@@ -169,14 +169,17 @@ export function streamGemini(
         config.abortSignal = options.signal;
       }
 
+      // Notify extensions (e.g. pi-otel) before the provider request.
+      const params = { model: model.apiId, contents, config };
+      const nextParams = await options?.onPayload?.(params, model);
+      if (nextParams !== undefined) {
+        Object.assign(params, nextParams);
+      }
+
       stream.push({ type: "start", partial: output });
 
       // Start streaming
-      const response = await client.models.generateContentStream({
-        model: model.apiId,
-        contents,
-        config,
-      });
+      const response = await client.models.generateContentStream(params);
 
       // Track current content block for thinking/text transitions.
       type StreamingTextBlock = { type: "text"; text: string; textSignature?: string };
@@ -310,6 +313,9 @@ export function streamGemini(
       if (options?.signal?.aborted) {
         throw new Error("Request was aborted");
       }
+
+      // Notify extensions after the provider response.
+      await options?.onResponse?.({ status: 200, headers: {} }, model);
 
       stream.push({ type: "done", reason: output.stopReason, message: output });
       stream.end();
