@@ -1,5 +1,14 @@
 # Lessons Learned
 
+## Coverage claims must match every assertion and test level
+Do not call a multi-case acceptance matrix fully covered merely because each case has some related test. Map every setup step and assertion to a concrete test at the required unit, process-integration, or hosted-adapter level. Label missing or opt-in-unrun legs explicitly; a partially exercised case is not covered.
+
+## Define coordination as progressive capability layers
+When the user asks for a subagent coordinator informed by systems such as Grok Build and Claude Code, do not freeze an arbitrarily narrow minimum and do not demand wholesale parity with a complex framework. Derive the common coordination denominator, define minimum/next/advanced layers with acceptance evidence, ship the foundational layer, and keep adding layers until the user judges the system complete. Complexity must earn its place through a coordination capability.
+
+## Respect explicit agent-provider exclusions in live verification
+When selecting a heterogeneous agent for a live flow, do not choose Gemini if the user excludes it. Prefer an already installed OpenCode free model; use cheap Codex or Claude models only as fallback. Confirm provider/model choice before consuming live-agent calls when several valid providers are available.
+
 ## Scope labels must match the user’s requested trust unit
 For permission shortcuts, distinguish exact-command, reason/category, cwd, and session scopes in both state and visible copy. Do not report a reason-scoped implementation as complete until the active dialog label is verified against the requested trust unit.
 

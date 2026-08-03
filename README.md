@@ -18,6 +18,7 @@ Extension packages for [pi](https://github.com/badlogic/pi-mono).
 | **pi-file-todos** | File-based todo tracking skill |
 | **pi-plugins** | Claude plugin marketplace support for Pi, including GitHub HTTPS and SSH marketplace repos |
 | **pi-multi-pass** | Multiple OAuth subscriptions with rate-limit rotation, pools, and failover |
+| **pi-strings** | Multi-agent ACP orchestration with persistent named workers and a hardened Pi adapter |
 
 ## Installation
 
@@ -32,6 +33,7 @@ pi install @ssweens/pi-huddle
 pi install @ssweens/pi-file-todos
 pi install @ssweens/pi-plugins
 pi install @ssweens/pi-multi-pass
+pi install @ssweens/pi-strings
 ```
 
 Or from a local checkout:

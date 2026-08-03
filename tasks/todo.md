@@ -1,5 +1,54 @@
 # Tasks
 
+## Current Task: implement pi-strings coordination acceptance cases 6–20
+- [x] Add deterministic coordinator coverage for session continuity/reconnect, restart loss, cancel-reassign lineage, capability negotiation, steering terminal races, resume identity, permissions, and correlated questions
+- [x] Close evidence gaps: OS-confined Codex writer, hosted-Pi parent-kill adoption, coordinator-level writer-role resume, external ACP question/reply bridge, and external-writer reassignment
+- [x] Add explicit prerequisite-gated Pi/Codex/OpenCode integration and E2E scripts without external-provider claims
+- [x] Update roadmap, architecture, coverage, README, changelog, and task review
+- [x] Run `bun run check`, integration skip gate, and `npm pack --dry-run`
+
+### Review (pi-strings coordination acceptance cases 6–20)
+- Added versioned `RuntimeCapabilities`, acknowledged steering through the runtime port only, terminal-race classification, session provenance, reconnect, request attempt lineage, and persisted correlated child questions with explicit parent-loss expiry.
+- Added deterministic coordinator, pinned-acpx fixture, direct Pi ACP runtime, external ACP question bridge, and real OS-process recovery tests. The full default package suite has 77 entries: 62 executed passes and 15 explicit environment-gated skips; the final hosted opt-in suite passed 15/15 gates: Pi parent-kill/continuity/overlap/cancellation/steering/writer-reviewer/reassignment/resume, Codex/OpenCode smoke, boundaries, and external reassignment.
+- Pi workers now use a dedicated ACP client with correlated native Pi RPC steering on the same active connection. Generic acpx 0.13.0 native steering remains unsupported; external ACP permission-question delivery is bridged and tested through a documented extension.
+- Added opt-in real Pi continuity, parent-kill, barrier overlap, cooperative cancellation, native steering, writer→fresh-reviewer, cancel→reassign, and writer-resume gates for Pi/Codex/OpenCode. Writer gates require an operator-created linked worktree; external models require configured models.
+- Validation: `bun run check` passed in 3.6 seconds; both typechecks and adapter build passed; real SIGKILL/stale-lease recovery passed; post-change hosted gates passed for Pi spawn/send/wait, two overlapping Pi workers, and free OpenCode spawn/send/wait; isolated tarball install/load and `npm pack --dry-run` passed.
+
+## Current Task: build pi-strings multi-agent ACP control plane
+- [x] Scaffold `pi-strings/` as `@ssweens/pi-strings` with current Pi peer dependencies and documented architecture
+- [x] Add a narrow Pi extension tool surface for named agents: spawn/send/steer/wait/result/list/cancel/close
+- [x] Embed an exact-pinned `acpx/runtime` behind an internal adapter so ACP sessions, events, cancellation, and persistence do not leak into the Pi-facing contract
+- [x] Vendor and harden the Pi ACP adapter: current ACP SDK, strict LF framing, bounded RPC requests, explicit error propagation, atomic private state, and bounded multi-session process ownership
+- [x] Enforce role/tool/trust policy at Pi startup and keep every write-capable agent in its own git worktree
+- [x] Add deterministic ACP/Pi boundary fixtures plus lifecycle, cancellation, crash/reconnect, permission, concurrency, and worktree integration coverage
+- [x] Document progressive coordination layers, promotion criteria, and the complete 20-case acceptance matrix
+- [x] Add operator observability without PTY scraping; keep tmux optional as a human inspection surface rather than the control protocol
+- [x] Run package quality gates, execute real Pi-to-Pi and heterogeneous-agent flows, and visually verify any TUI surface
+- [x] Update root/package README, CHANGELOG, TEST_COVERAGE, version metadata, and this review section
+
+### Implementation contract
+- The main Pi session remains the sole orchestrator; workers cannot recursively spawn workers in v1.
+- `acpx/runtime` is the common ACP transport for heterogeneous agents. A vendored Pi adapter exposes Pi through that same contract.
+- One named worker owns one persistent session and at most one active turn. Different workers may run concurrently.
+- Read-only workers may share the checkout. Write-capable workers require isolated worktrees; isolation failures are errors, never silent fallbacks.
+- Completion is an explicit terminal result correlated by request ID. Transport loss, provider failure, timeout, and cancellation cannot be reported as success.
+- Permission and tool restrictions are enforced at the worker runtime boundary; ACP presentation alone is not treated as sandboxing.
+- Session/process state has one authoritative store with atomic private writes and honest recovery. No duplicate ad hoc task, mailbox, or event stores.
+- tmux is optional observability only. Automation never uses `send-keys` or pane scraping.
+
+### Review (pi-strings multi-agent ACP control plane)
+- Added `@ssweens/pi-strings@0.1.0` with one Pi-native `strings` tool covering spawn/send/steer/wait/result/list/cancel/close for named persistent ACP workers.
+- Wrapped exact-pinned `acpx@0.13.0` behind a local runtime port and vendored `svkozak/pi-acp` at commit `d1cffc047ab37a096ee70ca39cfc1de463db8d12` with attribution.
+- Hardened the Pi adapter with LF-only byte framing, U+2028/U+2029 correctness, bounded RPC deadlines, fatal readiness handshake, stderr tails, single-flight process-group termination, ACP SDK 1.3 typing, honest provider errors, multi-session ownership, ACP session close, and locked atomic private session maps.
+- Enforced Pi read-only workers through discovery-disabled startup plus the `read,grep,find,ls` tool ceiling. Recursive orchestration is absent in worker mode. Writers require an existing linked worktree distinct from the parent checkout and are revalidated before each turn.
+- Added exclusive coordinator ownership, atomic private schema-validated state, parent-loss recovery, bounded result summaries, and complete normalized private NDJSON request logs. tmux remains an optional tailing surface only.
+- Verification has expanded to 77 suite entries: 62 executed passes and 15 explicit environment-gated real-adapter skips, with extension/vendor typechecks and adapter build passing. Coverage includes wait-any/all snapshots, live progress, sibling failure isolation, session continuity/reconnect, genuine Pi ACP steering, generic-acpx steering rejection, cancellation/reassignment, hosted writer resume, external ACP question bridging, physical writer-path confinement, OS-confined Codex writes, real process death/stale-lock recovery, output framing/bounds, and packaging.
+- Claude Fable 5 independently audited lifecycle coverage and compared the implementation with local Grok Build and Claude Code references. Its release blocker was fixed by rejecting steering that acpx 0.13.0 would otherwise execute as a second normal prompt; high-severity worker-name reuse and heterogeneous-writer permission findings were also fixed with regressions. A follow-up review found and drove a forced-close session-discard fix.
+- Oracle/Sol then derived the progressive coordination contract from Grok Build, Claude Code, pi-subagents, ACP/acpx, and current pi-strings evidence. `pi-strings/docs/2026-08-02-COORDINATION_LAYERS.md` now records universal, broadly adopted, emerging, and experimental layers; protocol-neutral versus adapter-specific requirements; promotion criteria; all 20 acceptance cases; current gaps; and strict implementation order.
+- Real verification: final hosted matrix passed all 15 entries with the approved temporary linked worktree: Pi parent-kill/continuity/overlap/cancellation/steering/writer-reviewer/reassignment/resume, Codex/OpenCode smoke, writer boundaries, and Codex/OpenCode reassignment. All temporary marker files, profiles, worktrees, and child processes were removed.
+- No custom TUI surface was added, so visual screenshot verification is not applicable; tool output uses Pi's standard renderer.
+- Correction: the prior claim that all 20 cases were fully covered was too broad. `pi-strings/TEST_COVERAGE.md` now maps every case to its concrete assertions and labels hosted, linked-worktree, and protocol gaps without collapsing them into a pass.
+
 ## Current Task: scope pi-leash dangerous-command trust to its matched reason
 - [x] Model five-minute and session trust grants by dangerous-command reason
 - [x] Keep multi-reason commands gated unless every reason has an active grant
