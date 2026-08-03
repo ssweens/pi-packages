@@ -196,34 +196,6 @@ async function realPiReconnect(): Promise<void> {
   } finally { await second.shutdown(); }
 }
 
-async function realPiSteering(): Promise<void> {
-  const { mkdtemp } = await import("node:fs/promises");
-  const stateDir = await mkdtemp(join(tmpdir(), "pi-strings-steering-"));
-  const barrier = join(process.cwd(), `.pi-strings-steering-${Date.now()}.txt`);
-  await writeFile(barrier, "WAIT\n", { mode: 0o600 });
-  const coordinator = new Coordinator(process.cwd(), { stateDir, profiles: { reviewer: profile("pi", "read-only", ["read", "grep", "find", "ls"]) } });
-  try {
-    assert.equal((await coordinator.execute({ action: "spawn", name: "steering", profile: "reviewer", cwd: process.cwd() })).ok, true);
-    const sent = await coordinator.execute({ action: "send", name: "steering", prompt: `Output the exact marker STEER_READY, then repeatedly read ${barrier} without finishing. If a new instruction arrives while you are waiting, follow it immediately and return exactly STEERED_OK.` });
-    assert.equal(sent.ok, true);
-    let ready = false;
-    for (let attempt = 0; attempt < 120 && !ready; attempt += 1) {
-      const current = sent.ok ? await coordinator.execute({ action: "result", requestId: sent.details.requestId }) : sent;
-      ready = current.ok && String(current.details.output).includes("STEER_READY");
-      if (!ready) await new Promise(resolve => setTimeout(resolve, 250));
-    }
-    assert.equal(ready, true, "real Pi did not reach the steering phase");
-    const steering = await coordinator.execute({ action: "steer", name: "steering", prompt: "Return exactly STEERED_OK now and finish this request." });
-    assert.equal(steering.ok, true);
-    if (steering.ok) assert.equal(steering.details.status, "delivered");
-    const waited = await coordinator.execute({ action: "wait", names: ["steering"], mode: "all", timeoutMs: 120_000 });
-    assert.equal(waited.ok, true);
-    const result = sent.ok ? await coordinator.execute({ action: "result", requestId: sent.details.requestId }) : sent;
-    assert.equal(result.ok && result.details.status, "completed");
-    assert.match(result.ok ? String(result.details.output) : "", /STEERED_OK/);
-  } finally { await closeAll(coordinator, ["steering"]); await rm(barrier, { force: true }); }
-}
-
 async function writerReassignment(): Promise<void> {
   const worktree = process.env.PI_STRINGS_E2E_WRITER_WORKTREE!;
   const { mkdtemp } = await import("node:fs/promises");
@@ -455,7 +427,6 @@ test("real OpenCode ACP spawn-send-wait smoke", { skip: skipReason("opencode") }
 test("real Pi workers overlap", { skip: skipReason("pi") }, realPiOverlap);
 test("real Pi cooperative cancellation remains cancelled", { skip: skipReason("pi") }, realPiCancellation);
 test("real Pi session continuity survives coordinator restart", { skip: skipReason("pi") }, realPiReconnect);
-test("real Pi native steering changes active work", { skip: skipReason("pi") }, realPiSteering);
 test("real Pi writer then fresh reviewer remains worktree-isolated", { skip: writerSkip }, writerReviewer);
 test("real Pi writer cancellation then reassignment preserves authority", { skip: writerSkip }, writerReassignment);
 test("real Pi writer resume preserves role and worktree authority", { skip: writerSkip }, writerResume);

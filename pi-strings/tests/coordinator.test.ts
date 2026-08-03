@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { Coordinator, resumeIdentityMatches } from "../extensions/pi-strings/orchestration/coordinator.ts";
 import { StateStore } from "../extensions/pi-strings/persistence/state-store.ts";
-import type { NormalizedEvent, Profile, RuntimeCapabilities, RuntimeHandle, RuntimePort, RuntimeTerminal, RuntimeTurn, SteeringAcknowledgement } from "../extensions/pi-strings/domain/types.ts";
+import type { NormalizedEvent, Profile, RuntimeHandle, RuntimePort, RuntimeTerminal, RuntimeTurn } from "../extensions/pi-strings/domain/types.ts";
 
 class Deferred<T> {
   promise: Promise<T>;
@@ -22,6 +22,7 @@ class EventQueue implements AsyncIterable<NormalizedEvent> {
   push(value: NormalizedEvent): void { this.values.push(value); this.waiters.shift()?.(); }
   end(): void { this.ended = true; while (this.waiters.length) this.waiters.shift()?.(); }
   fail(error: Error): void { this.failure = error; this.end(); }
+  clear(): void { this.values = []; }
   async *[Symbol.asyncIterator](): AsyncIterator<NormalizedEvent> {
     while (!this.ended || this.values.length > 0) {
       if (this.values.length > 0) { yield this.values.shift()!; continue; }
@@ -38,6 +39,8 @@ class ControlledTurn implements RuntimeTurn {
   cancelled = false;
   closed = false;
   cancelMode: "resolve" | "reject" | "hang" = "resolve";
+  closeMode: "resolve" | "reject" | "hang" = "resolve";
+  clearOnClose = false;
   onCancel?: () => void;
   constructor(readonly requestId: string) {}
   readonly events: AsyncIterable<NormalizedEvent> = this.stream;
@@ -47,42 +50,47 @@ class ControlledTurn implements RuntimeTurn {
     if (this.cancelMode === "hang") await new Promise<void>(() => undefined);
     this.onCancel?.();
   }
-  async closeStream(): Promise<void> { this.closed = true; this.stream.end(); }
+  async closeStream(): Promise<void> {
+    this.closed = true;
+    if (this.closeMode === "reject") throw new Error("stream close rejected");
+    if (this.closeMode === "hang") await new Promise<void>(() => undefined);
+    if (this.clearOnClose) this.stream.clear();
+    this.stream.end();
+  }
   emit(event: NormalizedEvent): void { this.stream.push(event); }
   finish(terminal: RuntimeTerminal, events: NormalizedEvent[] = []): void { for (const event of events) this.stream.push(event); this.stream.end(); this.resultControl.resolve(terminal); }
+  finishResult(terminal: RuntimeTerminal): void { this.resultControl.resolve(terminal); }
+  finishResultWithEvents(terminal: RuntimeTerminal, events: NormalizedEvent[]): void {
+    for (const event of events) this.stream.push(event);
+    this.resultControl.resolve(terminal);
+  }
   failStream(error: Error, terminal: RuntimeTerminal): void { this.stream.fail(error); this.resultControl.resolve(terminal); }
 }
 
 class FakeRuntime implements RuntimePort {
   readonly turns: ControlledTurn[] = [];
-  capabilities: RuntimeCapabilities = { version: 1, steering: false, resume: true, permissions: true, questions: false };
-  readonly steers: string[] = [];
-  readonly replies: string[] = [];
   ensureCalls = 0;
-  steerWait?: Deferred<SteeringAcknowledgement>;
-  lastSteer?: { requestId: string; steerId: string };
   closed = false;
   throwOnNextStart = false;
   rejectClose = false;
   hangClose = false;
   closeDiscards: boolean[] = [];
+  ensureGate?: Promise<void>;
+  lastPrompt?: string;
+  setConfigOptionCalls: Array<{ key: string; value: string }> = [];
   async ensureSession(input: { name: string; cwd: string }): Promise<RuntimeHandle> {
     this.ensureCalls += 1;
+    await this.ensureGate;
     return { sessionKey: input.name, backend: "fake", runtimeSessionName: input.name, cwd: input.cwd, backendSessionId: `session-${input.name}` };
   }
-  async steer(input: { requestId: string; steerId: string; prompt: string }): Promise<SteeringAcknowledgement> {
-    this.steers.push(`${input.requestId}:${input.prompt}`);
-    this.lastSteer = { requestId: input.requestId, steerId: input.steerId };
-    if (this.steerWait) return this.steerWait.promise;
-    this.turns.at(-1)?.emit({ type: "status", text: `steered:${input.prompt}` });
-    return { status: "delivered", requestId: input.requestId, steerId: input.steerId };
-  }
-  async reply(input: { questionId: string; answer: string }): Promise<void> { this.replies.push(`${input.questionId}:${input.answer}`); }
-  startTurn(input: { requestId: string }): RuntimeTurn {
+  startTurn(input: { requestId: string; prompt: string }): RuntimeTurn {
     if (this.throwOnNextStart) { this.throwOnNextStart = false; throw new Error("start failed"); }
+    this.lastPrompt = input.prompt;
     const turn = new ControlledTurn(input.requestId); this.turns.push(turn); return turn;
   }
-  async cancel(): Promise<void> {}
+  async setConfigOption(input: { handle: RuntimeHandle; key: string; value: string }): Promise<void> {
+    this.setConfigOptionCalls.push({ key: input.key, value: input.value });
+  }
   async close(_handle: RuntimeHandle, _reason: string, discardPersistentState: boolean): Promise<void> {
     this.closed = true;
     this.closeDiscards.push(discardPersistentState);
@@ -101,6 +109,28 @@ async function harness(profile?: Profile) {
   });
   return { coordinator, runtimes, stateDir };
 }
+
+async function harnessProfiles(profiles: Record<string, Profile>) {
+  const stateDir = await mkdtemp(join(tmpdir(), "pi-strings-coordinator-"));
+  const runtimes: FakeRuntime[] = [];
+  const coordinator = new Coordinator(process.cwd(), {
+    stateDir, profiles,
+    runtimeFactory: (_cwd: string, _state: string, _profile: Profile) => { const runtime = new FakeRuntime(); runtimes.push(runtime); return runtime; },
+  });
+  return { coordinator, runtimes, stateDir };
+}
+
+async function spawnProfile(coordinator: Coordinator, name: string, profile: string, cwd: string = process.cwd()) {
+  const result = await coordinator.execute({ action: "spawn", name, profile, cwd });
+  assert.equal(result.ok, true, `spawn ${name} failed: ${result.ok ? "" : JSON.stringify((result as { error?: unknown }).error)}`);
+  return result;
+}
+
+const WRITER: Profile = { agent: "pi", role: "writer", kind: "worker", tools: ["read", "grep", "find", "ls", "bash", "edit", "write"], isolation: "shared", timeoutMs: 10_000, cancellationGraceMs: 100, maxOutputBytes: 4_096 };
+const WORKTREE_WRITER: Profile = { ...WRITER, isolation: "worktree" };
+const ORACLE: Profile = { agent: "pi", role: "read-only", kind: "oracle", tools: ["read", "grep", "find", "ls"], timeoutMs: 10_000, cancellationGraceMs: 100, maxOutputBytes: 4_096 };
+const FINDER: Profile = { agent: "pi", role: "read-only", kind: "finder", tools: ["read", "grep", "find", "ls"], timeoutMs: 10_000, cancellationGraceMs: 100, maxOutputBytes: 4_096, maxTurns: 12 };
+const REVIEWER: Profile = { agent: "pi", role: "read-only", kind: "free", tools: ["read", "grep", "find", "ls"], timeoutMs: 10_000, cancellationGraceMs: 100, maxOutputBytes: 4_096 };
 
 async function waitFor(predicate: () => Promise<boolean>, attempts = 100): Promise<void> {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
@@ -171,6 +201,101 @@ test("wait timeout reports timeout without cancelling work", async () => {
     assert.equal(waited.ok && waited.details.timedOut, true);
     assert.equal(runtimes[0]!.turns[0]!.cancelled, false);
     runtimes[0]!.turns[0]!.finish({ status: "completed" });
+  } finally { await coordinator.shutdown(); }
+});
+
+test("coordinator deadline terminalizes and quarantines a late turn", async () => {
+  const profile: Profile = { agent: "pi", role: "read-only", tools: ["read"], timeoutMs: 20, cancellationGraceMs: 25, maxOutputBytes: 4_096 };
+  const { coordinator, runtimes } = await harness(profile);
+  try {
+    await spawn(coordinator, "deadline");
+    const sent = await coordinator.execute({ action: "send", name: "deadline", prompt: "work" });
+    assert.equal(sent.ok, true);
+    await new Promise(resolve => setTimeout(resolve, 40));
+    const timedOut = sent.ok ? await coordinator.execute({ action: "result", requestId: sent.details.requestId }) : sent;
+    assert.equal(timedOut.ok && timedOut.details.status, "timed_out");
+    assert.equal(runtimes[0]!.turns[0]!.cancelled, true);
+    assert.equal(runtimes[0]!.turns[0]!.closed, true);
+    const late = runtimes[0]!.turns[0]!;
+    late.finishResult({ status: "completed" });
+    const rejected = await coordinator.execute({ action: "send", name: "deadline", prompt: "successor" });
+    assert.equal(rejected.ok, false);
+    if (!rejected.ok) assert.equal(rejected.error.code, "WORKER_BUSY");
+    if (sent.ok) {
+      const result = await coordinator.execute({ action: "result", requestId: sent.details.requestId });
+      assert.equal(result.ok && result.details.status, "timed_out");
+    }
+    const closed = await coordinator.execute({ action: "close", name: "deadline", discardPersistentState: true });
+    assert.equal(closed.ok, true);
+    await spawn(coordinator, "deadline");
+  } finally { await coordinator.shutdown(); }
+});
+
+test("terminal result closes a stream that never ends", async () => {
+  const { coordinator, runtimes } = await harness();
+  try {
+    await spawn(coordinator, "terminal-stream");
+    const sent = await coordinator.execute({ action: "send", name: "terminal-stream", prompt: "done" });
+    assert.equal(sent.ok, true);
+    runtimes[0]!.turns[0]!.finishResult({ status: "completed", stopReason: "end_turn" });
+    const waited = await coordinator.execute({ action: "wait", requestId: sent.ok ? sent.details.requestId : "", timeoutMs: 1_000 });
+    assert.equal(waited.ok && waited.details.timedOut, false);
+    assert.equal(runtimes[0]!.turns[0]!.closed, true);
+    const result = await coordinator.execute({ action: "result", requestId: sent.ok ? sent.details.requestId : "" });
+    assert.equal(result.ok && result.details.status, "completed");
+  } finally { await coordinator.shutdown(); }
+});
+
+test("terminal result retains buffered events before an ACPX-style queue-clearing close", async () => {
+  const { coordinator, runtimes } = await harness();
+  try {
+    await spawn(coordinator, "terminal-buffered-events");
+    const sent = await coordinator.execute({ action: "send", name: "terminal-buffered-events", prompt: "done" });
+    assert.equal(sent.ok, true);
+    runtimes[0]!.turns[0]!.clearOnClose = true;
+    runtimes[0]!.turns[0]!.finishResultWithEvents({ status: "completed" }, [
+      { type: "text", text: "first", stream: "output" },
+      { type: "text", text: "second", stream: "output" },
+    ]);
+    if (sent.ok) {
+      await coordinator.execute({ action: "wait", requestId: sent.details.requestId, timeoutMs: 1_000 });
+      const result = await coordinator.execute({ action: "result", requestId: sent.details.requestId });
+      assert.equal(result.ok && result.details.output, "firstsecond");
+    }
+  } finally { await coordinator.shutdown(); }
+});
+
+test("terminal result survives post-result stream cleanup failure", async () => {
+  const profile: Profile = { agent: "pi", role: "read-only", tools: ["read"], timeoutMs: 10_000, cancellationGraceMs: 25, maxOutputBytes: 4_096 };
+  const { coordinator, runtimes } = await harness(profile);
+  try {
+    await spawn(coordinator, "terminal-cleanup-failure");
+    const sent = await coordinator.execute({ action: "send", name: "terminal-cleanup-failure", prompt: "done" });
+    assert.equal(sent.ok, true);
+    runtimes[0]!.turns[0]!.closeMode = "reject";
+    runtimes[0]!.turns[0]!.finishResult({ status: "completed", stopReason: "end_turn" });
+    if (sent.ok) {
+      await coordinator.execute({ action: "wait", requestId: sent.details.requestId, timeoutMs: 1_000 });
+      const result = await coordinator.execute({ action: "result", requestId: sent.details.requestId });
+      assert.equal(result.ok && result.details.status, "completed");
+    }
+  } finally { await coordinator.shutdown(); }
+});
+
+test("terminal result cannot be overwritten by its deadline during stream cleanup", async () => {
+  const profile: Profile = { agent: "pi", role: "read-only", tools: ["read"], timeoutMs: 20, cancellationGraceMs: 30, maxOutputBytes: 4_096 };
+  const { coordinator, runtimes } = await harness(profile);
+  try {
+    await spawn(coordinator, "terminal-deadline-race");
+    const sent = await coordinator.execute({ action: "send", name: "terminal-deadline-race", prompt: "done" });
+    assert.equal(sent.ok, true);
+    runtimes[0]!.turns[0]!.closeMode = "hang";
+    runtimes[0]!.turns[0]!.finishResult({ status: "completed", stopReason: "end_turn" });
+    if (sent.ok) {
+      await coordinator.execute({ action: "wait", requestId: sent.details.requestId, timeoutMs: 1_000 });
+      const result = await coordinator.execute({ action: "result", requestId: sent.details.requestId });
+      assert.equal(result.ok && result.details.status, "completed");
+    }
   } finally { await coordinator.shutdown(); }
 });
 
@@ -259,7 +384,7 @@ test("parallel transport failure preserves a healthy sibling", async () => {
     assert.equal(ar.ok && ar.details.status, "failed");
     assert.equal(br.ok && br.details.status, "completed");
     assert.equal(runtimes[1]!.turns[0]!.cancelled, false);
-    assert.equal(runtimes[1]!.turns[0]!.closed, false);
+    assert.equal(runtimes[1]!.turns[0]!.closed, true);
     assert.equal(runtimes[1]!.closed, false);
   } finally { await coordinator.shutdown(); }
 });
@@ -431,22 +556,40 @@ test("forced close terminalizes an ignored active turn and discards its persiste
   } finally { await coordinator.shutdown(); }
 });
 
-test("steer fails explicitly without starting a second runtime turn", async () => {
+test("close failure records a failed worker and a retry can complete cleanup", async () => {
   const { coordinator, runtimes } = await harness();
   try {
-    await spawn(coordinator, "steerable");
-    const sent = await coordinator.execute({ action: "send", name: "steerable", prompt: "work" });
-    assert.equal(sent.ok, true);
-    const steered = await coordinator.execute({ action: "steer", name: "steerable", prompt: "redirect" });
-    assert.equal(steered.ok, false);
-    if (!steered.ok) assert.equal(steered.error.code, "STEER_UNSUPPORTED");
-    assert.equal(runtimes[0]?.turns.length, 1);
-    const unchanged = await coordinator.execute({ action: "result", requestId: sent.ok ? sent.details.requestId : "" });
-    assert.equal(unchanged.ok && unchanged.details.status, "running");
-    assert.doesNotMatch(unchanged.ok ? String(unchanged.details.output) : "", /redirect/);
-    runtimes[0]?.turns[0]?.finish({ status: "completed", stopReason: "end_turn" });
-    if (sent.ok) await coordinator.execute({ action: "wait", requestId: sent.details.requestId, timeoutMs: 1_000 });
+    await spawn(coordinator, "close-retry");
+    runtimes[0]!.rejectClose = true;
+    const failed = await coordinator.execute({ action: "close", name: "close-retry" });
+    assert.equal(failed.ok, false);
+    if (!failed.ok) assert.equal(failed.error.code, "CLOSE_FAILED");
+    const listed = await coordinator.execute({ action: "list" });
+    assert.equal(listed.ok, true);
+    if (listed.ok) assert.equal((listed.details.workers as Array<{ name: string; status: string }>)[0]?.status, "failed");
+    runtimes[0]!.rejectClose = false;
+    assert.equal((await coordinator.execute({ action: "close", name: "close-retry" })).ok, true);
   } finally { await coordinator.shutdown(); }
+});
+
+test("shutdown rejects queued mutating actions and tracks the started action", async () => {
+  const gate = new Deferred<void>();
+  const stateDir = await mkdtemp(join(tmpdir(), "pi-strings-shutdown-tail-"));
+  const runtimes: FakeRuntime[] = [];
+  const coordinator = new Coordinator(process.cwd(), {
+    stateDir,
+    profiles: { "pi-reviewer": { agent: "pi", role: "read-only", tools: ["read"], timeoutMs: 10_000, cancellationGraceMs: 50, maxOutputBytes: 4_096 } },
+    runtimeFactory: () => { const runtime = new FakeRuntime(); runtime.ensureGate = gate.promise; runtimes.push(runtime); return runtime; },
+  });
+  const first = coordinator.execute({ action: "spawn", name: "started", profile: "pi-reviewer", cwd: process.cwd() });
+  for (let attempt = 0; attempt < 100 && runtimes.length === 0; attempt += 1) await new Promise(resolve => setTimeout(resolve, 1));
+  assert.equal(runtimes.length, 1);
+  const queued = coordinator.execute({ action: "spawn", name: "queued", profile: "pi-reviewer", cwd: process.cwd() });
+  const shutting = coordinator.shutdown();
+  gate.resolve();
+  assert.equal((await first).ok, true);
+  assert.equal((await queued).ok, false);
+  await shutting;
 });
 
 test("closing releases a worker name for respawn", async () => {
@@ -603,63 +746,6 @@ test("cancel and reassign creates a new attempt lineage", async () => {
   } finally { await coordinator.shutdown(); }
 });
 
-test("capability-negotiated steering is acknowledged without a second turn", async () => {
-  const { coordinator, runtimes } = await harness();
-  try {
-    await spawn(coordinator, "steer-capable");
-    runtimes[0]!.capabilities.steering = true;
-    const sent = await coordinator.execute({ action: "send", name: "steer-capable", prompt: "phase one" });
-    assert.equal(sent.ok, true);
-    const steered = await coordinator.execute({ action: "steer", name: "steer-capable", prompt: "direction two" });
-    assert.equal(steered.ok, true);
-    if (steered.ok) assert.equal(steered.details.status, "delivered");
-    assert.equal(runtimes[0]!.turns.length, 1);
-    await waitFor(async () => {
-      const result = await coordinator.execute({ action: "result", requestId: sent.ok ? sent.details.requestId : "" });
-      return result.ok && String(result.details.output).includes("steered:direction two");
-    });
-    runtimes[0]!.turns[0]!.finish({ status: "completed" });
-  } finally { await coordinator.shutdown(); }
-});
-
-test("steering completion race has one terminal request outcome", async () => {
-  const { coordinator, runtimes } = await harness();
-  const acknowledgement = new Deferred<SteeringAcknowledgement>();
-  try {
-    await spawn(coordinator, "steer-race");
-    runtimes[0]!.capabilities.steering = true;
-    runtimes[0]!.steerWait = acknowledgement;
-    const sent = await coordinator.execute({ action: "send", name: "steer-race", prompt: "work" });
-    assert.equal(sent.ok, true);
-    const steering = coordinator.execute({ action: "steer", name: "steer-race", prompt: "late" });
-    await new Promise(resolve => setImmediate(resolve));
-    runtimes[0]!.turns[0]!.finish({ status: "completed" });
-    acknowledgement.resolve({ status: "delivered", requestId: runtimes[0]!.lastSteer!.requestId, steerId: runtimes[0]!.lastSteer!.steerId });
-    const result = await steering;
-    assert.equal(result.ok, true);
-    if (result.ok) assert.equal(result.details.status, "terminal-race");
-    if (sent.ok) {
-      const terminal = await coordinator.execute({ action: "result", requestId: sent.details.requestId });
-      assert.equal(terminal.ok && terminal.details.status, "completed");
-      assert.equal(runtimes[0]!.turns.length, 1);
-    }
-  } finally { await coordinator.shutdown(); }
-});
-
-test("steering rejects an acknowledgement for the wrong operation", async () => {
-  const { coordinator, runtimes } = await harness();
-  try {
-    await spawn(coordinator, "steer-mismatch");
-    runtimes[0]!.capabilities.steering = true;
-    runtimes[0]!.steer = async input => ({ status: "delivered", requestId: input.requestId, steerId: "wrong" });
-    await coordinator.execute({ action: "send", name: "steer-mismatch", prompt: "work" });
-    const result = await coordinator.execute({ action: "steer", name: "steer-mismatch", prompt: "redirect" });
-    assert.equal(result.ok, false);
-    if (!result.ok) assert.equal(result.error.code, "STEER_ACK_MISMATCH");
-    runtimes[0]!.turns[0]!.finish({ status: "completed" });
-  } finally { await coordinator.shutdown(); }
-});
-
 test("resume identity validation rejects every identity dimension", async () => {
   const provenance = { sessionId: "s", agent: "pi", profileName: "pi", role: "read-only" as const, cwd: "/repo" };
   const base = { agent: "pi", role: "read-only" as const, tools: ["read"], timeoutMs: 1, cancellationGraceMs: 1, maxOutputBytes: 1 };
@@ -700,107 +786,247 @@ test("resume rejects a mismatched agent before starting adapter work", async () 
   } finally { await coordinator.shutdown(); }
 });
 
-test("correlated child question pauses and resumes the same request", async () => {
-  const { coordinator, runtimes } = await harness();
+test("shared writer is admitted in the parent checkout without a worktree", async () => {
+  const { coordinator, runtimes } = await harnessProfiles({ "pi-writer": WRITER });
   try {
-    await spawn(coordinator, "question-child");
-    runtimes[0]!.capabilities.questions = true;
-    const sent = await coordinator.execute({ action: "send", name: "question-child", prompt: "choose" });
-    assert.equal(sent.ok, true);
-    runtimes[0]!.turns[0]!.emit({ type: "question", questionId: "q-1", text: "Which product decision?" });
-    await waitFor(async () => {
-      const questions = await coordinator.execute({ action: "questions" });
-      return questions.ok && (questions.details.questions as Array<{ status: string }>).some(question => question.status === "pending");
-    });
-    const blocked = await coordinator.execute({ action: "result", requestId: sent.ok ? sent.details.requestId : "" });
-    assert.equal(blocked.ok && blocked.details.status, "waiting");
-    const listed = await coordinator.execute({ action: "questions" });
-    const questionId = listed.ok ? String((listed.details.questions as Array<{ id: string }>)[0]?.id) : "";
-    const replied = await coordinator.execute({ action: "reply", questionId, answer: "choose A" });
-    assert.equal(replied.ok, true);
-    assert.equal(runtimes[0]!.replies.join(""), "q-1:choose A");
-    const answered = await coordinator.execute({ action: "questions" });
-    assert.equal(answered.ok && (answered.details.questions as Array<{ id: string; status: string }>).find(question => question.id === questionId)?.status, "answered");
-    const resumed = await coordinator.execute({ action: "result", requestId: sent.ok ? sent.details.requestId : "" });
-    assert.equal(resumed.ok && resumed.details.status, "running");
+    await spawnProfile(coordinator, "shared-writer", "pi-writer", process.cwd());
+    assert.equal(runtimes[0]!.closed, false);
+    const listed = await coordinator.execute({ action: "list" });
+    assert.equal(listed.ok, true);
+    if (listed.ok) assert.equal((listed.details.workers as Array<{ worktree?: unknown }>)[0]?.worktree, undefined);
+  } finally { await coordinator.shutdown(); }
+});
+
+test("two shared writers in the same canonical cwd are rejected", async () => {
+  const { coordinator } = await harnessProfiles({ "pi-writer": WRITER });
+  try {
+    await spawnProfile(coordinator, "writer-a", "pi-writer", process.cwd());
+    const second = await coordinator.execute({ action: "spawn", name: "writer-b", profile: "pi-writer", cwd: process.cwd() });
+    assert.equal(second.ok, false);
+    if (!second.ok) assert.equal(second.error.code, "WRITER_CWD_OWNED");
+  } finally { await coordinator.shutdown(); }
+});
+
+test("shared writers in distinct cwds coexist", async () => {
+  const other = await mkdtemp(join(tmpdir(), "pi-strings-other-cwd-"));
+  const { coordinator } = await harnessProfiles({ "pi-writer": WRITER });
+  try {
+    await spawnProfile(coordinator, "writer-a", "pi-writer", process.cwd());
+    await spawnProfile(coordinator, "writer-b", "pi-writer", other);
+  } finally { await coordinator.shutdown(); }
+});
+
+test("worktree isolation remains available and still rejects the parent checkout", async () => {
+  const { coordinator } = await harnessProfiles({ "pi-writer": WORKTREE_WRITER });
+  try {
+    const rejected = await coordinator.execute({ action: "spawn", name: "wt", profile: "pi-writer", cwd: process.cwd() });
+    assert.equal(rejected.ok, false);
+    if (!rejected.ok) assert.equal(rejected.error.code, "WRITER_ISOLATION_REQUIRED");
+  } finally { await coordinator.shutdown(); }
+});
+
+test("send decorates the prompt with the per-kind role and acceptance contract", async () => {
+  const { coordinator, runtimes } = await harnessProfiles({ "pi-oracle": ORACLE, "pi-finder": FINDER, "pi-reviewer": REVIEWER });
+  try {
+    await spawnProfile(coordinator, "o", "pi-oracle", process.cwd());
+    const oracle = await coordinator.execute({ action: "send", name: "o", prompt: "advise" });
+    assert.equal(oracle.ok, true);
+    assert.match(runtimes[0]!.lastPrompt ?? "", /\[oracle contract\]/);
+    assert.match(runtimes[0]!.lastPrompt ?? "", /```acceptance-report/);
+    assert.match(runtimes[0]!.lastPrompt ?? "", /not the orchestrator/);
     runtimes[0]!.turns[0]!.finish({ status: "completed" });
+    if (oracle.ok) await coordinator.execute({ action: "wait", requestId: oracle.details.requestId, timeoutMs: 1_000 });
+
+    await spawnProfile(coordinator, "f", "pi-finder", process.cwd());
+    const finder = await coordinator.execute({ action: "send", name: "f", prompt: "find" });
+    assert.equal(finder.ok, true);
+    assert.match(runtimes[1]!.lastPrompt ?? "", /\[finder contract\]/);
+    runtimes[1]!.turns[0]!.finish({ status: "completed" });
+
+    await spawnProfile(coordinator, "r", "pi-reviewer", process.cwd());
+    const reviewer = await coordinator.execute({ action: "send", name: "r", prompt: "review" });
+    assert.equal(reviewer.ok, true);
+    const prompt = runtimes[2]!.lastPrompt ?? "";
+    assert.doesNotMatch(prompt, /\[oracle contract\]|\[finder contract\]|\[worker contract\]/);
+    assert.doesNotMatch(prompt, /```acceptance-report/);
+    assert.match(prompt, /not the orchestrator/);
+    runtimes[2]!.turns[0]!.finish({ status: "completed" });
+  } finally { await coordinator.shutdown(); }
+});
+
+test("a fenced acceptance report in worker output is parsed onto the request", async () => {
+  const { coordinator, runtimes } = await harnessProfiles({ "pi-writer": WRITER });
+  try {
+    await spawnProfile(coordinator, "acc", "pi-writer", process.cwd());
+    const sent = await coordinator.execute({ action: "send", name: "acc", prompt: "do work" });
+    assert.equal(sent.ok, true);
+    const report = "{ \"changedFiles\": [\"src/a.ts\"], \"testsAddedOrUpdated\": [], \"commandsRun\": [], \"residualRisks\": [\"none\"] }";
+    runtimes[0]!.turns[0]!.finish({ status: "completed" }, [
+      { type: "text", text: "## Summary\ndid it\n```acceptance-report\n" + report + "\n```", stream: "output" },
+    ]);
     if (sent.ok) {
       await coordinator.execute({ action: "wait", requestId: sent.details.requestId, timeoutMs: 1_000 });
-      const completed = await coordinator.execute({ action: "result", requestId: sent.details.requestId });
-      assert.equal(completed.ok && completed.details.status, "completed");
+      const result = await coordinator.execute({ action: "result", requestId: sent.details.requestId });
+      assert.equal(result.ok, true);
+      if (result.ok) {
+        const acceptance = result.details.acceptance as { parsed: boolean; report?: unknown } | undefined;
+        assert.equal(acceptance?.parsed, true);
+        assert.deepEqual(acceptance?.report, { changedFiles: ["src/a.ts"], testsAddedOrUpdated: [], commandsRun: [], residualRisks: ["none"] });
+      }
     }
   } finally { await coordinator.shutdown(); }
 });
 
-test("question correlation permits the same adapter question id across workers", async () => {
-  const { coordinator, runtimes } = await harness();
+test("output without an acceptance block leaves acceptance.parsed false", async () => {
+  const { coordinator, runtimes } = await harnessProfiles({ "pi-oracle": ORACLE });
   try {
-    await spawn(coordinator, "question-a"); await spawn(coordinator, "question-b");
-    runtimes[0]!.capabilities.questions = true; runtimes[1]!.capabilities.questions = true;
-    await coordinator.execute({ action: "send", name: "question-a", prompt: "a" });
-    await coordinator.execute({ action: "send", name: "question-b", prompt: "b" });
-    runtimes[0]!.turns[0]!.emit({ type: "question", questionId: "shared", text: "A?" });
-    runtimes[0]!.turns[0]!.emit({ type: "question", questionId: "shared", text: "A duplicate?" });
-    runtimes[1]!.turns[0]!.emit({ type: "question", questionId: "shared", text: "B?" });
-    await waitFor(async () => {
-      const listed = await coordinator.execute({ action: "questions" });
-      return listed.ok && (listed.details.questions as unknown[]).length === 2;
-    });
-    const listed = await coordinator.execute({ action: "questions" });
-    assert.equal(listed.ok, true);
-    if (listed.ok) {
-      assert.equal(new Set((listed.details.questions as Array<{ id: string }>).map(q => q.id)).size, 2);
-      assert.deepEqual((listed.details.questions as Array<{ adapterQuestionId: string }>).map(q => q.adapterQuestionId).sort(), ["shared", "shared"]);
-    }
-    const cancelling = coordinator.execute({ action: "cancel", name: "question-a" });
-    runtimes[0]!.turns[0]!.finish({ status: "cancelled" });
-    assert.equal((await cancelling).ok, true);
-    runtimes[1]!.turns[0]!.finish({ status: "completed" });
-  } finally { await coordinator.shutdown(); }
-});
-
-test("expired child question rejects a late reply", async () => {
-  const { coordinator, runtimes } = await harness();
-  try {
-    await spawn(coordinator, "expiring-question");
-    runtimes[0]!.capabilities.questions = true;
-    await coordinator.execute({ action: "send", name: "expiring-question", prompt: "ask" });
-    runtimes[0]!.turns[0]!.emit({ type: "question", questionId: "expired", text: "Late?", expiresAt: new Date(Date.now() - 1).toISOString() });
-    await waitFor(async () => {
-      const listed = await coordinator.execute({ action: "questions" });
-      return listed.ok && (listed.details.questions as Array<{ status: string }>).some(q => q.status === "expired");
-    });
-    const listed = await coordinator.execute({ action: "questions" });
-    const id = listed.ok ? String((listed.details.questions as Array<{ id: string }>)[0]?.id) : "";
-    const reply = await coordinator.execute({ action: "reply", questionId: id, answer: "too late" });
-    assert.equal(reply.ok, false);
-    if (!reply.ok) assert.equal(reply.error.code, "QUESTION_SETTLED");
-    const cancelling = coordinator.execute({ action: "cancel", name: "expiring-question" });
-    runtimes[0]!.turns[0]!.finish({ status: "cancelled" });
-    await cancelling;
-  } finally { await coordinator.shutdown(); }
-});
-
-test("pending child question expires explicitly after parent loss", async () => {
-  const stateDir = await mkdtemp(join(tmpdir(), "pi-strings-question-loss-"));
-  const profile = { agent: "pi", role: "read-only" as const, tools: ["read"], timeoutMs: 10_000, cancellationGraceMs: 100, maxOutputBytes: 4_096 };
-  const runtime = new FakeRuntime();
-  runtime.capabilities.questions = true;
-  const first = new Coordinator(process.cwd(), { stateDir, profiles: { "pi-reviewer": profile }, runtimeFactory: () => runtime });
-  try {
-    await spawn(first, "orphan-question");
-    const sent = await first.execute({ action: "send", name: "orphan-question", prompt: "ask" });
+    await spawnProfile(coordinator, "no-acc", "pi-oracle", process.cwd());
+    const sent = await coordinator.execute({ action: "send", name: "no-acc", prompt: "advise" });
     assert.equal(sent.ok, true);
-    runtime.turns[0]!.emit({ type: "question", questionId: "q-orphan", text: "Need authority" });
-    await waitFor(async () => {
-      const questions = await first.execute({ action: "questions" });
-      return questions.ok && (questions.details.questions as Array<{ adapterQuestionId: string; status: string }>).some(question => question.adapterQuestionId === "q-orphan" && question.status === "pending");
-    });
-  } finally { await first.shutdown(); }
-  const replacement = new Coordinator(process.cwd(), { stateDir, profiles: { "pi-reviewer": profile }, runtimeFactory: () => new FakeRuntime() });
+    runtimes[0]!.turns[0]!.finish({ status: "completed" }, [{ type: "text", text: "just prose, no report", stream: "output" }]);
+    if (sent.ok) {
+      await coordinator.execute({ action: "wait", requestId: sent.details.requestId, timeoutMs: 1_000 });
+      const result = await coordinator.execute({ action: "result", requestId: sent.details.requestId });
+      assert.equal(result.ok, true);
+      if (result.ok) assert.equal((result.details.acceptance as { parsed: boolean } | undefined)?.parsed, false);
+    }
+  } finally { await coordinator.shutdown(); }
+});
+
+test("usage on the terminal result is surfaced on the request", async () => {
+  const { coordinator, runtimes } = await harnessProfiles({ "pi-reviewer": REVIEWER });
   try {
-    const questions = await replacement.execute({ action: "questions" });
-    assert.equal(questions.ok, true, questions.ok ? "" : JSON.stringify(questions));
-    if (questions.ok) assert.equal((questions.details.questions as Array<{ adapterQuestionId: string; status: string }>).find(question => question.adapterQuestionId === "q-orphan")?.status, "expired");
-  } finally { await replacement.shutdown(); }
+    await spawnProfile(coordinator, "usage", "pi-reviewer", process.cwd());
+    const sent = await coordinator.execute({ action: "send", name: "usage", prompt: "work" });
+    assert.equal(sent.ok, true);
+    runtimes[0]!.turns[0]!.finish({ status: "completed", usage: { breakdown: { inputTokens: 120, outputTokens: 40, totalTokens: 160 }, cost: { amount: 0.002, currency: "USD" } } });
+    if (sent.ok) {
+      await coordinator.execute({ action: "wait", requestId: sent.details.requestId, timeoutMs: 1_000 });
+      const result = await coordinator.execute({ action: "result", requestId: sent.details.requestId });
+      assert.equal(result.ok, true);
+      if (result.ok) {
+        const usage = result.details.usage as { breakdown?: { totalTokens?: number }; cost?: { amount?: number } } | undefined;
+        assert.equal(usage?.breakdown?.totalTokens, 160);
+        assert.equal(usage?.cost?.amount, 0.002);
+      }
+    }
+  } finally { await coordinator.shutdown(); }
+});
+
+test("exceeding the turn budget cancels and terminalizes as failed", async () => {
+  const budget: Profile = { ...REVIEWER, maxTurns: 2 };
+  const { coordinator, runtimes } = await harnessProfiles({ "pi-reviewer": budget });
+  try {
+    await spawnProfile(coordinator, "budget", "pi-reviewer", process.cwd());
+    const sent = await coordinator.execute({ action: "send", name: "budget", prompt: "loop" });
+    assert.equal(sent.ok, true);
+    const turn = runtimes[0]!.turns[0]!;
+    turn.onCancel = () => turn.finishResult({ status: "cancelled" });
+    turn.emit({ type: "tool", text: "read a" });
+    turn.emit({ type: "tool", text: "read b" });
+    if (sent.ok) {
+      await coordinator.execute({ action: "wait", requestId: sent.details.requestId, timeoutMs: 1_000 });
+      const result = await coordinator.execute({ action: "result", requestId: sent.details.requestId });
+      assert.equal(result.ok && result.details.status, "failed");
+      assert.equal(result.ok && (result.details.failure as { code?: string } | undefined)?.code, "TURN_BUDGET_EXCEEDED");
+      assert.equal(turn.cancelled, true);
+    }
+  } finally { await coordinator.shutdown(); }
+});
+
+test("a worker repeating an identical tool call is stopped as stalled", async () => {
+  const { coordinator, runtimes } = await harnessProfiles({ "pi-reviewer": REVIEWER });
+  try {
+    await spawnProfile(coordinator, "stall", "pi-reviewer", process.cwd());
+    const sent = await coordinator.execute({ action: "send", name: "stall", prompt: "stuck" });
+    assert.equal(sent.ok, true);
+    const turn = runtimes[0]!.turns[0]!;
+    turn.onCancel = () => turn.finishResult({ status: "cancelled" });
+    for (let i = 0; i < 4; i += 1) turn.emit({ type: "tool", text: "read same" });
+    if (sent.ok) {
+      await coordinator.execute({ action: "wait", requestId: sent.details.requestId, timeoutMs: 1_000 });
+      const result = await coordinator.execute({ action: "result", requestId: sent.details.requestId });
+      assert.equal(result.ok && result.details.status, "failed");
+      assert.equal(result.ok && (result.details.failure as { code?: string } | undefined)?.code, "STALLED");
+      assert.equal(turn.cancelled, true);
+    }
+  } finally { await coordinator.shutdown(); }
+});
+
+test("a retryable failure retries on the fallback model and completes", async () => {
+  const retryable: Profile = { ...REVIEWER, model: "primary", fallbackModels: ["backup"], maxAttempts: 2 };
+  const { coordinator, runtimes } = await harnessProfiles({ "pi-reviewer": retryable });
+  try {
+    await spawnProfile(coordinator, "retry", "pi-reviewer", process.cwd());
+    const sent = await coordinator.execute({ action: "send", name: "retry", prompt: "work" });
+    assert.equal(sent.ok, true);
+    runtimes[0]!.turns[0]!.finish({ status: "failed", error: { code: "PROVIDER_OVERLOAD", message: "capacity", retryable: true } });
+    await waitFor(async () => runtimes[0]!.turns.length >= 2);
+    runtimes[0]!.turns[1]!.finish({ status: "completed" });
+    if (sent.ok) {
+      await coordinator.execute({ action: "wait", requestId: sent.details.requestId, timeoutMs: 1_000 });
+      const result = await coordinator.execute({ action: "result", requestId: sent.details.requestId });
+      assert.equal(result.ok && result.details.status, "completed");
+      assert.deepEqual(result.ok && (result.details.attemptModels as string[] | undefined), ["primary", "backup"]);
+      assert.equal(result.ok && (result.details.attempts as number | undefined), 2);
+      assert.deepEqual(runtimes[0]!.setConfigOptionCalls, [{ key: "model", value: "backup" }]);
+    }
+  } finally { await coordinator.shutdown(); }
+});
+
+test("a non-retryable failure does not retry on a fallback model", async () => {
+  const retryable: Profile = { ...REVIEWER, model: "primary", fallbackModels: ["backup"], maxAttempts: 2 };
+  const { coordinator, runtimes } = await harnessProfiles({ "pi-reviewer": retryable });
+  try {
+    await spawnProfile(coordinator, "noretry", "pi-reviewer", process.cwd());
+    const sent = await coordinator.execute({ action: "send", name: "noretry", prompt: "work" });
+    assert.equal(sent.ok, true);
+    runtimes[0]!.turns[0]!.finish({ status: "failed", error: { code: "POLICY", message: "denied", retryable: false } });
+    if (sent.ok) {
+      await coordinator.execute({ action: "wait", requestId: sent.details.requestId, timeoutMs: 1_000 });
+      const result = await coordinator.execute({ action: "result", requestId: sent.details.requestId });
+      assert.equal(result.ok && result.details.status, "failed");
+      assert.equal(runtimes[0]!.turns.length, 1);
+      assert.deepEqual(runtimes[0]!.setConfigOptionCalls, []);
+      assert.equal(result.ok && (result.details.attempts as number | undefined), 1);
+    }
+  } finally { await coordinator.shutdown(); }
+});
+
+test("the coordinator deadline bounds the whole retry window", async () => {
+  const retryable: Profile = { ...REVIEWER, model: "primary", fallbackModels: ["backup", "third"], maxAttempts: 3, timeoutMs: 40 };
+  const { coordinator, runtimes } = await harnessProfiles({ "pi-reviewer": retryable });
+  try {
+    await spawnProfile(coordinator, "deadline-retry", "pi-reviewer", process.cwd());
+    const sent = await coordinator.execute({ action: "send", name: "deadline-retry", prompt: "work" });
+    assert.equal(sent.ok, true);
+    runtimes[0]!.turns[0]!.finish({ status: "failed", error: { code: "PROVIDER_OVERLOAD", message: "capacity", retryable: true } });
+    await waitFor(async () => runtimes[0]!.turns.length >= 2);
+    // Leave attempt 2 hanging; the deadline fires and terminalizes the whole request as timed_out.
+    if (sent.ok) {
+      await coordinator.execute({ action: "wait", requestId: sent.details.requestId, timeoutMs: 2_000 });
+      const result = await coordinator.execute({ action: "result", requestId: sent.details.requestId });
+      assert.equal(result.ok && result.details.status, "timed_out");
+      assert.equal(runtimes[0]!.turns[1]!.cancelled, true);
+    }
+  } finally { await coordinator.shutdown(); }
+});
+
+test("events arriving just after the terminal result are retained before a queue-clearing close", async () => {
+  const { coordinator, runtimes } = await harnessProfiles({ "pi-reviewer": REVIEWER });
+  try {
+    await spawnProfile(coordinator, "async-arrival", "pi-reviewer", process.cwd());
+    const sent = await coordinator.execute({ action: "send", name: "async-arrival", prompt: "done" });
+    assert.equal(sent.ok, true);
+    const turn = runtimes[0]!.turns[0]!;
+    turn.clearOnClose = true;
+    turn.finishResult({ status: "completed" });
+    queueMicrotask(() => turn.emit({ type: "text", text: "late", stream: "output" }));
+    if (sent.ok) {
+      await coordinator.execute({ action: "wait", requestId: sent.details.requestId, timeoutMs: 1_000 });
+      const result = await coordinator.execute({ action: "result", requestId: sent.details.requestId });
+      assert.equal(result.ok, true);
+      if (result.ok) assert.match(String(result.details.output), /late/);
+    }
+  } finally { await coordinator.shutdown(); }
 });

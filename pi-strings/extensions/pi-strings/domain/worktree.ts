@@ -38,6 +38,15 @@ export function requireWriterUnowned(workers: Iterable<WorkerRecord>, worktree: 
   }
 }
 
+export function requireCwdUnowned(workers: Iterable<WorkerRecord>, cwd: string, exceptName?: string): void {
+  for (const worker of workers) {
+    if (worker.name === exceptName || worker.role !== "writer" || worker.status === "closed") continue;
+    if (worker.cwd === cwd) {
+      throw new StringsError("WRITER_CWD_OWNED", `Writer ${worker.name} is already running in ${cwd}.`);
+    }
+  }
+}
+
 export async function requireIsolatedWriter(cwd: string, parentCwd: string): Promise<WorktreeIdentity> {
   const [worker, parent] = await Promise.all([inspectWorktree(cwd), inspectWorktree(parentCwd)]);
   if (worker.gitDir === worker.commonDir || worker.worktreeRoot === parent.worktreeRoot) {

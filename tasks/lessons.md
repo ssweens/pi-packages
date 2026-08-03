@@ -1,5 +1,23 @@
 # Lessons Learned
 
+## Delegate ACP permissions to ACPX
+When an adapter is backed by ACPX, do not reimplement permission decisions, filesystem confinement, or provider permission prompts in the parent layer. Route the profile to ACPX permission modes/policies and let ACPX enforce `--cwd`, tool permissions, and non-interactive behavior. Keep parent code limited to orchestration and event/session routing.
+
+## Answer tool-surface questions with literal registered names
+When asked what “tools” an extension provides, state the exact model-visible registration name(s), parameter names, and literal enum values from the schema. Do not substitute conceptual operations, analogous systems, or worker-internal capabilities for the requested tool surface.
+
+## Do not retire requested capabilities while simplifying a transport
+When simplifying an adapter/runtime layer, do not silently remove user-facing capabilities or mark accepted coverage cases “not applicable.” Preserve the product contract or explicitly ask the user to approve a reduced scope. Transport restrictions must be surfaced as implementation choices, not converted into an unapproved API reduction.
+
+## Preserve product semantics when ACP lacks a named RPC
+A missing native ACP RPC does not mean the product behavior must be removed. First inspect established ACP clients: a product-level control may be correctly implemented as a serialized `session/prompt` on the existing session, preserving context without claiming an unsupported protocol method. Do not delete a user-facing behavior solely because its old adapter-specific transport is being removed.
+
+## Trace provider configuration before blaming the boundary
+If a provider-native tool escapes its expected ACPX/agent boundary, assume the adapter configuration is wrong first. Trace the complete command, environment, session cwd, provider mode, sandbox policy, and persisted session settings; test the provider’s documented configuration directly before adding parent-layer enforcement or declaring a provider limitation.
+
+## Parent sessions must not invent provider-turn semantics
+Do not create a proprietary question protocol or describe an answer as resuming the same model turn. ACP elicitation/user interaction is a provider interaction inside a continuous session; the provider turn boundaries remain distinct, like a tool-call turn followed by a new model turn. The parent may keep one logical task, session, and lineage across those turns, but must use standard adapter/protocol surfaces and never smuggle arbitrary questions through permission payloads.
+
 ## Coverage claims must match every assertion and test level
 Do not call a multi-case acceptance matrix fully covered merely because each case has some related test. Map every setup step and assertion to a concrete test at the required unit, process-integration, or hosted-adapter level. Label missing or opt-in-unrun legs explicitly; a partially exercised case is not covered.
 

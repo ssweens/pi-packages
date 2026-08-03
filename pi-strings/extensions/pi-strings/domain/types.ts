@@ -1,19 +1,8 @@
 export type WorkerRole = "read-only" | "writer";
-export type WorkerStatus = "spawning" | "idle" | "running" | "waiting" | "failed" | "closing" | "closed";
-export type RequestStatus = "running" | "waiting" | "completed" | "cancelled" | "timed_out" | "failed";
-
-export interface RuntimeCapabilities {
-  version: 1;
-  steering: boolean;
-  resume: boolean;
-  permissions: boolean;
-  questions: boolean;
-}
-
-export type SteeringAcknowledgement =
-  | { status: "delivered"; steerId: string; requestId: string }
-  | { status: "failed"; steerId: string; requestId: string; message: string }
-  | { status: "terminal-race"; steerId: string; requestId: string; message: string };
+export type WorkerKind = "oracle" | "finder" | "worker" | "free";
+export type IsolationMode = "shared" | "worktree";
+export type WorkerStatus = "spawning" | "idle" | "running" | "failed" | "closing" | "closed";
+export type RequestStatus = "running" | "completed" | "cancelled" | "timed_out" | "failed";
 
 export interface WorktreeIdentity {
   worktreeRoot: string;
@@ -21,15 +10,44 @@ export interface WorktreeIdentity {
   commonDir: string;
 }
 
+export interface UsageBreakdown {
+  inputTokens?: number;
+  outputTokens?: number;
+  cachedReadTokens?: number;
+  cachedWriteTokens?: number;
+  thoughtTokens?: number;
+  totalTokens?: number;
+}
+
+export interface UsageCost {
+  amount?: number;
+  currency?: string;
+}
+
+export interface TurnUsage {
+  breakdown?: UsageBreakdown;
+  cost?: UsageCost;
+}
+
+export interface AcceptanceReport {
+  parsed: boolean;
+  report?: unknown;
+}
+
 export interface Profile {
   agent: string;
   role: WorkerRole;
+  kind?: WorkerKind;
   model?: string;
   thinking?: string;
+  fallbackModels?: string[];
   tools: string[];
+  isolation?: IsolationMode;
   timeoutMs: number;
   cancellationGraceMs: number;
   maxOutputBytes: number;
+  maxTurns?: number;
+  maxAttempts?: number;
 }
 
 export interface RuntimeHandle {
@@ -47,14 +65,13 @@ export interface RuntimeHandle {
 
 export type NormalizedEvent =
   | { type: "text"; text: string; stream: "output" | "thought" }
-  | { type: "status"; text: string }
-  | { type: "tool"; text: string; status?: string }
-  | { type: "question"; questionId: string; text: string; expiresAt?: string };
+  | { type: "status"; text: string; usage?: TurnUsage }
+  | { type: "tool"; text: string; status?: string };
 
 export type RuntimeTerminal =
-  | { status: "completed"; stopReason?: string }
-  | { status: "cancelled"; stopReason?: string }
-  | { status: "failed"; error: { message: string; code?: string; detailCode?: string; retryable?: boolean } };
+  | { status: "completed"; stopReason?: string; usage?: TurnUsage }
+  | { status: "cancelled"; stopReason?: string; usage?: TurnUsage }
+  | { status: "failed"; error: { message: string; code?: string; detailCode?: string; retryable?: boolean }; usage?: TurnUsage };
 
 export interface RuntimeTurn {
   requestId: string;
@@ -65,26 +82,10 @@ export interface RuntimeTurn {
 }
 
 export interface RuntimePort {
-  capabilities?: RuntimeCapabilities;
-  getCapabilities?(): RuntimeCapabilities;
   ensureSession(input: { name: string; agent: string; cwd: string; profile: Profile; resumeSessionId?: string }): Promise<RuntimeHandle>;
-  startTurn(input: { handle: RuntimeHandle; prompt: string; requestId: string; timeoutMs: number; mode: "prompt" | "steer" }): RuntimeTurn;
-  steer?(input: { handle: RuntimeHandle; requestId: string; steerId: string; prompt: string }): Promise<SteeringAcknowledgement>;
-  reply?(input: { handle: RuntimeHandle; requestId: string; questionId: string; answer: string }): Promise<void>;
-  cancel(handle: RuntimeHandle, reason?: string): Promise<void>;
+  startTurn(input: { handle: RuntimeHandle; prompt: string; requestId: string; timeoutMs: number }): RuntimeTurn;
+  setConfigOption?(input: { handle: RuntimeHandle; key: string; value: string }): Promise<void>;
   close(handle: RuntimeHandle, reason: string, discardPersistentState: boolean): Promise<void>;
-}
-
-export interface QuestionRecord {
-  id: string;
-  adapterQuestionId: string;
-  workerName: string;
-  requestId: string;
-  text: string;
-  status: "pending" | "answered" | "expired";
-  askedAt: string;
-  expiresAt?: string;
-  answeredAt?: string;
 }
 
 export interface RequestRecord {
@@ -103,6 +104,10 @@ export interface RequestRecord {
   attempt?: number;
   supersededBy?: string;
   predecessorRequestId?: string;
+  usage?: TurnUsage;
+  acceptance?: AcceptanceReport;
+  attemptModels?: string[];
+  attempts?: number;
 }
 
 export interface WorkerRecord {

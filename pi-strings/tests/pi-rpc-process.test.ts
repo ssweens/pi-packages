@@ -30,11 +30,6 @@ test("Pi RPC preserves Unicode separators and applies worker startup policy", as
   }
 });
 
-test("Pi RPC acknowledges native steering", async () => {
-  const proc = await PiRpcProcess.spawn({ cwd: here, piCommand: fakePi, startupTimeoutMs: 1_000 });
-  try { await proc.steer("redirect now"); } finally { await proc.terminate(100); }
-});
-
 test("Pi RPC requests reject on deadline", async () => {
   const prior = process.env.FAKE_PI_IGNORE_MODELS;
   process.env.FAKE_PI_IGNORE_MODELS = "1";

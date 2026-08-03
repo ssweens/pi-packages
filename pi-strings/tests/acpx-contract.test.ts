@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { AcpxRuntime, createAgentRegistry, createFileSessionStore } from "acpx/runtime";
+import { normalize } from "../extensions/pi-strings/runtime/acpx-runtime.js";
 
 const fixture = new URL("./fixtures/fake-acp-agent.ts", import.meta.url).pathname;
 
@@ -14,8 +15,8 @@ async function runtimeHarness() {
     sessionStore: createFileSessionStore({ stateDir: join(root, "sessions") }),
     agentRegistry: createAgentRegistry({ overrides: { fixture: [process.execPath, "--import", "tsx", fixture, join(root, "fixture-state.json")] } }),
     permissionMode: "deny-all",
-    nonInteractivePermissions: "fail",
-    timeoutMs: 2_000,
+    nonInteractivePermissions: "deny",
+    timeoutMs: 0,
   });
   return { runtime, root };
 }
@@ -38,7 +39,7 @@ test("acpx fixture preserves session context across turns and runtime reconnect"
     cwd: process.cwd(),
     sessionStore: createFileSessionStore({ stateDir: join(root, "sessions") }),
     agentRegistry: createAgentRegistry({ overrides: { fixture: [process.execPath, "--import", "tsx", fixture, join(root, "fixture-state.json")] } }),
-    permissionMode: "deny-all", nonInteractivePermissions: "fail", timeoutMs: 2_000,
+    permissionMode: "deny-all", nonInteractivePermissions: "deny", timeoutMs: 0,
   });
   assert.ok(handle.backendSessionId);
   const resumed = await replacement.ensureSession({ sessionKey: "continuity", agent: "fixture", mode: "persistent", cwd: process.cwd(), resumeSessionId: handle.backendSessionId });
@@ -61,4 +62,40 @@ test("acpx 0.13 runtime exposes no genuine steering capability", async () => {
   const { runtime } = await runtimeHarness();
   const capabilities = await runtime.getCapabilities?.({});
   assert.equal(capabilities?.controls.includes("session/steer" as never), false);
+});
+
+test("normalize extracts usage from status events with breakdown and cost", () => {
+  const statusWithUsage = normalize({ type: "status", text: "thinking", used: 100, size: 2000, breakdown: { inputTokens: 80, outputTokens: 20, totalTokens: 100 }, cost: { amount: 0.02, currency: "USD" } });
+  assert.equal(statusWithUsage?.type, "status");
+  assert.equal(statusWithUsage?.usage?.breakdown?.inputTokens, 80);
+  assert.equal(statusWithUsage?.usage?.breakdown?.totalTokens, 100);
+  assert.equal(statusWithUsage?.usage?.cost?.amount, 0.02);
+  assert.equal(statusWithUsage?.usage?.cost?.currency, "USD");
+});
+
+test("normalize omits usage on status events without breakdown or cost", () => {
+  const plainStatus = normalize({ type: "status", text: "thinking", used: 50, size: 1000 });
+  assert.equal(plainStatus?.type, "status");
+  assert.equal(plainStatus?.usage, undefined);
+});
+
+test("normalize maps text_delta events with thought stream", () => {
+  const thought = normalize({ type: "text_delta", text: "reasoning", stream: "thought" });
+  assert.equal(thought?.type, "text");
+  if (thought?.type === "text") assert.equal(thought.stream, "thought");
+  const output = normalize({ type: "text_delta", text: "result", stream: "output" });
+  assert.equal(output?.type, "text");
+  if (output?.type === "text") assert.equal(output.stream, "output");
+});
+
+test("normalize maps tool_call events", () => {
+  const tool = normalize({ type: "tool_call", text: "read file.ts", status: "running" });
+  assert.equal(tool?.type, "tool");
+  assert.equal(tool?.text, "read file.ts");
+  assert.equal(tool?.status, "running");
+});
+
+test("normalize returns null for unrecognized event types", () => {
+  const unknown = normalize({ type: "custom" as never, text: "unknown" });
+  assert.equal(unknown, null);
 });

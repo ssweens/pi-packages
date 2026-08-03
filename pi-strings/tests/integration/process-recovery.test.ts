@@ -24,14 +24,12 @@ test("actual parent kill preserves evidence and quarantines the active session",
 
   const resumed: string[] = [];
   const runtime = {
-    capabilities: { version: 1, steering: false, resume: true, permissions: true, questions: false },
     async ensureSession(input: { name: string; resumeSessionId?: string }) {
       resumed.push(input.name);
       if (input.name !== "idle" || input.resumeSessionId !== "idle-session") throw new Error("only the idle session may reconnect");
       return { sessionKey: "idle", backend: "fixture", runtimeSessionName: "idle", backendSessionId: "idle-session" };
     },
     startTurn() { throw new Error("not used"); },
-    async cancel() {},
     async close() {},
   } as RuntimePort;
   const coordinator = new Coordinator(process.cwd(), { stateDir, profiles: { reviewer: profile }, runtimeFactory: () => runtime });
@@ -52,9 +50,6 @@ test("actual parent kill preserves evidence and quarantines the active session",
       assert.equal(worker?.status, "failed");
       assert.equal(idle?.status, "idle");
     }
-    const questions = await coordinator.execute({ action: "questions" });
-    assert.equal(questions.ok, true);
-    if (questions.ok) assert.equal((questions.details.questions as Array<{ status: string }>)[0]?.status, "expired");
     assert.deepEqual(resumed, ["idle"]);
   } finally { await coordinator.shutdown(); }
 });

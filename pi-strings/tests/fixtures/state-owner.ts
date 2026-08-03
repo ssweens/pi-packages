@@ -36,7 +36,7 @@ await store.save([{
   output: "partial evidence",
   truncated: false,
   eventPath: `${stateDir}/requests/req_crashed.ndjson`,
-}], [{ id: "req_crashed:q-pending", adapterQuestionId: "q-pending", workerName: "crashed", requestId: "req_crashed", text: "Need authority", status: "pending", askedAt: now }], [
+}], [
   { sessionId: "crashed-session", agent: "pi", profileName: "reviewer", role: "read-only", cwd: process.cwd() },
   { sessionId: "idle-session", agent: "pi", profileName: "reviewer", role: "read-only", cwd: process.cwd() },
 ]);

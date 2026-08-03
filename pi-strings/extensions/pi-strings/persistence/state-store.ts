@@ -3,7 +3,7 @@ import { join } from "node:path";
 import lockfile from "proper-lockfile";
 import writeFileAtomic from "write-file-atomic";
 import { z } from "zod";
-import type { QuestionRecord, RequestRecord, RuntimeHandle, WorkerRole, WorkerStatus, WorktreeIdentity } from "../domain/types.js";
+import type { RequestRecord, RuntimeHandle, WorkerRole, WorkerStatus, WorktreeIdentity } from "../domain/types.js";
 import { StringsError } from "../domain/errors.js";
 
 export interface SessionProvenance {
@@ -31,7 +31,6 @@ interface StateFile {
   version: 1;
   workers: StoredWorker[];
   requests: RequestRecord[];
-  questions?: QuestionRecord[];
   sessions?: SessionProvenance[];
 }
 
@@ -42,18 +41,25 @@ const HandleSchema = z.object({
 const WorktreeSchema = z.object({ worktreeRoot: z.string().min(1), gitDir: z.string().min(1), commonDir: z.string().min(1) }).strict();
 const WorkerSchema = z.object({
   name: z.string().regex(/^[a-z][a-z0-9-]{0,47}$/), profileName: z.string().min(1), role: z.enum(["read-only", "writer"]),
-  status: z.enum(["spawning", "idle", "running", "waiting", "failed", "closing", "closed"]), cwd: z.string().min(1), worktree: WorktreeSchema.optional(),
+  status: z.enum(["spawning", "idle", "running", "failed", "closing", "closed"]), cwd: z.string().min(1), worktree: WorktreeSchema.optional(),
   handle: HandleSchema, activeRequestId: z.string().optional(), createdAt: z.iso.datetime(), updatedAt: z.iso.datetime(),
 }).strict();
 const FailureSchema = z.object({ code: z.string().min(1), message: z.string(), retryable: z.boolean(), detailCode: z.string().optional() }).strict();
+const UsageBreakdownSchema = z.object({
+  inputTokens: z.number().optional(), outputTokens: z.number().optional(), cachedReadTokens: z.number().optional(),
+  cachedWriteTokens: z.number().optional(), thoughtTokens: z.number().optional(), totalTokens: z.number().optional(),
+}).strict();
+const UsageCostSchema = z.object({ amount: z.number().optional(), currency: z.string().optional() }).strict();
+const UsageSchema = z.object({ breakdown: UsageBreakdownSchema.optional(), cost: UsageCostSchema.optional() }).strict();
+const AcceptanceSchema = z.object({ parsed: z.boolean(), report: z.unknown().optional() }).strict();
 const RequestSchema = z.object({
-  id: z.string().min(1), workerName: z.string().min(1), status: z.enum(["running", "waiting", "completed", "cancelled", "timed_out", "failed"]),
+  id: z.string().min(1), workerName: z.string().min(1), status: z.enum(["running", "completed", "cancelled", "timed_out", "failed"]),
   startedAt: z.iso.datetime(), finishedAt: z.iso.datetime().optional(), output: z.string(), truncated: z.boolean(), eventPath: z.string().optional(),
   failure: FailureSchema.optional(), stopReason: z.string().optional(), cancellationRequestedAt: z.iso.datetime().optional(), lineageId: z.string().optional(), attempt: z.number().int().positive().optional(), supersededBy: z.string().optional(), predecessorRequestId: z.string().optional(),
+  usage: UsageSchema.optional(), acceptance: AcceptanceSchema.optional(), attemptModels: z.array(z.string()).optional(), attempts: z.number().int().positive().optional(),
 }).strict();
-const QuestionSchema = z.object({ id: z.string().min(1), adapterQuestionId: z.string().min(1).optional(), workerName: z.string().min(1), requestId: z.string().min(1), text: z.string(), status: z.enum(["pending", "answered", "expired"]), askedAt: z.iso.datetime(), expiresAt: z.iso.datetime().optional(), answeredAt: z.iso.datetime().optional() }).strict();
 const SessionSchema = z.object({ sessionId: z.string().min(1), agent: z.string().min(1), profileName: z.string().min(1), role: z.enum(["read-only", "writer"]), cwd: z.string().min(1) }).strict();
-const StateSchema = z.object({ version: z.literal(1), workers: z.array(WorkerSchema), requests: z.array(RequestSchema), questions: z.array(QuestionSchema).optional(), sessions: z.array(SessionSchema).optional() }).strict();
+const StateSchema = z.object({ version: z.literal(1), workers: z.array(WorkerSchema), requests: z.array(RequestSchema), sessions: z.array(SessionSchema).optional() }).strict();
 
 export class StateStore {
   private readonly statePath: string;
@@ -97,19 +103,17 @@ export class StateStore {
       }
       const requestIds = new Set(requests.map(request => request.id));
       for (const worker of parsed.workers) {
-        if (worker.role === "writer" && !worker.worktree) throw new Error(`writer ${worker.name} has no worktree identity`);
         if (worker.activeRequestId && !requestIds.has(worker.activeRequestId)) throw new Error(`worker ${worker.name} references an unknown request`);
       }
-      const questions: QuestionRecord[] = (parsed.questions ?? []).map(question => ({ id: question.id, adapterQuestionId: question.adapterQuestionId ?? question.id, workerName: question.workerName, requestId: question.requestId, text: question.text, status: question.status, askedAt: question.askedAt, ...(question.expiresAt ? { expiresAt: question.expiresAt } : {}), ...(question.answeredAt ? { answeredAt: question.answeredAt } : {}) }));
-      return { version: 1, workers: parsed.workers as StoredWorker[], requests, questions, sessions: parsed.sessions ?? [] };
+      return { version: 1, workers: parsed.workers as StoredWorker[], requests, sessions: parsed.sessions ?? [] };
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { version: 1, workers: [], requests: [], questions: [], sessions: [] };
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { version: 1, workers: [], requests: [], sessions: [] };
       throw new StringsError("STATE_CORRUPT", `Cannot load ${this.statePath}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
-  save(workers: StoredWorker[], requests: RequestRecord[], questions: QuestionRecord[] = [], sessions: SessionProvenance[] = []): Promise<void> {
-    const payload: StateFile = { version: 1, workers, requests, questions, sessions };
+  save(workers: StoredWorker[], requests: RequestRecord[], sessions: SessionProvenance[] = []): Promise<void> {
+    const payload: StateFile = { version: 1, workers, requests, sessions };
     const write = this.writeTail.then(async () => {
       await writeFileAtomic(this.statePath, `${JSON.stringify(payload, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
       await chmod(this.statePath, 0o600);

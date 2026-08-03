@@ -29,11 +29,6 @@ const agent: any = {
     const text = params.prompt.map((block: any) => block.type === "text" ? block.text : "").join("");
     const state = await load(); const session = state[params.sessionId] ??= {};
     const set = /SET:([^\s]+)/.exec(text)?.[1]; if (set) { session.nonce = set; await save(state); }
-    if (text.includes("ASK_EXTERNAL")) {
-      const permission = await connection.requestPermission({ sessionId: params.sessionId, toolCall: { toolCallId: "external-question", title: "External question", kind: "other", rawInput: { piStringsQuestion: { text: "Choose the external answer" } } }, options: [{ optionId: "allow", name: "Approve", kind: "allow_once" }, { optionId: "reject", name: "Reject", kind: "reject_once" }] });
-      await connection.sessionUpdate({ sessionId: params.sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: `EXTERNAL_DECISION:${permission.outcome.outcome}` } } });
-      return { stopReason: "end_turn" };
-    }
     if (text.includes("WAIT")) await new Promise<void>(resolve => waits.set(params.sessionId, resolve));
     const output = text.includes("GET") ? `NONCE:${session.nonce ?? "missing"}` : text.includes("WAIT") ? "CANCELLED" : "READY";
     await connection.sessionUpdate({ sessionId: params.sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: output } } });
