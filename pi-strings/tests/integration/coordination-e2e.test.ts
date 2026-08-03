@@ -91,7 +91,7 @@ async function smoke(agent: keyof typeof configured): Promise<void> {
     const sent = await coordinator.execute({ action: "send", name: workerName, prompt: "Return exactly the word READY and no tool calls." });
     assert.equal(sent.ok, true);
     if (!sent.ok) return;
-    await coordinator.execute({ action: "wait", requestId: String(sent.details.requestId), timeoutMs: 120_000 });
+    await coordinator.execute({ action: "wait", requestId: String(sent.details.requestId), waitTimeoutMs: 120_000 });
     const result = await coordinator.execute({ action: "result", requestId: String(sent.details.requestId) });
     assert.equal(result.ok && result.details.status, "completed");
     assert.match(result.ok ? String(result.details.output) : "", /READY/);
@@ -129,7 +129,7 @@ async function realPiOverlap(): Promise<void> {
     assert.equal(beforeRelease.ok, true);
     if (beforeRelease.ok) assert.equal((beforeRelease.details.workers as Array<{ status: string }>).filter(worker => worker.status === "running").length, 2);
     await writeFile(barrier, "RELEASE\n", { mode: 0o600 });
-    const waited = await coordinator.execute({ action: "wait", names: ["overlap-a", "overlap-b"], mode: "all", timeoutMs: 120_000 });
+    const waited = await coordinator.execute({ action: "wait", names: ["overlap-a", "overlap-b"], mode: "all", waitTimeoutMs: 120_000 });
     assert.equal(waited.ok, true);
     if (waited.ok) assert.ok((waited.details.requests as Array<{ status: string }>).every(request => request.status === "completed"));
   } finally { await closeAll(coordinator, ["overlap-a", "overlap-b"]); await rm(barrier, { force: true }); }
@@ -173,7 +173,7 @@ async function realPiReconnect(): Promise<void> {
     assert.equal(sent.ok, true);
     if (sent.ok) {
       session = String(sent.details.session);
-      await first.execute({ action: "wait", requestId: sent.details.requestId, timeoutMs: 120_000 });
+      await first.execute({ action: "wait", requestId: sent.details.requestId, waitTimeoutMs: 120_000 });
       const result = await first.execute({ action: "result", requestId: sent.details.requestId });
       assert.equal(result.ok && result.details.status, "completed");
       assert.match(result.ok ? String(result.details.output) : "", new RegExp(token));
@@ -187,7 +187,7 @@ async function realPiReconnect(): Promise<void> {
     const followUp = await second.execute({ action: "send", name: "continuity", prompt: `What exact token did I ask you to remember? Reply with only ${token}.` });
     assert.equal(followUp.ok, true);
     if (followUp.ok) {
-      await second.execute({ action: "wait", requestId: followUp.details.requestId, timeoutMs: 120_000 });
+      await second.execute({ action: "wait", requestId: followUp.details.requestId, waitTimeoutMs: 120_000 });
       const result = await second.execute({ action: "result", requestId: followUp.details.requestId });
       assert.equal(result.ok && result.details.status, "completed");
       assert.match(result.ok ? String(result.details.output) : "", new RegExp(token));
@@ -229,7 +229,7 @@ async function writerReassignment(): Promise<void> {
     if (second.ok) {
       assert.equal(second.details.attempt, 2);
       assert.notEqual(second.details.session, first.ok ? first.details.session : "");
-      await coordinator.execute({ action: "wait", requestId: second.details.requestId, timeoutMs: 120_000 });
+      await coordinator.execute({ action: "wait", requestId: second.details.requestId, waitTimeoutMs: 120_000 });
       const result = await coordinator.execute({ action: "result", requestId: second.details.requestId });
       assert.equal(result.ok && result.details.status, "completed");
       assert.match((await readFile(markerPath, "utf8")).trim(), /^COMPLETE$/);
@@ -257,7 +257,7 @@ async function writerResume(): Promise<void> {
     const initial = await first.execute({ action: "send", name: "writer", prompt: `Use the write tool to create ${markerPath} with exactly INITIAL. Then report the result.` });
     assert.equal(initial.ok, true);
     if (initial.ok) {
-      await first.execute({ action: "wait", requestId: initial.details.requestId, timeoutMs: 120_000 });
+      await first.execute({ action: "wait", requestId: initial.details.requestId, waitTimeoutMs: 120_000 });
       const result = await first.execute({ action: "result", requestId: initial.details.requestId });
       assert.equal(result.ok && result.details.status, "completed");
     }
@@ -272,7 +272,7 @@ async function writerResume(): Promise<void> {
     const followUp = await second.execute({ action: "send", name: "writer-resumed", prompt: `Use the write tool to replace ${markerPath} with exactly RESUMED. Then report the final content.` });
     assert.equal(followUp.ok, true);
     if (followUp.ok) {
-      await second.execute({ action: "wait", requestId: followUp.details.requestId, timeoutMs: 120_000 });
+      await second.execute({ action: "wait", requestId: followUp.details.requestId, waitTimeoutMs: 120_000 });
       const result = await second.execute({ action: "result", requestId: followUp.details.requestId });
       assert.equal(result.ok && result.details.status, "completed");
     }
@@ -313,7 +313,7 @@ async function externalWriterReassignment(agent: "codex" | "opencode"): Promise<
     assert.equal(second.ok, true);
     if (second.ok) {
       assert.equal(second.details.attempt, 2);
-      await coordinator.execute({ action: "wait", requestId: second.details.requestId, timeoutMs: 120_000 });
+      await coordinator.execute({ action: "wait", requestId: second.details.requestId, waitTimeoutMs: 120_000 });
       const result = await coordinator.execute({ action: "result", requestId: second.details.requestId });
       assert.equal(result.ok && result.details.status, "completed");
       assert.equal((await readFile(markerPath, "utf8")).trim(), "COMPLETE");
@@ -337,7 +337,7 @@ async function writerReviewer(): Promise<void> {
     assert.equal((await coordinator.execute({ action: "spawn", name: "writer", profile: "writer", cwd: worktree })).ok, true);
     const write = await coordinator.execute({ action: "send", name: "writer", prompt: `Create ${markerPath} containing exactly ${token}. Do not modify any other file.` });
     assert.equal(write.ok, true); if (write.ok) {
-      await coordinator.execute({ action: "wait", requestId: write.details.requestId, timeoutMs: 120_000 });
+      await coordinator.execute({ action: "wait", requestId: write.details.requestId, waitTimeoutMs: 120_000 });
       const writeResult = await coordinator.execute({ action: "result", requestId: write.details.requestId });
       assert.equal(writeResult.ok && writeResult.details.status, "completed");
     }
@@ -352,7 +352,7 @@ async function writerReviewer(): Promise<void> {
       assert.equal(reviewer?.profile, "reviewer");
     }
     const review = await coordinator.execute({ action: "send", name: "reviewer", prompt: `Read ${markerPath} and report its exact content.` });
-    assert.equal(review.ok, true); if (review.ok) await coordinator.execute({ action: "wait", requestId: review.details.requestId, timeoutMs: 120_000 });
+    assert.equal(review.ok, true); if (review.ok) await coordinator.execute({ action: "wait", requestId: review.details.requestId, waitTimeoutMs: 120_000 });
     const result = review.ok ? await coordinator.execute({ action: "result", requestId: review.details.requestId }) : review;
     assert.match(result.ok ? String(result.details.output) : "", new RegExp(token));
   } finally { await closeAll(coordinator, ["writer", "reviewer"]); await rm(markerPath, { force: true }); }
@@ -381,7 +381,7 @@ async function externalWriterBoundary(agent: "codex" | "opencode"): Promise<void
     const sent = await coordinator.execute({ action: "send", name: `${agent}-writer`, prompt: `Use the write tool to create ${markerPath} with exactly the text ALLOWED. Do only this write, then report the result.` });
     assert.equal(sent.ok, true);
     if (sent.ok) {
-      await coordinator.execute({ action: "wait", requestId: sent.details.requestId, timeoutMs: 120_000 });
+      await coordinator.execute({ action: "wait", requestId: sent.details.requestId, waitTimeoutMs: 120_000 });
       const result = await coordinator.execute({ action: "result", requestId: sent.details.requestId });
       assert.equal(result.ok && result.details.status, "completed", result.ok ? String(result.details.output) : JSON.stringify(result));
       try {
@@ -392,7 +392,7 @@ async function externalWriterBoundary(agent: "codex" | "opencode"): Promise<void
     }
     const forbiddenAttempt = await coordinator.execute({ action: "send", name: `${agent}-writer`, prompt: `Attempt one write-tool call to ${forbidden} with exactly the text FORBIDDEN. This path is outside your assigned worktree. Report whether the tool was rejected.` });
     assert.equal(forbiddenAttempt.ok, true);
-    if (forbiddenAttempt.ok) await coordinator.execute({ action: "wait", requestId: forbiddenAttempt.details.requestId, timeoutMs: 120_000 });
+    if (forbiddenAttempt.ok) await coordinator.execute({ action: "wait", requestId: forbiddenAttempt.details.requestId, waitTimeoutMs: 120_000 });
     if (await access(forbidden).then(() => true, () => false)) {
       const evidence = forbiddenAttempt.ok ? await coordinator.execute({ action: "result", requestId: forbiddenAttempt.details.requestId }) : forbiddenAttempt;
       throw new Error(`forbidden writer path was created: ${JSON.stringify(evidence.ok ? { output: evidence.details.output, eventPath: evidence.details.eventPath } : evidence)}`);
@@ -401,7 +401,7 @@ async function externalWriterBoundary(agent: "codex" | "opencode"): Promise<void
     const review = await coordinator.execute({ action: "send", name: `${agent}-reviewer`, prompt: `Read ${markerPath} and report the exact file content.` });
     assert.equal(review.ok, true);
     if (review.ok) {
-      await coordinator.execute({ action: "wait", requestId: review.details.requestId, timeoutMs: 120_000 });
+      await coordinator.execute({ action: "wait", requestId: review.details.requestId, waitTimeoutMs: 120_000 });
       const result = await coordinator.execute({ action: "result", requestId: review.details.requestId });
       assert.equal(result.ok && result.details.status, "completed");
       assert.match(result.ok ? String(result.details.output) : "", /ALLOWED/);

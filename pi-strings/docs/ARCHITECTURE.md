@@ -5,7 +5,7 @@
 `pi-strings` gives a Pi parent a named-worker control plane without PTY scraping or provider-specific orchestration. The production path has exactly one runtime port:
 
 ```text
-Parent Pi -> strings tool -> Coordinator -> AcpxRuntimePort -> exact-pinned acpx/runtime
+Parent Pi -> op_* tools -> Coordinator -> AcpxRuntimePort -> exact-pinned acpx/runtime
                                                         ├─ vendored Pi ACP adapter
                                                         └─ configured ACP agents
 ```

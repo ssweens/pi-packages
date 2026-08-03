@@ -163,8 +163,8 @@ test("one worker rejects a second turn while different workers overlap", async (
     assert.equal(runtimes[1]?.turns.length, 1);
     runtimes[0]?.turns[0]?.finish({ status: "completed", stopReason: "end_turn" });
     runtimes[1]?.turns[0]?.finish({ status: "completed", stopReason: "end_turn" });
-    if (first.ok) await coordinator.execute({ action: "wait", requestId: first.details.requestId, timeoutMs: 1_000 });
-    if (secondWorker.ok) await coordinator.execute({ action: "wait", requestId: secondWorker.details.requestId, timeoutMs: 1_000 });
+    if (first.ok) await coordinator.execute({ action: "wait", requestId: first.details.requestId, waitTimeoutMs: 1_000 });
+    if (secondWorker.ok) await coordinator.execute({ action: "wait", requestId: secondWorker.details.requestId, waitTimeoutMs: 1_000 });
   } finally { await coordinator.shutdown(); }
 });
 
@@ -175,7 +175,7 @@ test("wait-any returns the first result without cancelling siblings", async () =
     const a = await coordinator.execute({ action: "send", name: "wait-a", prompt: "a" });
     const b = await coordinator.execute({ action: "send", name: "wait-b", prompt: "b" });
     assert.equal(a.ok && b.ok, true);
-    const waiting = coordinator.execute({ action: "wait", names: ["wait-a", "wait-b"], mode: "any", timeoutMs: 1_000 });
+    const waiting = coordinator.execute({ action: "wait", names: ["wait-a", "wait-b"], mode: "any", waitTimeoutMs: 1_000 });
     runtimes[1]!.turns[0]!.finish({ status: "completed" });
     const first = await waiting;
     assert.equal(first.ok, true);
@@ -186,7 +186,7 @@ test("wait-any returns the first result without cancelling siblings", async () =
     }
     assert.equal(runtimes[0]!.turns[0]!.cancelled, false);
     runtimes[0]!.turns[0]!.finish({ status: "completed" });
-    const all = await coordinator.execute({ action: "wait", names: ["wait-a", "wait-b"], mode: "all", timeoutMs: 1_000 });
+    const all = await coordinator.execute({ action: "wait", names: ["wait-a", "wait-b"], mode: "all", waitTimeoutMs: 1_000 });
     assert.equal(all.ok, true);
     if (all.ok) assert.deepEqual((all.details.requests as Array<{ id: string }>).map(request => request.id).sort(), [a.ok ? a.details.requestId : "", b.ok ? b.details.requestId : ""].sort());
   } finally { await coordinator.shutdown(); }
@@ -197,7 +197,7 @@ test("wait timeout reports timeout without cancelling work", async () => {
   try {
     await spawn(coordinator, "wait-timeout");
     const sent = await coordinator.execute({ action: "send", name: "wait-timeout", prompt: "work" });
-    const waited = await coordinator.execute({ action: "wait", requestId: sent.ok ? sent.details.requestId : "", timeoutMs: 1 });
+    const waited = await coordinator.execute({ action: "wait", requestId: sent.ok ? sent.details.requestId : "", waitTimeoutMs: 1 });
     assert.equal(waited.ok && waited.details.timedOut, true);
     assert.equal(runtimes[0]!.turns[0]!.cancelled, false);
     runtimes[0]!.turns[0]!.finish({ status: "completed" });
@@ -238,7 +238,7 @@ test("terminal result closes a stream that never ends", async () => {
     const sent = await coordinator.execute({ action: "send", name: "terminal-stream", prompt: "done" });
     assert.equal(sent.ok, true);
     runtimes[0]!.turns[0]!.finishResult({ status: "completed", stopReason: "end_turn" });
-    const waited = await coordinator.execute({ action: "wait", requestId: sent.ok ? sent.details.requestId : "", timeoutMs: 1_000 });
+    const waited = await coordinator.execute({ action: "wait", requestId: sent.ok ? sent.details.requestId : "", waitTimeoutMs: 1_000 });
     assert.equal(waited.ok && waited.details.timedOut, false);
     assert.equal(runtimes[0]!.turns[0]!.closed, true);
     const result = await coordinator.execute({ action: "result", requestId: sent.ok ? sent.details.requestId : "" });
@@ -258,7 +258,7 @@ test("terminal result retains buffered events before an ACPX-style queue-clearin
       { type: "text", text: "second", stream: "output" },
     ]);
     if (sent.ok) {
-      await coordinator.execute({ action: "wait", requestId: sent.details.requestId, timeoutMs: 1_000 });
+      await coordinator.execute({ action: "wait", requestId: sent.details.requestId, waitTimeoutMs: 1_000 });
       const result = await coordinator.execute({ action: "result", requestId: sent.details.requestId });
       assert.equal(result.ok && result.details.output, "firstsecond");
     }
@@ -275,7 +275,7 @@ test("terminal result survives post-result stream cleanup failure", async () => 
     runtimes[0]!.turns[0]!.closeMode = "reject";
     runtimes[0]!.turns[0]!.finishResult({ status: "completed", stopReason: "end_turn" });
     if (sent.ok) {
-      await coordinator.execute({ action: "wait", requestId: sent.details.requestId, timeoutMs: 1_000 });
+      await coordinator.execute({ action: "wait", requestId: sent.details.requestId, waitTimeoutMs: 1_000 });
       const result = await coordinator.execute({ action: "result", requestId: sent.details.requestId });
       assert.equal(result.ok && result.details.status, "completed");
     }
@@ -292,7 +292,7 @@ test("terminal result cannot be overwritten by its deadline during stream cleanu
     runtimes[0]!.turns[0]!.closeMode = "hang";
     runtimes[0]!.turns[0]!.finishResult({ status: "completed", stopReason: "end_turn" });
     if (sent.ok) {
-      await coordinator.execute({ action: "wait", requestId: sent.details.requestId, timeoutMs: 1_000 });
+      await coordinator.execute({ action: "wait", requestId: sent.details.requestId, waitTimeoutMs: 1_000 });
       const result = await coordinator.execute({ action: "result", requestId: sent.details.requestId });
       assert.equal(result.ok && result.details.status, "completed");
     }
@@ -307,7 +307,7 @@ test("wait-all returns mixed terminal results", async () => {
     runtimes[0]!.turns[0]!.finish({ status: "completed" });
     runtimes[1]!.turns[0]!.finish({ status: "failed", error: { code: "PROVIDER_FAILED", message: "provider" } });
     runtimes[2]!.turns[0]!.finish({ status: "failed", error: { code: "TIMEOUT", message: "deadline", retryable: true } });
-    const waited = await coordinator.execute({ action: "wait", names: ["mixed-a", "mixed-b", "mixed-c"], mode: "all", timeoutMs: 1_000 });
+    const waited = await coordinator.execute({ action: "wait", names: ["mixed-a", "mixed-b", "mixed-c"], mode: "all", waitTimeoutMs: 1_000 });
     assert.equal(waited.ok, true);
     if (waited.ok) {
       assert.deepEqual((waited.details.requests as Array<{ status: string }>).map(r => r.status).sort(), ["completed", "failed", "timed_out"]);
@@ -325,7 +325,7 @@ test("wait snapshots exclude turns started later", async () => {
     await spawn(coordinator, "snap-a"); await spawn(coordinator, "snap-b"); await spawn(coordinator, "snap-c");
     await coordinator.execute({ action: "send", name: "snap-a", prompt: "a" });
     await coordinator.execute({ action: "send", name: "snap-b", prompt: "b" });
-    const waiting = coordinator.execute({ action: "wait", all: true, mode: "all", timeoutMs: 1_000 });
+    const waiting = coordinator.execute({ action: "wait", all: true, mode: "all", waitTimeoutMs: 1_000 });
     await new Promise(resolve => setImmediate(resolve));
     const c = await coordinator.execute({ action: "send", name: "snap-c", prompt: "c" });
     runtimes[0]!.turns[0]!.finish({ status: "completed" }); runtimes[1]!.turns[0]!.finish({ status: "completed" });
@@ -361,7 +361,7 @@ test("running result exposes progress before terminal completion", async () => {
     assert.match(result.ok ? String(result.details.output) : "", /visible progress/);
     const eventPath = result.ok ? String(result.details.eventPath) : "";
     runtimes[0]!.turns[0]!.finish({ status: "completed" });
-    await coordinator.execute({ action: "wait", requestId, timeoutMs: 1_000 });
+    await coordinator.execute({ action: "wait", requestId, waitTimeoutMs: 1_000 });
     const completeLog = await readFile(eventPath, "utf8");
     const events = completeLog.trim().split("\n").map(line => JSON.parse(line) as { event: NormalizedEvent });
     assert.deepEqual(events.map(entry => entry.event.type), ["status", "text", "tool"]);
@@ -378,7 +378,7 @@ test("parallel transport failure preserves a healthy sibling", async () => {
     const b = await coordinator.execute({ action: "send", name: "healthy-b", prompt: "b" });
     runtimes[0]!.turns[0]!.failStream(new Error("broken"), { status: "completed" });
     runtimes[1]!.turns[0]!.finish({ status: "completed" });
-    await coordinator.execute({ action: "wait", all: true, timeoutMs: 1_000 });
+    await coordinator.execute({ action: "wait", all: true, waitTimeoutMs: 1_000 });
     const ar = await coordinator.execute({ action: "result", requestId: a.ok ? a.details.requestId : "" });
     const br = await coordinator.execute({ action: "result", requestId: b.ok ? b.details.requestId : "" });
     assert.equal(ar.ok && ar.details.status, "failed");
@@ -414,7 +414,7 @@ test("timeout and stream loss remain non-success terminal results", async () => 
     assert.equal(timed.ok, true);
     runtimes[0]?.turns[0]?.finish({ status: "failed", error: { message: "deadline", detailCode: "turn_timeout", retryable: true } });
     if (timed.ok) {
-      await coordinator.execute({ action: "wait", requestId: timed.details.requestId, timeoutMs: 1_000 });
+      await coordinator.execute({ action: "wait", requestId: timed.details.requestId, waitTimeoutMs: 1_000 });
       const result = await coordinator.execute({ action: "result", requestId: timed.details.requestId });
       assert.equal(result.ok && result.details.status, "timed_out");
     }
@@ -426,7 +426,7 @@ test("timeout and stream loss remain non-success terminal results", async () => 
     assert.equal(lost.ok, true);
     runtimes[1]?.turns[0]?.failStream(new Error("stream broke"), { status: "completed", stopReason: "end_turn" });
     if (lost.ok) {
-      await coordinator.execute({ action: "wait", requestId: lost.details.requestId, timeoutMs: 1_000 });
+      await coordinator.execute({ action: "wait", requestId: lost.details.requestId, waitTimeoutMs: 1_000 });
       const result = await coordinator.execute({ action: "result", requestId: lost.details.requestId });
       assert.equal(result.ok && result.details.status, "failed");
     }
@@ -638,7 +638,7 @@ test("UTF-8 output truncation stays within its byte bound", async () => {
     const sent = await coordinator.execute({ action: "send", name: "unicode-bound", prompt: "unicode" });
     runtimes[0]!.turns[0]!.finish({ status: "completed" }, [{ type: "text", text: "😀😀", stream: "output" }]);
     if (sent.ok) {
-      await coordinator.execute({ action: "wait", requestId: sent.details.requestId, timeoutMs: 1_000 });
+      await coordinator.execute({ action: "wait", requestId: sent.details.requestId, waitTimeoutMs: 1_000 });
       const result = await coordinator.execute({ action: "result", requestId: sent.details.requestId });
       assert.equal(result.ok, true);
       if (result.ok) { assert.ok(Buffer.byteLength(String(result.details.output)) <= 5); assert.doesNotMatch(String(result.details.output), /�/); }
@@ -655,7 +655,7 @@ test("output remains bounded while normalized events spill to a private log", as
     const text = "x".repeat(300_000);
     runtimes[0]?.turns[0]?.finish({ status: "completed", stopReason: "end_turn" }, [{ type: "text", text, stream: "output" }]);
     if (sent.ok) {
-      await coordinator.execute({ action: "wait", requestId: sent.details.requestId, timeoutMs: 1_000 });
+      await coordinator.execute({ action: "wait", requestId: sent.details.requestId, waitTimeoutMs: 1_000 });
       const result = await coordinator.execute({ action: "result", requestId: sent.details.requestId });
       assert.equal(result.ok, true);
       if (result.ok) {
@@ -677,13 +677,13 @@ test("sequential turns preserve worker session identity and use distinct request
     const first = await coordinator.execute({ action: "send", name: "continuity", prompt: "establish nonce" });
     assert.equal(first.ok, true);
     runtimes[0]!.turns[0]!.finish({ status: "completed" }, [{ type: "text", text: "NONCE:nonce-42", stream: "output" }]);
-    if (first.ok) await coordinator.execute({ action: "wait", requestId: first.details.requestId, timeoutMs: 1_000 });
+    if (first.ok) await coordinator.execute({ action: "wait", requestId: first.details.requestId, waitTimeoutMs: 1_000 });
     const second = await coordinator.execute({ action: "send", name: "continuity", prompt: "retrieve nonce" });
     assert.equal(second.ok, true);
     assert.notEqual(first.ok && first.details.requestId, second.ok && second.details.requestId);
     if (second.ok) {
       runtimes[0]!.turns[1]!.finish({ status: "completed" }, [{ type: "text", text: "NONCE:nonce-42", stream: "output" }]);
-      await coordinator.execute({ action: "wait", requestId: second.details.requestId, timeoutMs: 1_000 });
+      await coordinator.execute({ action: "wait", requestId: second.details.requestId, waitTimeoutMs: 1_000 });
       const secondResult = await coordinator.execute({ action: "result", requestId: second.details.requestId });
       assert.match(secondResult.ok ? String(secondResult.details.output) : "", /NONCE:nonce-42/);
       assert.equal(second.details.session, first.ok ? first.details.session : undefined);
@@ -701,7 +701,7 @@ test("idle worker reconnects with the same session after coordinator restart", a
     const sent = await first.execute({ action: "send", name: "reconnect", prompt: "remember" });
     assert.equal(sent.ok, true);
     firstRuntime.turns[0]!.finish({ status: "completed" });
-    if (sent.ok) await first.execute({ action: "wait", requestId: sent.details.requestId, timeoutMs: 1_000 });
+    if (sent.ok) await first.execute({ action: "wait", requestId: sent.details.requestId, waitTimeoutMs: 1_000 });
   } finally { await first.shutdown(); }
   const secondRuntime = new FakeRuntime();
   const second = new Coordinator(process.cwd(), { stateDir, profiles: { "pi-reviewer": profile }, runtimeFactory: () => secondRuntime });
@@ -712,7 +712,7 @@ test("idle worker reconnects with the same session after coordinator restart", a
     const sent = await second.execute({ action: "send", name: "reconnect", prompt: "follow up" });
     assert.equal(sent.ok, true);
     secondRuntime.turns[0]!.finish({ status: "completed" });
-    if (sent.ok) await second.execute({ action: "wait", requestId: sent.details.requestId, timeoutMs: 1_000 });
+    if (sent.ok) await second.execute({ action: "wait", requestId: sent.details.requestId, waitTimeoutMs: 1_000 });
     if (listed.ok && sent.ok) assert.equal((listed.details.workers as Array<{ session: string }>)[0]?.session, sent.details.session);
   } finally { await second.shutdown(); }
 });
@@ -835,7 +835,7 @@ test("send decorates the prompt with the per-kind role and acceptance contract",
     assert.match(runtimes[0]!.lastPrompt ?? "", /```acceptance-report/);
     assert.match(runtimes[0]!.lastPrompt ?? "", /not the orchestrator/);
     runtimes[0]!.turns[0]!.finish({ status: "completed" });
-    if (oracle.ok) await coordinator.execute({ action: "wait", requestId: oracle.details.requestId, timeoutMs: 1_000 });
+    if (oracle.ok) await coordinator.execute({ action: "wait", requestId: oracle.details.requestId, waitTimeoutMs: 1_000 });
 
     await spawnProfile(coordinator, "f", "pi-finder", process.cwd());
     const finder = await coordinator.execute({ action: "send", name: "f", prompt: "find" });
@@ -865,7 +865,7 @@ test("a fenced acceptance report in worker output is parsed onto the request", a
       { type: "text", text: "## Summary\ndid it\n```acceptance-report\n" + report + "\n```", stream: "output" },
     ]);
     if (sent.ok) {
-      await coordinator.execute({ action: "wait", requestId: sent.details.requestId, timeoutMs: 1_000 });
+      await coordinator.execute({ action: "wait", requestId: sent.details.requestId, waitTimeoutMs: 1_000 });
       const result = await coordinator.execute({ action: "result", requestId: sent.details.requestId });
       assert.equal(result.ok, true);
       if (result.ok) {
@@ -885,7 +885,7 @@ test("output without an acceptance block leaves acceptance.parsed false", async 
     assert.equal(sent.ok, true);
     runtimes[0]!.turns[0]!.finish({ status: "completed" }, [{ type: "text", text: "just prose, no report", stream: "output" }]);
     if (sent.ok) {
-      await coordinator.execute({ action: "wait", requestId: sent.details.requestId, timeoutMs: 1_000 });
+      await coordinator.execute({ action: "wait", requestId: sent.details.requestId, waitTimeoutMs: 1_000 });
       const result = await coordinator.execute({ action: "result", requestId: sent.details.requestId });
       assert.equal(result.ok, true);
       if (result.ok) assert.equal((result.details.acceptance as { parsed: boolean } | undefined)?.parsed, false);
@@ -901,7 +901,7 @@ test("usage on the terminal result is surfaced on the request", async () => {
     assert.equal(sent.ok, true);
     runtimes[0]!.turns[0]!.finish({ status: "completed", usage: { breakdown: { inputTokens: 120, outputTokens: 40, totalTokens: 160 }, cost: { amount: 0.002, currency: "USD" } } });
     if (sent.ok) {
-      await coordinator.execute({ action: "wait", requestId: sent.details.requestId, timeoutMs: 1_000 });
+      await coordinator.execute({ action: "wait", requestId: sent.details.requestId, waitTimeoutMs: 1_000 });
       const result = await coordinator.execute({ action: "result", requestId: sent.details.requestId });
       assert.equal(result.ok, true);
       if (result.ok) {
@@ -925,7 +925,7 @@ test("exceeding the turn budget cancels and terminalizes as failed", async () =>
     turn.emit({ type: "tool", text: "read a" });
     turn.emit({ type: "tool", text: "read b" });
     if (sent.ok) {
-      await coordinator.execute({ action: "wait", requestId: sent.details.requestId, timeoutMs: 1_000 });
+      await coordinator.execute({ action: "wait", requestId: sent.details.requestId, waitTimeoutMs: 1_000 });
       const result = await coordinator.execute({ action: "result", requestId: sent.details.requestId });
       assert.equal(result.ok && result.details.status, "failed");
       assert.equal(result.ok && (result.details.failure as { code?: string } | undefined)?.code, "TURN_BUDGET_EXCEEDED");
@@ -944,7 +944,7 @@ test("a worker repeating an identical tool call is stopped as stalled", async ()
     turn.onCancel = () => turn.finishResult({ status: "cancelled" });
     for (let i = 0; i < 4; i += 1) turn.emit({ type: "tool", text: "read same" });
     if (sent.ok) {
-      await coordinator.execute({ action: "wait", requestId: sent.details.requestId, timeoutMs: 1_000 });
+      await coordinator.execute({ action: "wait", requestId: sent.details.requestId, waitTimeoutMs: 1_000 });
       const result = await coordinator.execute({ action: "result", requestId: sent.details.requestId });
       assert.equal(result.ok && result.details.status, "failed");
       assert.equal(result.ok && (result.details.failure as { code?: string } | undefined)?.code, "STALLED");
@@ -964,7 +964,7 @@ test("a retryable failure retries on the fallback model and completes", async ()
     await waitFor(async () => runtimes[0]!.turns.length >= 2);
     runtimes[0]!.turns[1]!.finish({ status: "completed" });
     if (sent.ok) {
-      await coordinator.execute({ action: "wait", requestId: sent.details.requestId, timeoutMs: 1_000 });
+      await coordinator.execute({ action: "wait", requestId: sent.details.requestId, waitTimeoutMs: 1_000 });
       const result = await coordinator.execute({ action: "result", requestId: sent.details.requestId });
       assert.equal(result.ok && result.details.status, "completed");
       assert.deepEqual(result.ok && (result.details.attemptModels as string[] | undefined), ["primary", "backup"]);
@@ -983,7 +983,7 @@ test("a non-retryable failure does not retry on a fallback model", async () => {
     assert.equal(sent.ok, true);
     runtimes[0]!.turns[0]!.finish({ status: "failed", error: { code: "POLICY", message: "denied", retryable: false } });
     if (sent.ok) {
-      await coordinator.execute({ action: "wait", requestId: sent.details.requestId, timeoutMs: 1_000 });
+      await coordinator.execute({ action: "wait", requestId: sent.details.requestId, waitTimeoutMs: 1_000 });
       const result = await coordinator.execute({ action: "result", requestId: sent.details.requestId });
       assert.equal(result.ok && result.details.status, "failed");
       assert.equal(runtimes[0]!.turns.length, 1);
@@ -1004,7 +1004,7 @@ test("the coordinator deadline bounds the whole retry window", async () => {
     await waitFor(async () => runtimes[0]!.turns.length >= 2);
     // Leave attempt 2 hanging; the deadline fires and terminalizes the whole request as timed_out.
     if (sent.ok) {
-      await coordinator.execute({ action: "wait", requestId: sent.details.requestId, timeoutMs: 2_000 });
+      await coordinator.execute({ action: "wait", requestId: sent.details.requestId, waitTimeoutMs: 2_000 });
       const result = await coordinator.execute({ action: "result", requestId: sent.details.requestId });
       assert.equal(result.ok && result.details.status, "timed_out");
       assert.equal(runtimes[0]!.turns[1]!.cancelled, true);
@@ -1023,7 +1023,7 @@ test("events arriving just after the terminal result are retained before a queue
     turn.finishResult({ status: "completed" });
     queueMicrotask(() => turn.emit({ type: "text", text: "late", stream: "output" }));
     if (sent.ok) {
-      await coordinator.execute({ action: "wait", requestId: sent.details.requestId, timeoutMs: 1_000 });
+      await coordinator.execute({ action: "wait", requestId: sent.details.requestId, waitTimeoutMs: 1_000 });
       const result = await coordinator.execute({ action: "result", requestId: sent.details.requestId });
       assert.equal(result.ok, true);
       if (result.ok) assert.match(String(result.details.output), /late/);

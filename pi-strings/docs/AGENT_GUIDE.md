@@ -8,37 +8,43 @@ Delegate only when independent context, parallelism, specialization, or adversar
 
 ## 2. Tool calls
 
-The extension exposes one `strings` tool. Inspect persistent workers before creating new ones:
+The extension exposes a family of seven `op_*` tools (`op_spawn`, `op_send`, `op_wait`, `op_result`, `op_list`, `op_cancel`, `op_close`) with strict per-tool schemas. Inspect persistent workers before creating new ones:
 
 ```json
-{"action":"list"}
+{"tool":"op_list","input":{}}
+```
+
+Project to specific live workers when you already know their names:
+
+```json
+{"tool":"op_list","input":{"names":["audit","fix"]}}
 ```
 
 Spawn read-only workers in the parent checkout:
 
 ```json
-{"action":"spawn","name":"audit","profile":"pi-reviewer","cwd":"/absolute/path/to/repo"}
+{"tool":"op_spawn","input":{"name":"audit","profile":"pi-reviewer","cwd":"/absolute/path/to/repo"}}
 ```
 
 Spawn writers in the parent checkout (shared by default) or in a linked worktree (`isolation: "worktree"`):
 
 ```json
-{"action":"spawn","name":"fix","profile":"pi-writer","cwd":"/absolute/path/to/repo"}
+{"tool":"op_spawn","input":{"name":"fix","profile":"pi-writer","cwd":"/absolute/path/to/repo"}}
 ```
 
 Start one normal turn and retain its request ID:
 
 ```json
-{"action":"send","name":"audit","prompt":"Read-only assignment ...","timeoutMs":900000}
+{"tool":"op_send","input":{"name":"audit","prompt":"Read-only assignment ...","requestTimeoutMs":900000}}
 ```
 
-Never send another prompt to a worker while its request is running. After terminal completion, use an ordinary later `send` on the same worker for continuation; `pi-strings` has no in-flight steering, questions, or reply actions.
+Never send another prompt to a worker while its request is running. After terminal completion, use an ordinary later `op_send` on the same worker for continuation; `pi-strings` has no in-flight steering, questions, or reply actions.
 
 Wait and retrieve results:
 
 ```json
-{"action":"wait","requestId":"req_...","timeoutMs":300000}
-{"action":"result","requestId":"req_..."}
+{"tool":"op_wait","input":{"requestId":"req_...","waitTimeoutMs":300000}}
+{"tool":"op_result","input":{"requestId":"req_..."}}
 ```
 
 A wait timeout returns control without cancelling work. Only `completed` is success; handle `cancelled`, `timed_out`, and `failed` separately.
@@ -46,8 +52,8 @@ A wait timeout returns control without cancelling work. Only `completed` is succ
 Cancel and close explicitly:
 
 ```json
-{"action":"cancel","name":"audit","reason":"Evidence is sufficient"}
-{"action":"close","name":"audit","discardPersistentState":false}
+{"tool":"op_cancel","input":{"name":"audit","reason":"Evidence is sufficient"}}
+{"tool":"op_close","input":{"name":"audit","discardPersistentState":false}}
 ```
 
 A timed-out worker is intentionally unusable. Close it before replacement or a new session. A close failure leaves a persisted failed worker so cleanup can be retried honestly.

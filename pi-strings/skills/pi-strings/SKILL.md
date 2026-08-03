@@ -5,7 +5,7 @@ description: Coordinate persistent coding-agent workers from Pi through the pinn
 
 # Pi Strings
 
-The parent Pi is the sole orchestrator. Workers never invoke `strings` or coordinate other workers.
+The parent Pi is the sole orchestrator. Workers never invoke the `op_*` tools or coordinate other workers.
 
 Before delegating, read `../../docs/AGENT_GUIDE.md`. For lifecycle, policy, or recovery questions, also read `../../docs/ARCHITECTURE.md`.
 
@@ -35,10 +35,10 @@ The coordinator decorates prompts with per-kind role and acceptance contracts. A
 
 ## Standard sequence
 
-1. `list` to understand existing workers.
-2. `spawn` named workers with explicit profiles and cwd.
-3. `send` lane-specific tasks and retain each request ID.
-4. `wait` for workers required for the next decision.
-5. `result` to retrieve retained output and terminal metadata.
+1. `op_list` to understand existing workers.
+2. `op_spawn` named workers with explicit profiles and cwd.
+3. `op_send` lane-specific tasks and retain each request ID.
+4. `op_wait` for workers required for the next decision.
+5. `op_result` to retrieve retained output and terminal metadata.
 6. Synthesize in the parent; do not blindly concatenate worker answers.
-7. `close` disposable workers.
+7. `op_close` disposable workers.

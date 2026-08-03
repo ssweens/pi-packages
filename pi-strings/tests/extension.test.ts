@@ -4,11 +4,10 @@ import piStrings from "../extensions/pi-strings/index.ts";
 import { permissionModeFor } from "../extensions/pi-strings/runtime/acpx-runtime.ts";
 import type { Profile } from "../extensions/pi-strings/domain/types.ts";
 
-test("registers exactly one strings tool in a parent", () => {
+test("registers exactly seven op_* tools in a parent", () => {
   const tools: unknown[] = [];
   piStrings({ on: () => undefined, registerTool: (tool: unknown) => tools.push(tool) } as never);
-  assert.equal(tools.length, 1);
-  assert.equal((tools[0] as { name: string }).name, "strings");
+  assert.deepEqual(tools.map((tool) => (tool as { name: string }).name), ["op_spawn", "op_send", "op_wait", "op_result", "op_list", "op_cancel", "op_close"]);
 });
 
 test("routes profile roles to ACPX permission modes", () => {

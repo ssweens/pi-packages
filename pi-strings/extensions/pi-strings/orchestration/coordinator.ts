@@ -75,7 +75,7 @@ export class Coordinator {
     try {
       await this.initialize();
       switch (input.action) {
-        case "list": return this.list();
+        case "list": return this.list(input);
         case "spawn": return await this.spawn(input);
         case "send": return await this.send(input);
         case "wait": return await this.wait(input);
@@ -187,8 +187,19 @@ export class Coordinator {
     await this.stateStore.close();
   }
 
-  private list(): StringsResponse {
-    return { ok: true, action: "list", details: { workers: [...this.workers.values()].map(({ record }) => this.publicWorker(record)), requests: [...this.requests.values()].map((r) => ({ ...r })) } };
+  private list(input: Action): StringsResponse {
+    let records = [...this.workers.values()].map(({ record }) => record);
+    let requests = [...this.requests.values()];
+    if (Array.isArray(input.names)) {
+      const names = input.names.map((name) => String(name));
+      for (const name of names) {
+        if (!this.workers.has(name)) throw new StringsError("WORKER_NOT_FOUND", `Unknown worker: ${name}`);
+      }
+      const selected = new Set(names);
+      records = records.filter(record => selected.has(record.name));
+      requests = requests.filter(request => selected.has(request.workerName));
+    }
+    return { ok: true, action: "list", details: { workers: records.map(record => this.publicWorker(record)), requests: requests.map((r) => ({ ...r })) } };
   }
 
   private async spawn(input: Action): Promise<StringsResponse> {
@@ -225,7 +236,7 @@ export class Coordinator {
     if (worker.record.status !== "idle") throw new StringsError("WORKER_BUSY", `Worker ${worker.record.name} is ${worker.record.status}.`);
     if (worker.record.role === "writer") this.revalidateWriter(worker);
     const prompt = requiredString(input.prompt, "prompt");
-    const timeoutMs = optionalPositive(input.timeoutMs, worker.record.profile.timeoutMs);
+    const timeoutMs = optionalPositive(input.requestTimeoutMs, worker.record.profile.timeoutMs);
     const requestId = `req_${randomUUID()}`;
     const requestDir = join(this.stateDir, "requests");
     await mkdir(requestDir, { recursive: true, mode: 0o700 });
@@ -263,7 +274,7 @@ export class Coordinator {
     const completion = this.runRequest(worker, record, turn, prompt, timeoutMs);
     this.completions.set(requestId, completion);
     await this.persist();
-    return { ok: true, action: "send", details: { requestId, worker: worker.record.name, status: "running", lineageId, attempt, session: worker.record.handle.backendSessionId ?? worker.record.handle.agentSessionId } };
+    return { ok: true, action: "send", details: { requestId, worker: worker.record.name, status: "running", lineageId, attempt, session: worker.record.handle.backendSessionId ?? worker.record.handle.agentSessionId, decoratedPromptSuffix: decorated.slice(prompt.length) } };
   }
 
   private revalidateWriter(worker: LiveWorker): void {
@@ -503,7 +514,7 @@ export class Coordinator {
     const mode = input.mode === undefined ? "all" : input.mode;
     if (mode !== "any" && mode !== "all") throw new StringsError("INPUT_INVALID", "wait mode must be any or all.");
     const pending = ids.map((id) => this.completions.get(id)).filter((p): p is Promise<void> => p !== undefined);
-    const timeoutMs = optionalPositive(input.timeoutMs, 300_000);
+    const timeoutMs = optionalPositive(input.waitTimeoutMs, 300_000);
     const target = mode === "any" ? Promise.race(pending) : Promise.allSettled(pending).then(() => undefined);
     const timedOut = pending.length > 0 && !(await settlesWithin(target, timeoutMs));
     const selected = ids.map((id) => this.requests.get(id)).filter((request): request is RequestRecord => request !== undefined);

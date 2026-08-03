@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Split the single `strings` action dispatcher into seven strict-schema `op_*` tools (`op_spawn`, `op_send`, `op_wait`, `op_result`, `op_list`, `op_cancel`, `op_close`). `timeoutMs` is split into `requestTimeoutMs` (op_send, default profile `timeoutMs`) and `waitTimeoutMs` (op_wait, default 300000); op_list gains an optional `names` projection; op_send returns the appended prompt decoration as `decoratedPromptSuffix`.
+
 - Route every production worker, including Pi, through the exact-pinned `acpx/runtime` `AcpxRuntimePort`; retain only the vendored Pi adapter command override.
 - Remove obsolete steering, question, and reply product paths. Persistent-session continuation is an ordinary later `send` after terminal completion, with one active turn per worker.
 - Make state schema strict: legacy `waiting` statuses and `questions` fields now fail as `STATE_CORRUPT` instead of being converted or discarded.
