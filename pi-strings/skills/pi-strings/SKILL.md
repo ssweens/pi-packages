@@ -1,6 +1,6 @@
 ---
 name: pi-strings
-description: Coordinate persistent coding-agent workers from Pi through the pinned ACPX runtime. Use for parallel research, independent review, isolated implementation, heterogeneous-agent comparison, cancellation, and recovery.
+description: Coordinate persistent coding-agent workers from Pi through the vendored ACPX runtime. Use for parallel research, independent review, isolated implementation, heterogeneous-agent comparison, cancellation, and recovery.
 ---
 
 # Pi Strings
@@ -12,7 +12,7 @@ Before delegating, read `../../docs/AGENT_GUIDE.md`. For lifecycle, policy, or r
 ## Required operating rules
 
 1. Give each worker one decision-shaped assignment with scope, evidence, constraints, and required output.
-2. Use read-only profiles for exploration and review. Use writer profiles in the parent checkout (shared by default) or in a linked worktree (`isolation: "worktree"`).
+2. Spawn directly from an ACP agent when a reusable policy is unnecessary (`agent` defaults to `pi`); direct workers are safe read-only by default. Use optional read-only/writer profiles when their policy bundle is needed, with shared checkout by default or a linked worktree (`isolation: "worktree"`).
 3. Never run two writers in the same canonical cwd. One live writer per cwd is enforced.
 4. Use `send` for normal turns. Never submit a second prompt while a worker turn is active.
 5. Continue a persistent session only with an ordinary later `send` after terminal completion; there is no in-flight steering, question, or reply surface.
@@ -36,8 +36,9 @@ The coordinator decorates prompts with per-kind role and acceptance contracts. A
 ## Standard sequence
 
 1. `op_list` to understand existing workers.
-2. `op_spawn` named workers with explicit profiles and cwd.
-3. `op_send` lane-specific tasks and retain each request ID.
+2. `op_spawn` named workers with an optional profile or direct `agent`/role/tools and cwd.
+3. `op_status` when model discovery or a model choice is needed.
+4. `op_send` lane-specific tasks, optionally selecting a discovered model, and retain each request ID.
 4. `op_wait` for workers required for the next decision.
 5. `op_result` to retrieve retained output and terminal metadata.
 6. Synthesize in the parent; do not blindly concatenate worker answers.

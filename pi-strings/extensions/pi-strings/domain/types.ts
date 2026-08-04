@@ -63,10 +63,16 @@ export interface RuntimeHandle {
   agentSessionId?: string;
 }
 
+export interface RuntimeStatus {
+  modelDiscoverySupported: boolean;
+  currentModelId?: string;
+  availableModelIds: string[];
+}
+
 export type NormalizedEvent =
   | { type: "text"; text: string; stream: "output" | "thought" }
   | { type: "status"; text: string; usage?: TurnUsage }
-  | { type: "tool"; text: string; status?: string };
+  | { type: "tool"; text: string; toolCallId?: string; toolFingerprint?: string; status?: string };
 
 export type RuntimeTerminal =
   | { status: "completed"; stopReason?: string; usage?: TurnUsage }
@@ -84,6 +90,7 @@ export interface RuntimeTurn {
 export interface RuntimePort {
   ensureSession(input: { name: string; agent: string; cwd: string; profile: Profile; resumeSessionId?: string }): Promise<RuntimeHandle>;
   startTurn(input: { handle: RuntimeHandle; prompt: string; requestId: string; timeoutMs: number }): RuntimeTurn;
+  getStatus?(handle: RuntimeHandle): Promise<RuntimeStatus>;
   setConfigOption?(input: { handle: RuntimeHandle; key: string; value: string }): Promise<void>;
   close(handle: RuntimeHandle, reason: string, discardPersistentState: boolean): Promise<void>;
 }
@@ -106,6 +113,7 @@ export interface RequestRecord {
   predecessorRequestId?: string;
   usage?: TurnUsage;
   acceptance?: AcceptanceReport;
+  requestedModel?: string;
   attemptModels?: string[];
   attempts?: number;
 }
@@ -115,6 +123,7 @@ export interface WorkerRecord {
   profileName: string;
   profile: Profile;
   role: WorkerRole;
+  model?: string;
   status: WorkerStatus;
   cwd: string;
   worktree?: WorktreeIdentity;

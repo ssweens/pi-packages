@@ -5,7 +5,7 @@
 `pi-strings` gives a Pi parent a named-worker control plane without PTY scraping or provider-specific orchestration. The production path has exactly one runtime port:
 
 ```text
-Parent Pi -> op_* tools -> Coordinator -> AcpxRuntimePort -> exact-pinned acpx/runtime
+Parent Pi -> op_* tools -> Coordinator -> AcpxRuntimePort -> vendored ACPX runtime
                                                         ├─ vendored Pi ACP adapter
                                                         └─ configured ACP agents
 ```
@@ -14,15 +14,19 @@ The coordinator owns worker identity, request state, persistence, worktree admis
 
 ## 2. Stable tool contract
 
-The public actions are `spawn`, `send`, `wait`, `result`, `list`, `cancel`, and `close`. Responses include `ok`, `action`, and structured details; errors include a stable code, message, and retryability.
+The public actions are `spawn`, `status`, `send`, `wait`, `result`, `list`, `cancel`, and `close`. Responses include `ok`, `action`, and structured details; errors include a stable code, message, and retryability.
 
 ### `spawn`
 
-`name` and `profile` are required; `cwd` and `resumeSessionId` are optional. Names are unique and validated. Writers default to shared isolation (one live writer per canonical cwd); `isolation: "worktree"` is opt-in and requires a linked worktree distinct from the parent. A failed spawn registers no half-created worker.
+`name` is required; `profile` is optional for reusable policy bundles, and `agent` is optional (default `pi`). Without a profile, direct workers use safe read-only defaults (`read`, `grep`, `find`, `ls`); `role: "writer"` selects the explicit writer tool default, or callers may provide `tools`. `cwd`, `model`, and `resumeSessionId` are optional. Names are unique and validated. Writers default to shared isolation (one live writer per canonical cwd); `isolation: "worktree"` remains a profile policy and requires a linked worktree distinct from the parent. A failed spawn registers no half-created worker.
+
+### `status`
+
+`name` is required. The coordinator exposes ACPX `getStatus` model discovery as `currentModelId` and `availableModelIds` for a live worker. If the runtime does not advertise discovery, the operation fails explicitly with `MODEL_DISCOVERY_UNSUPPORTED` (or a discovery failure code).
 
 ### `send`
 
-`name` and `prompt` are required. It is accepted only for an idle worker and starts exactly one normal prompt turn. A later `send` after terminal completion continues the same persistent session. A second prompt is never submitted while a handle is active; there is no steering or in-flight injection operation.
+`name` and `prompt` are required. An optional `model` is checked against live discovery and selected before the turn; unavailable IDs and unsupported discovery/selection fail explicitly. The selected `requestedModel` is retained in request provenance. It is accepted only for an idle worker and starts exactly one normal prompt turn. A later `send` after terminal completion continues the same persistent session. A second prompt is never submitted while a handle is active; there is no steering or in-flight injection operation.
 
 The coordinator starts ACPX turns with timeout `0` and runs the profile deadline itself. On deadline it records `timed_out`, gates late output/results, attempts cooperative cancellation, closes the stream/runtime within bounded grace, and marks the worker failed and unusable until explicitly closed or replaced.
 
@@ -61,19 +65,21 @@ Each worker has zero or one active request. Each request has one terminal transi
 
 ## 4. Profiles and permissions
 
-A profile contains agent, role, kind (oracle/finder/worker/free), model/options, tools, deadline, cancellation grace, output bound, isolation mode, maxTurns, fallbackModels, and maxAttempts. The coordinator appends a worker contract prohibiting recursive orchestration, unsafe git operations, package installation, and shared-environment changes. Role contracts and acceptance contracts are appended based on `kind`.
+A profile contains agent, role, kind (oracle/finder/worker/free), model/options, tools, deadline, cancellation grace, output bound, isolation mode, maxTurns, fallbackModels, and maxAttempts. Profiles are optional policy bundles; direct workers resolve the same domain profile shape from `agent` (default `pi`), role, and tools. The coordinator appends a worker contract prohibiting recursive orchestration, unsafe git operations, package installation, and shared-environment changes. Role contracts and acceptance contracts are appended based on `kind`.
 
-The only production permission policy is:
+Permission enforcement is entirely native to ACPX:
 
-- read-only profile: ACPX `deny-all`
-- writer profile: ACPX `approve-reads`
-- non-interactive permission requests: ACPX `deny`
+- Every role uses ACPX `approve-reads` as its base mode.
+- Read-only workers pass ACPX's native policy with `autoApprove: ["read", "search"]` and `defaultAction: "deny"`; writers pass native `defaultAction: "approve"` so explicit writer turns do not wait for an unavailable permission UI.
+- pi-strings sets ACPX `nonInteractivePermissions: "deny"` as the fallback for unpromptable requests.
+- Pi additionally receives its validated `allowedTools` list through the vendored adapter command override.
+- pi-strings does not implement provider-specific permission callbacks or custom permission matching.
 
-Pi uses only the vendored adapter command override. Codex role routing uses ACPX `setMode` (`read-only` or `agent`). Profile tool lists and ACPX `cwd` are not claimed as universal enforcement for arbitrary provider-native tools; claims are limited to the layer that actually enforces them.
+`permissionMode` and `permissionPolicy` are ACPX choices, not a pi-strings reimplementation. Profile tool lists, ACPX `cwd`, and provider-native sandbox behavior are not claimed as universal enforcement for arbitrary provider-native tools.
 
 ### Turn budget and stall detection
 
-`maxTurns` (default: none) approximates a turn budget by counting tool-call events. A worker exceeding its budget is cancelled and terminalized as `failed` with code `TURN_BUDGET_EXCEEDED`. A worker repeating an identical tool call `STALL_THRESHOLD` (4) times is cancelled and terminalized as `failed` with code `STALLED`. Both are non-retryable policy violations.
+`maxTurns` (default: none) approximates a turn budget by counting distinct tool invocations. ACPX can emit many lifecycle and input-streaming updates for one invocation; updates sharing a `toolCallId` count once. A worker exceeding its budget is cancelled and terminalized as `failed` with code `TURN_BUDGET_EXCEEDED`. Stall detection evaluates identified calls only when their completed update arrives, fingerprinting ACPX tool identity (`title`) plus a SHA-256 digest of stable final `rawInput` when available rather than provisional display text. Raw tool inputs do not cross the normalization boundary or enter request event logs. A worker issuing an identical completed call `STALL_THRESHOLD` (4) times under distinct call IDs is cancelled and terminalized as `failed` with code `STALLED`. Both are non-retryable policy violations.
 
 ## 5. Writer isolation
 
@@ -94,23 +100,26 @@ requests/<request-id>.ndjson  normalized event log
 acpx/                         ACPX session records
 ```
 
-Directories are mode 0700 and files mode 0600. State is atomically replaced, locked, and strictly schema-validated. The current version deliberately does not accept legacy `waiting` statuses or `questions`; such state returns `STATE_CORRUPT` rather than silently discarding authority data. Requests left running after parent loss become `PARENT_PROCESS_LOST`; idle persistent sessions may reconnect with identity validation.
+Directories are mode 0700 and files mode 0600. State is atomically replaced, locked, and strictly schema-validated. Direct workers persist their validated tool list (and selected creation-time model) so restart reconstruction cannot broaden policy. The current version deliberately does not accept legacy `waiting` statuses or `questions`; such state returns `STATE_CORRUPT` rather than silently discarding authority data. Requests left running after parent loss become `PARENT_PROCESS_LOST`; idle persistent sessions may reconnect with identity validation.
 
 Shutdown rejects new work, lets an already-running action tail finish, and prevents queued mutating actions from creating untracked workers before runtime cleanup.
 
 ## 7. ACPX boundary
 
-Only `extensions/pi-strings/runtime/acpx-runtime.ts` imports `acpx/runtime`, pinned at version `0.13.0`. The port normalizes ACPX events into local types and passes `timeoutMs: 0` both at runtime construction and turn start. Any ACPX upgrade requires contract tests for session continuity, event/result ordering, cancellation, close, permissions, and state compatibility.
+`vendor/acpx/` contains the auditable ACPX `0.13.0` source snapshot at commit `e91cc504` (PR #468). `npm run build` emits the runtime and declarations under `dist/acpx-runtime`; `extensions/pi-strings/runtime/acpx-runtime.ts` imports that generated local module. The port normalizes ACPX events into local types, exposes `getStatus().models.currentModelId`/`availableModelIds`, and passes `timeoutMs: 0` both at runtime construction and turn start. Any ACPX upgrade requires contract tests for session continuity, model discovery/selection, event/result ordering, cancellation, close, permissions, and state compatibility.
 
 The vendored Pi adapter remains an ACP executable adapter, not a second runtime implementation. Embedded workers share the parent extension process lifetime; active work is not claimed durable across parent loss.
 
 ## 8. Observability and failure table
 
-`list` and `result` expose worker/request status, IDs, timestamps, bounded output, event paths, and diagnostics. Raw ACP tool payloads are not retained by the runtime facade. tmux is optional human observation only.
+`status` exposes live model discovery (`currentModelId`, `availableModelIds`); `list` and `result` expose worker/request status, IDs, timestamps, bounded output, event paths, model provenance, and diagnostics. Raw ACP tool payloads are not retained by the runtime facade. tmux is optional human observation only.
 
 | Failure | Required behavior |
 |---|---|
-| Missing agent | Spawn fails without registering a worker |
+| Missing/invalid agent | Spawn fails without registering a worker |
+| Model discovery unsupported | `op_status` or a requested model fails explicitly with `MODEL_DISCOVERY_UNSUPPORTED` |
+| Model unavailable | Spawn/send fails explicitly with `MODEL_UNAVAILABLE`; no turn starts |
+| Model selection unsupported/fails | Requested spawn/send fails explicitly with `MODEL_SELECTION_UNSUPPORTED` or `MODEL_SELECTION_FAILED` |
 | Provider error (retryable) | Request retries on fallback model if configured; otherwise `failed` with provider diagnostic |
 | Provider error (non-retryable) | Request is `failed`; no retry |
 | Stream loss before result | Request is `failed` transport; never inferred complete |

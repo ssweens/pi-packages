@@ -2,9 +2,10 @@
   "compilerOptions": {
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
+    "isolatedModules": true,
     "lib": ["ES2023", "DOM"],
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
     "noEmit": true,
     "resolveJsonModule": true,
     "skipLibCheck": true,
@@ -12,5 +13,5 @@
     "target": "ES2023",
     "types": ["node"]
   },
-  "include": ["vendor/pi-acp/src/**/*.ts"]
+  "include": ["vendor/pi-acp/src/**/*.ts", "vendor/acpx/src/runtime.ts"]
 }

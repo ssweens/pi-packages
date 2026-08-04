@@ -4,15 +4,16 @@
 
 | Area | Evidence |
 |---|---|
-| Tool/lifecycle | `tests/coordinator.test.ts` covers spawn, one active turn per worker, wait snapshots, result, list, cancel, close, worker-name reuse, timeout quarantine, close retry, and shutdown action-tail ordering. |
+| Tool/lifecycle | `tests/coordinator.test.ts` covers direct/default-agent and profile spawn, one active turn per worker, wait snapshots, result, list, cancel, close, worker-name reuse, timeout quarantine, close retry, and shutdown action-tail ordering. `tests/extension.test.ts` covers all eight strict `op_*` registrations. |
 | Terminal semantics | Coordinator tests cover completed, cancelled, timed-out, provider-failed, transport-failed, late-result gating, terminal-result closure of a non-ending event iterator, and external-terminal exit when the deadline closes the stream. |
 | Role specialization | `tests/roles.test.ts` covers role contracts, acceptance contracts, and acceptance-report parsing. Coordinator tests cover per-kind prompt decoration and acceptance-report extraction from output. |
-| Retry/fallback | Coordinator tests cover retryable failure retry on fallback model, non-retryable exclusion, whole-window deadline bounding, attempt count/model provenance, and usage merging across attempts. |
-| Stall/turn budget | Coordinator tests cover repeated-identical-tool stall cancellation and max-turn budget cancellation. |
+| Retry/fallback | Coordinator tests cover retryable failure retry on fallback model, missing-primary fallback indexing/provenance, non-retryable exclusion, whole-window deadline bounding, attempt count/model provenance, and usage merging across attempts. |
+| Model control | Coordinator tests cover `op_status`, direct send-time selection, direct spawn-time unavailable-model cleanup, configured-profile agent override, `requestedModel` request provenance, and explicit unavailable/unsupported failures. Restart coverage preserves direct tools, agent role, and creation-time model. ACPX runtime tests verify `getStatus().models.currentModelId` and `availableModelIds`. |
+| Stall/turn budget | Coordinator tests cover repeated distinct identical-call cancellation, legitimate parallel calls with distinct completed inputs, max-turn budget cancellation, and multiple streaming updates for one `toolCallId` counting once. Runtime tests verify ACPX call identity survives normalization and final inputs contribute only a one-way fingerprint, not raw logged data. |
 | Shared/worktree isolation | `tests/worktree.test.ts` covers `requireCwdUnowned` (shared default) and `requireWriterUnowned` (worktree opt-in). Coordinator tests cover shared writer in parent checkout, duplicate cwd rejection, and worktree admission. |
-| Persistence | `tests/state-store.test.ts` covers atomic private state, schema corruption, strict rejection of legacy `waiting` and `questions`, lease ownership, and usage/acceptance/attempt round-trip. |
-| Runtime contract | `tests/acpx-contract.test.ts` covers pinned ACPX session continuity/reconnect, cancellation, lack of native steering, and `normalize` usage extraction from status events. `tests/pi-acp-runtime.test.ts` covers Pi through `AcpxRuntimePort` and session continuity. |
-| Policy | `tests/extension.test.ts` covers read-only `deny-all` and writer `approve-reads`; production config uses ACPX non-interactive `deny`. |
+| Persistence | `tests/state-store.test.ts` covers atomic private state, schema corruption, strict rejection of legacy `waiting` and `questions`, lease ownership, and usage/acceptance/model-provenance/attempt round-trip. |
+| Runtime contract | `tests/acpx-contract.test.ts` covers the vendored ACPX PR #468 session continuity/reconnect, cancellation, native permission-policy settlement, lack of native steering, and `normalize` usage extraction from status events. `tests/pi-acp-runtime.test.ts` covers Pi through `AcpxRuntimePort` and session continuity. |
+| Policy | `tests/extension.test.ts` covers native ACPX `approve-reads` routing for read-only and writer roles; `tests/acpx-contract.test.ts` proves native read approval and mutation denial settle without prompting. pi-strings passes ACPX-native options and adds no provider-specific permission callbacks or matching. |
 | Integration | `tests/integration/*.test.ts` remains prerequisite-gated for configured Pi/Codex/OpenCode executables and models. Skips are reported explicitly. |
 
 ## Assertion-level acceptance ledger
@@ -37,7 +38,7 @@ This ledger describes the current implementation, not the retired interaction de
 | 14 | Capability-negotiated steering delivery. | Not applicable | Retired surface; no production steering port |
 | 15 | Steering terminal race. | Not applicable | Retired surface; no production steering port |
 | 16 | Process framing, stale lease, and restart classification. | Proven | Existing adapter/process tests; hosted execution is opt-in |
-| 17 | Role permission routing is exact: read-only `deny-all`, writer `approve-reads`, non-interactive `deny`. | Proven | Extension and ACPX contract tests; provider-native boundaries are not generalized |
+| 17 | Role permission routing is native ACPX: both use `approve-reads`; read-only workers auto-approve reads/searches and default-deny other permission requests, while writers default-approve explicit mutations. | Proven | Extension routing and ACPX contract tests; ACPX owns matching and precedence |
 | 18 | Resume rejects agent, role, profile, or cwd mismatch and accepts matching provenance. | Proven | Coordinator resume tests |
 | 19 | Child question/reply interaction. | Not applicable | Questions/replies are removed from the product and state schema |
 | 20 | Pending-question expiry after parent loss. | Not applicable | Legacy question state is rejected as `STATE_CORRUPT` |

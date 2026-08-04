@@ -18,6 +18,8 @@ export interface StoredWorker {
   name: string;
   profileName: string;
   role: WorkerRole;
+  model?: string;
+  tools?: string[];
   status: WorkerStatus;
   cwd: string;
   worktree?: WorktreeIdentity;
@@ -40,7 +42,7 @@ const HandleSchema = z.object({
 }).strict();
 const WorktreeSchema = z.object({ worktreeRoot: z.string().min(1), gitDir: z.string().min(1), commonDir: z.string().min(1) }).strict();
 const WorkerSchema = z.object({
-  name: z.string().regex(/^[a-z][a-z0-9-]{0,47}$/), profileName: z.string().min(1), role: z.enum(["read-only", "writer"]),
+  name: z.string().regex(/^[a-z][a-z0-9-]{0,47}$/), profileName: z.string().min(1), role: z.enum(["read-only", "writer"]), model: z.string().min(1).optional(), tools: z.array(z.string().min(1)).min(1).optional(),
   status: z.enum(["spawning", "idle", "running", "failed", "closing", "closed"]), cwd: z.string().min(1), worktree: WorktreeSchema.optional(),
   handle: HandleSchema, activeRequestId: z.string().optional(), createdAt: z.iso.datetime(), updatedAt: z.iso.datetime(),
 }).strict();
@@ -56,7 +58,7 @@ const RequestSchema = z.object({
   id: z.string().min(1), workerName: z.string().min(1), status: z.enum(["running", "completed", "cancelled", "timed_out", "failed"]),
   startedAt: z.iso.datetime(), finishedAt: z.iso.datetime().optional(), output: z.string(), truncated: z.boolean(), eventPath: z.string().optional(),
   failure: FailureSchema.optional(), stopReason: z.string().optional(), cancellationRequestedAt: z.iso.datetime().optional(), lineageId: z.string().optional(), attempt: z.number().int().positive().optional(), supersededBy: z.string().optional(), predecessorRequestId: z.string().optional(),
-  usage: UsageSchema.optional(), acceptance: AcceptanceSchema.optional(), attemptModels: z.array(z.string()).optional(), attempts: z.number().int().positive().optional(),
+  usage: UsageSchema.optional(), acceptance: AcceptanceSchema.optional(), requestedModel: z.string().min(1).optional(), attemptModels: z.array(z.string()).optional(), attempts: z.number().int().positive().optional(),
 }).strict();
 const SessionSchema = z.object({ sessionId: z.string().min(1), agent: z.string().min(1), profileName: z.string().min(1), role: z.enum(["read-only", "writer"]), cwd: z.string().min(1) }).strict();
 const StateSchema = z.object({ version: z.literal(1), workers: z.array(WorkerSchema), requests: z.array(RequestSchema), sessions: z.array(SessionSchema).optional() }).strict();

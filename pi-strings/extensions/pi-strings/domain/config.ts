@@ -36,9 +36,6 @@ function parseProfile(name: string, raw: unknown): Profile {
   if (role === "read-only" && tools.some((tool) => !READ_ONLY_TOOLS.has(tool))) {
     throw new StringsError("POLICY_UNENFORCEABLE", `Read-only profile ${name} contains mutation-capable tool(s).`);
   }
-  if (agent !== "pi" && role === "read-only") {
-    throw new StringsError("POLICY_UNENFORCEABLE", `Read-only policy for adapter ${agent} is not yet verified.`);
-  }
   const kind = value.kind;
   if (kind !== undefined && !KINDS.has(kind as string)) throw new StringsError("PROFILE_INVALID", `Profile ${name} kind must be one of oracle, finder, worker, free.`);
   const isolation = value.isolation;

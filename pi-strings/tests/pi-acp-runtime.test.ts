@@ -3,7 +3,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { AcpxRuntimePort } from "../extensions/pi-strings/runtime/acpx-runtime.ts";
+import { AcpxRuntimePort, normalize } from "../extensions/pi-strings/runtime/acpx-runtime.ts";
 import type { Profile } from "../extensions/pi-strings/domain/types.ts";
 
 const fakePi = new URL("./fixtures/fake-pi.mjs", import.meta.url).pathname;
@@ -12,6 +12,16 @@ const profile: Profile = { agent: "pi", role: "read-only", tools: ["read"], time
 function restore(name: string, value: string | undefined): void {
   if (value === undefined) delete process.env[name]; else process.env[name] = value;
 }
+
+test("tool normalization preserves identity and derives a fingerprint without exposing raw input", () => {
+  const normalized = normalize({ type: "tool_call", text: "read (pending)", toolCallId: "call-1", title: "read", rawInput: { path: "file.ts" }, status: "pending" });
+  assert.equal(normalized?.type, "tool");
+  if (normalized?.type === "tool") {
+    assert.equal(normalized.toolCallId, "call-1");
+    assert.match(normalized.toolFingerprint ?? "", /^read\u0000[0-9a-f]{64}$/);
+  }
+  assert.doesNotMatch(JSON.stringify(normalized), /rawInput|file\.ts/);
+});
 
 async function collect(turn: ReturnType<AcpxRuntimePort["startTurn"]>): Promise<{ status: string; output: string }> {
   let output = "";
@@ -36,6 +46,9 @@ test("Pi uses ACPX session continuity across a fresh runtime", async () => {
   let secondHandle: Awaited<ReturnType<AcpxRuntimePort["ensureSession"]>> | undefined;
   try {
     firstHandle = await first.ensureSession({ name: "resume", agent: "pi", cwd, profile });
+    const modelStatus = await first.getStatus(firstHandle);
+    assert.equal(modelStatus.modelDiscoverySupported, true);
+    assert.ok(modelStatus.availableModelIds.includes("fixture/model"));
     assert.equal((await collect(first.startTurn({ handle: firstHandle, prompt: "SET:nonce-42", requestId: "set", timeoutMs: 2_000 }))).status, "completed");
     await first.close(firstHandle, "reconnect", false);
     assert.ok(firstHandle.backendSessionId);

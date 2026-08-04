@@ -1,0 +1,12 @@
+import { type SessionModelState } from "../acp/model-support.js";
+import type { SessionAcpxState, SessionRecord } from "../types.js";
+export declare function normalizeModeId(modeId: string | undefined): string | undefined;
+export declare function getDesiredModeId(state: SessionAcpxState | undefined): string | undefined;
+export declare function getDesiredConfigOptions(state: SessionAcpxState | undefined): Record<string, string>;
+export declare function setDesiredModeId(record: SessionRecord, modeId: string | undefined): void;
+export declare function setDesiredConfigOption(record: SessionRecord, configId: string, value: string | undefined): void;
+export declare function clearDesiredConfigOption(state: SessionAcpxState, configId: string | undefined): void;
+export declare function getDesiredModelId(state: SessionAcpxState | undefined): string | undefined;
+export declare function setDesiredModelId(record: SessionRecord, modelId: string | undefined, modelConfigId?: string): void;
+export declare function setCurrentModelId(record: SessionRecord, modelId: string | undefined): void;
+export declare function syncAdvertisedModelState(record: SessionRecord, models: SessionModelState | undefined): void;

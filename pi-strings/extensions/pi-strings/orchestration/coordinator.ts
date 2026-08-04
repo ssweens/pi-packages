@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { appendFile, chmod, mkdir, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { Profile, RequestRecord, RuntimePort, RuntimeTerminal, RuntimeTurn, StringsResponse, TurnUsage, UsageBreakdown, UsageCost, WorkerKind, WorkerRecord, WorktreeIdentity } from "../domain/types.js";
+import type { Profile, RequestRecord, RuntimeHandle, RuntimePort, RuntimeStatus, RuntimeTerminal, RuntimeTurn, StringsResponse, TurnUsage, UsageBreakdown, UsageCost, WorkerKind, WorkerRecord, WorktreeIdentity } from "../domain/types.js";
 import { failure, StringsError } from "../domain/errors.js";
 import { loadProfiles } from "../domain/config.js";
 import { requireCwdUnowned, requireIsolatedWriter, requireWriterUnowned } from "../domain/worktree.js";
@@ -76,6 +76,7 @@ export class Coordinator {
       await this.initialize();
       switch (input.action) {
         case "list": return this.list(input);
+        case "status": return await this.status(input);
         case "spawn": return await this.spawn(input);
         case "send": return await this.send(input);
         case "wait": return await this.wait(input);
@@ -125,7 +126,10 @@ export class Coordinator {
     }
     for (const stored of state.workers) {
       const configuredProfile = profiles[stored.profileName];
-      const profile = configuredProfile ?? { agent: stored.handle.agent ?? "unavailable", role: stored.role, tools: [], timeoutMs: 900_000, cancellationGraceMs: 5_000, maxOutputBytes: 256_000 };
+      const direct = stored.profileName.startsWith("direct:") && stored.handle.agent ? directProfile(stored.handle.agent, stored.role, stored.tools) : undefined;
+      const baseProfile = configuredProfile ?? direct ?? { agent: stored.handle.agent ?? "unavailable", role: stored.role, tools: [], timeoutMs: 900_000, cancellationGraceMs: 5_000, maxOutputBytes: 256_000 };
+      const restoredProfile: Profile = stored.handle.agent && stored.handle.agent !== baseProfile.agent ? { ...baseProfile, agent: stored.handle.agent } : baseProfile;
+      const profile: Profile = stored.model ? { ...restoredProfile, model: stored.model } : restoredProfile;
       const wasActive = stored.status === "running" || stored.status === "spawning" || stored.status === "closing" || stored.activeRequestId !== undefined;
       const status = wasActive ? "failed" : stored.status;
       const record: WorkerRecord = { ...stored, profile, role: profile.role, status };
@@ -135,7 +139,7 @@ export class Coordinator {
         else requireCwdUnowned([...this.workers.values()].map(worker => worker.record), record.cwd);
       }
       const runtime = this.runtimeFactory(record.cwd, this.stateDir, profile);
-      if (!configuredProfile) {
+      if (!configuredProfile && !direct) {
         record.status = "failed";
       } else if (!wasActive && (record.status === "idle" || record.status === "failed")) {
         const resumeSessionId = record.handle.backendSessionId ?? record.handle.agentSessionId;
@@ -162,7 +166,7 @@ export class Coordinator {
     if (!this.persistenceEnabled) return Promise.resolve();
     const workers: StoredWorker[] = [...this.workers.values()].map(({ record }) => {
       const { profile: _profile, ...stored } = record;
-      return stored;
+      return record.profileName.startsWith("direct:") ? { ...stored, tools: [...record.profile.tools] } : stored;
     });
     return this.stateStore.save(workers, [...this.requests.values()], [...this.sessions.values()]);
   }
@@ -204,11 +208,26 @@ export class Coordinator {
 
   private async spawn(input: Action): Promise<StringsResponse> {
     const name = requiredString(input.name, "name");
-    const profileName = requiredString(input.profile, "profile");
+    const profileNameInput = optionalString(input.profile);
+    const agentInput = optionalString(input.agent);
     if (!NAME.test(name)) throw new StringsError("WORKER_NAME_INVALID", `Invalid worker name: ${name}`);
     if (this.workers.has(name)) throw new StringsError("WORKER_EXISTS", `Worker ${name} already exists.`);
-    const profile = (await this.getProfiles())[profileName];
-    if (!profile) throw new StringsError("PROFILE_NOT_FOUND", `Unknown profile: ${profileName}`);
+    const profiles = await this.getProfiles();
+    let profileName: string;
+    let configuredProfile: Profile | undefined;
+    if (profileNameInput) {
+      configuredProfile = profiles[profileNameInput];
+      if (!configuredProfile) throw new StringsError("PROFILE_NOT_FOUND", `Unknown profile: ${profileNameInput}`);
+      if (agentInput) configuredProfile = { ...configuredProfile, agent: agentInput };
+      profileName = profileNameInput;
+    } else {
+      const agent = agentInput ?? "pi";
+      profileName = `direct:${agent}`;
+      configuredProfile = directProfile(agent, input.role, input.tools);
+    }
+    if (!configuredProfile) throw new StringsError("PROFILE_INVALID", `Worker ${name} has no resolved profile.`);
+    const requestedModel = optionalModel(input.model);
+    const profile: Profile = requestedModel === undefined ? configuredProfile : { ...configuredProfile, model: requestedModel };
     const cwd = await realpath(typeof input.cwd === "string" ? input.cwd : this.parentCwd);
     const worktree = await this.admitWriter(profile, cwd);
     await mkdir(this.stateDir, { recursive: true, mode: 0o700 });
@@ -221,9 +240,20 @@ export class Coordinator {
       if (owner) throw new StringsError("SESSION_IN_USE", `Session ${resumeSessionId} is already owned by worker ${owner.record.name}.`);
       if (!resumeIdentityMatches(provenance, profile, cwd, profileName)) throw new StringsError("RESUME_IDENTITY_MISMATCH", "Resume requires the original agent, role, profile, and cwd.");
     }
-    const handle = await runtime.ensureSession({ name, agent: profile.agent, cwd, profile, ...(resumeSessionId ? { resumeSessionId } : {}) });
+    let handle: RuntimeHandle | undefined;
+    try {
+      handle = await runtime.ensureSession({ name, agent: profile.agent, cwd, profile, ...(resumeSessionId ? { resumeSessionId } : {}) });
+      if (profile.model) await this.requireSelectedModel(runtime, handle, profile.model);
+    } catch (error) {
+      if (handle) await runtime.close(handle, "model selection failed", true).catch(() => undefined);
+      if (profile.model && isRequestedModelUnsupported(error)) {
+        throw new StringsError("MODEL_UNAVAILABLE", `Requested model ${profile.model} is not available for this worker.`);
+      }
+      throw error;
+    }
+    if (!handle) throw new StringsError("SESSION_INIT_FAILED", `Worker ${name} did not return a runtime session handle.`);
     const now = new Date().toISOString();
-    const record: WorkerRecord = { name, profileName, profile, role: profile.role, status: "idle", cwd, ...(worktree ? { worktree } : {}), handle: { ...handle, agent: profile.agent, profileName, role: profile.role, cwd }, createdAt: now, updatedAt: now };
+    const record: WorkerRecord = { name, profileName, profile, role: profile.role, ...(profile.model ? { model: profile.model } : {}), status: "idle", cwd, ...(worktree ? { worktree } : {}), handle: { ...handle, agent: profile.agent, profileName, role: profile.role, cwd }, createdAt: now, updatedAt: now };
     const sessionId = record.handle.backendSessionId ?? record.handle.agentSessionId;
     if (sessionId) this.sessions.set(sessionId, { sessionId, agent: profile.agent, profileName, role: profile.role, cwd });
     this.workers.set(name, { record, runtime });
@@ -236,6 +266,8 @@ export class Coordinator {
     if (worker.record.status !== "idle") throw new StringsError("WORKER_BUSY", `Worker ${worker.record.name} is ${worker.record.status}.`);
     if (worker.record.role === "writer") this.revalidateWriter(worker);
     const prompt = requiredString(input.prompt, "prompt");
+    const requestedModel = input.model === undefined ? worker.record.profile.model : optionalModel(input.model);
+    if (requestedModel) await this.requireSelectedModel(worker.runtime, worker.record.handle, requestedModel);
     const timeoutMs = optionalPositive(input.requestTimeoutMs, worker.record.profile.timeoutMs);
     const requestId = `req_${randomUUID()}`;
     const requestDir = join(this.stateDir, "requests");
@@ -250,7 +282,7 @@ export class Coordinator {
     if (predecessor && this.workers.has(predecessor.workerName)) throw new StringsError("REASSIGNMENT_INVALID", "Close the predecessor worker before reassigning its work.");
     const lineageId = predecessor?.lineageId ?? `lineage_${randomUUID()}`;
     const attempt = [...this.requests.values()].filter(candidate => candidate.lineageId === lineageId).reduce((highest, candidate) => Math.max(highest, candidate.attempt ?? 0), 0) + 1;
-    const record: RequestRecord = { id: requestId, workerName: worker.record.name, status: "running", startedAt: new Date().toISOString(), output: "", truncated: false, eventPath, lineageId, attempt, ...(predecessorRequestId ? { predecessorRequestId } : {}) };
+    const record: RequestRecord = { id: requestId, workerName: worker.record.name, status: "running", startedAt: new Date().toISOString(), output: "", truncated: false, eventPath, lineageId, attempt, ...(requestedModel ? { requestedModel } : {}), ...(predecessorRequestId ? { predecessorRequestId } : {}) };
     if (predecessor) predecessor.supersededBy = requestId;
     this.requests.set(requestId, record);
     worker.record.status = "running";
@@ -271,10 +303,10 @@ export class Coordinator {
     }
     worker.turn = turn;
     void turn.result.then(() => this.terminalSignals.add(requestId), () => this.terminalSignals.add(requestId));
-    const completion = this.runRequest(worker, record, turn, prompt, timeoutMs);
+    const completion = this.runRequest(worker, record, turn, prompt, timeoutMs, requestedModel);
     this.completions.set(requestId, completion);
     await this.persist();
-    return { ok: true, action: "send", details: { requestId, worker: worker.record.name, status: "running", lineageId, attempt, session: worker.record.handle.backendSessionId ?? worker.record.handle.agentSessionId, decoratedPromptSuffix: decorated.slice(prompt.length) } };
+    return { ok: true, action: "send", details: { requestId, worker: worker.record.name, status: "running", lineageId, attempt, ...(requestedModel ? { requestedModel } : {}), session: worker.record.handle.backendSessionId ?? worker.record.handle.agentSessionId, decoratedPromptSuffix: decorated.slice(prompt.length) } };
   }
 
   private revalidateWriter(worker: LiveWorker): void {
@@ -289,11 +321,10 @@ export class Coordinator {
     }
   }
 
-  private async runRequest(worker: LiveWorker, request: RequestRecord, firstTurn: RuntimeTurn, prompt: string, timeoutMs: number): Promise<void> {
+  private async runRequest(worker: LiveWorker, request: RequestRecord, firstTurn: RuntimeTurn, prompt: string, timeoutMs: number, requestedModel?: string): Promise<void> {
     const profile = worker.record.profile;
     const maxAttempts = profile.maxAttempts ?? 1;
     const fallback = profile.fallbackModels ?? [];
-    const models = [profile.model, ...fallback].filter((m): m is string => typeof m === "string");
     const retryEnabled = maxAttempts > 1 || fallback.length > 0;
     const deadline = Date.now() + timeoutMs;
     const onDeadline = async (): Promise<void> => {
@@ -335,11 +366,23 @@ export class Coordinator {
           break;
         }
         attempts = attempt;
-        const model = models[attempt - 1] ?? models[0];
+        // Attempt one uses the already selected primary/profile model, if any.
+        // Fallback index zero belongs to retry attempt two, never attempt one.
+        const model = attempt === 1 ? requestedModel : fallback[attempt - 2];
         if (model) request.attemptModels.push(model);
-        if (attempt > 1 && model && worker.runtime.setConfigOption) {
-          try { await worker.runtime.setConfigOption({ handle: worker.record.handle, key: "model", value: model }); }
-          catch { /* proceed with the currently configured model */ }
+        if (attempt > 1 && !model) break;
+        if (attempt > 1 && model) {
+          try {
+            await this.requireSelectedModel(worker.runtime, worker.record.handle, model);
+          } catch (error) {
+            if (request.status === "running") {
+              request.status = "failed";
+              request.finishedAt = new Date().toISOString();
+              request.failure = { code: error instanceof StringsError ? error.code : "MODEL_SELECTION_FAILED", message: error instanceof Error ? error.message : String(error), retryable: false };
+              worker.record.status = "failed";
+            }
+            break;
+          }
         }
         worker.turn = turn;
         const coordinatorTerminal = await this.drainAttempt(worker, request, turn);
@@ -387,8 +430,11 @@ export class Coordinator {
     const profile = worker.record.profile;
     const maxTurns = profile.maxTurns;
     let toolCount = 0;
-    let lastToolText = "";
+    let lastToolFingerprint = "";
     let stallCount = 0;
+    const seenToolCallIds = new Set<string>();
+    const completedToolCallIds = new Set<string>();
+    const toolCallFingerprints = new Map<string, string>();
     let coordinatorTerminal: CoordinatorTerminal | undefined;
     try {
       let streamFailure: unknown;
@@ -397,17 +443,30 @@ export class Coordinator {
         try {
           for await (const event of turn.events) {
             if (event.type === "tool") {
-              toolCount += 1;
-              if (event.text === lastToolText) stallCount += 1; else { stallCount = 1; lastToolText = event.text; }
-              if (stallCount >= STALL_THRESHOLD) {
-                coordinatorTerminal = { status: "failed", code: "STALLED", message: `Worker repeated an identical tool call ${STALL_THRESHOLD} times.` };
-                void turn.cancel("stall detected");
-                break;
+              const isNewCall = !event.toolCallId || !seenToolCallIds.has(event.toolCallId);
+              if (event.toolCallId) {
+                seenToolCallIds.add(event.toolCallId);
+                if (event.toolFingerprint) toolCallFingerprints.set(event.toolCallId, event.toolFingerprint);
               }
-              if (maxTurns !== undefined && toolCount >= maxTurns) {
-                coordinatorTerminal = { status: "failed", code: "TURN_BUDGET_EXCEEDED", message: `Worker exceeded its turn budget of ${maxTurns} tool calls.` };
-                void turn.cancel("turn budget exceeded");
-                break;
+              if (isNewCall) {
+                toolCount += 1;
+                if (maxTurns !== undefined && toolCount >= maxTurns) {
+                  coordinatorTerminal = { status: "failed", code: "TURN_BUDGET_EXCEEDED", message: `Worker exceeded its turn budget of ${maxTurns} tool calls.` };
+                  void turn.cancel("turn budget exceeded");
+                  break;
+                }
+              }
+              const completed = isCompletedToolEvent(event.status);
+              const alreadyCompleted = event.toolCallId !== undefined && completedToolCallIds.has(event.toolCallId);
+              if (completed && !alreadyCompleted) {
+                if (event.toolCallId) completedToolCallIds.add(event.toolCallId);
+                const fingerprint = event.toolFingerprint ?? (event.toolCallId ? toolCallFingerprints.get(event.toolCallId) : undefined) ?? event.text;
+                if (fingerprint === lastToolFingerprint) stallCount += 1; else { stallCount = 1; lastToolFingerprint = fingerprint; }
+                if (stallCount >= STALL_THRESHOLD) {
+                  coordinatorTerminal = { status: "failed", code: "STALLED", message: `Worker repeated an identical tool call ${STALL_THRESHOLD} times.` };
+                  void turn.cancel("stall detected");
+                  break;
+                }
               }
             }
             appendTail = appendTail.then(() => this.append(request, event.type === "text" ? event.text : `\n[${event.type}] ${event.text}\n`, profile.maxOutputBytes, event));
@@ -507,6 +566,49 @@ export class Coordinator {
     const retained = safeUtf8Prefix(chunk, remaining);
     request.output += retained.toString("utf8");
     if (chunk.length > retained.length) request.truncated = true;
+  }
+
+  private async status(input: Action): Promise<StringsResponse> {
+    const worker = this.getWorker(requiredString(input.name, "name"));
+    const status = await this.readModelStatus(worker.runtime, worker.record.handle);
+    return {
+      ok: true,
+      action: "status",
+      details: {
+        worker: worker.record.name,
+        currentModelId: status.currentModelId,
+        availableModelIds: [...status.availableModelIds],
+      },
+    };
+  }
+
+  private async readModelStatus(runtime: RuntimePort, handle: RuntimeHandle): Promise<RuntimeStatus> {
+    if (!runtime.getStatus) throw new StringsError("MODEL_DISCOVERY_UNSUPPORTED", "The worker runtime does not support model discovery.");
+    try {
+      const status = await runtime.getStatus(handle);
+      if (!status.modelDiscoverySupported) throw new StringsError("MODEL_DISCOVERY_UNSUPPORTED", "The worker runtime did not advertise model discovery.");
+      return status;
+    } catch (error) {
+      if (error instanceof StringsError) throw error;
+      throw new StringsError("MODEL_DISCOVERY_FAILED", `Model discovery failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async requireSelectedModel(runtime: RuntimePort, handle: RuntimeHandle, model: string): Promise<void> {
+    let status = await this.readModelStatus(runtime, handle);
+    if (!status.availableModelIds.includes(model)) {
+      throw new StringsError("MODEL_UNAVAILABLE", `Requested model ${model} is not available for this worker. Available models: ${status.availableModelIds.join(", ") || "none advertised"}.`);
+    }
+    if (status.currentModelId === model) return;
+    if (!runtime.setConfigOption) throw new StringsError("MODEL_SELECTION_UNSUPPORTED", "The worker runtime does not support model selection.");
+    try {
+      await runtime.setConfigOption({ handle, key: "model", value: model });
+      status = await this.readModelStatus(runtime, handle);
+    } catch (error) {
+      if (error instanceof StringsError) throw error;
+      throw new StringsError("MODEL_SELECTION_FAILED", `Model selection failed for ${model}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (status.currentModelId !== model) throw new StringsError("MODEL_SELECTION_FAILED", `The worker runtime did not select requested model ${model}.`);
   }
 
   private async wait(input: Action): Promise<StringsResponse> {
@@ -625,7 +727,31 @@ export class Coordinator {
   }
 
   private getWorker(name: string): LiveWorker { const worker = this.workers.get(name); if (!worker) throw new StringsError("WORKER_NOT_FOUND", `Unknown worker: ${name}`); return worker; }
-  private publicWorker(record: WorkerRecord): Record<string, unknown> { return { name: record.name, profile: record.profileName, agent: record.profile.agent, role: record.role, status: record.status, cwd: record.cwd, activeRequestId: record.activeRequestId, session: record.handle.backendSessionId ?? record.handle.agentSessionId }; }
+  private publicWorker(record: WorkerRecord): Record<string, unknown> { return { name: record.name, profile: record.profileName, agent: record.profile.agent, role: record.role, ...(record.model ? { model: record.model } : {}), status: record.status, cwd: record.cwd, activeRequestId: record.activeRequestId, session: record.handle.backendSessionId ?? record.handle.agentSessionId }; }
+}
+
+const DIRECT_READ_TOOLS = ["read", "grep", "find", "ls"];
+const DIRECT_WRITE_TOOLS = [...DIRECT_READ_TOOLS, "bash", "edit", "write"];
+function directProfile(agent: string, rawRole: unknown, rawTools: unknown): Profile {
+  const role = rawRole === undefined ? "read-only" : rawRole;
+  if (role !== "read-only" && role !== "writer") throw new StringsError("INPUT_INVALID", "role must be read-only or writer.");
+  const tools = rawTools === undefined ? (role === "writer" ? DIRECT_WRITE_TOOLS : DIRECT_READ_TOOLS) : rawTools;
+  if (!Array.isArray(tools) || tools.length === 0 || !tools.every((tool): tool is string => typeof tool === "string" && tool.trim() !== "")) {
+    throw new StringsError("INPUT_INVALID", "tools must be a non-empty string array when provided.");
+  }
+  if (role === "read-only" && tools.some(tool => !DIRECT_READ_TOOLS.includes(tool))) {
+    throw new StringsError("POLICY_UNENFORCEABLE", "Read-only workers may only use read, grep, find, and ls.");
+  }
+  return { agent, role, tools: [...tools], timeoutMs: 900_000, cancellationGraceMs: 5_000, maxOutputBytes: 256_000 };
+}
+function optionalString(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || value.trim() === "") throw new StringsError("INPUT_INVALID", "String values must be non-empty when provided.");
+  return value.trim();
+}
+
+function isCompletedToolEvent(status: string | undefined): boolean {
+  return status === undefined || status === "completed" || status === "done";
 }
 
 function safeUtf8Prefix(chunk: Buffer, maxBytes: number): Buffer {
@@ -640,6 +766,16 @@ function safeUtf8Prefix(chunk: Buffer, maxBytes: number): Buffer {
 function isTerminal(status: RequestRecord["status"]): boolean { return status === "completed" || status === "cancelled" || status === "timed_out" || status === "failed"; }
 function requiredString(value: unknown, name: string): string { if (typeof value !== "string" || value.trim() === "") throw new StringsError("INPUT_INVALID", `${name} is required.`); return value.trim(); }
 function optionalPositive(value: unknown, fallback: number): number { if (value === undefined) return fallback; if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) throw new StringsError("INPUT_INVALID", "timeoutMs must be positive."); return value; }
+function isRequestedModelUnsupported(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const code = (error as { code?: unknown }).code;
+  return code === "ACP_MODEL_UNSUPPORTED" || code === "MODEL_UNAVAILABLE";
+}
+function optionalModel(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || value.trim() === "") throw new StringsError("INPUT_INVALID", "model must be a non-empty string when provided.");
+  return value.trim();
+}
 
 const USAGE_TOKEN_KEYS = ["inputTokens", "outputTokens", "cachedReadTokens", "cachedWriteTokens", "thoughtTokens", "totalTokens"] as const;
 function mergeUsage(prev: TurnUsage | undefined, next: TurnUsage | undefined): TurnUsage | undefined {

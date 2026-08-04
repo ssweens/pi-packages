@@ -1,7 +1,8 @@
+import { createHash } from "node:crypto";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { AcpxRuntime, createAgentRegistry, createFileSessionStore, type AcpRuntimeEvent, type AcpRuntimeHandle } from "acpx/runtime";
-import type { NormalizedEvent, Profile, RuntimeHandle, RuntimePort, RuntimeTerminal, RuntimeTurn, TurnUsage } from "../domain/types.js";
+import { AcpxRuntime, createAgentRegistry, createFileSessionStore, type AcpRuntimeEvent, type AcpRuntimeHandle } from "../../../dist/acpx-runtime/runtime.js";
+import type { NormalizedEvent, Profile, RuntimeHandle, RuntimePort, RuntimeStatus, RuntimeTerminal, RuntimeTurn, TurnUsage } from "../domain/types.js";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const adapterEntry = resolve(packageRoot, "dist/pi-acp.js");
@@ -12,11 +13,29 @@ export function normalize(event: AcpRuntimeEvent): NormalizedEvent | null {
     const usage: TurnUsage | undefined = (event.breakdown || event.cost) ? { ...(event.breakdown ? { breakdown: event.breakdown } : {}), ...(event.cost ? { cost: event.cost } : {}) } : undefined;
     return { type: "status", text: event.text, ...(usage ? { usage } : {}) };
   }
-  if (event.type === "tool_call") return { type: "tool", text: event.text, ...(event.status ? { status: event.status } : {}) };
+  if (event.type === "tool_call") return {
+    type: "tool",
+    text: event.text,
+    ...(event.toolCallId ? { toolCallId: event.toolCallId } : {}),
+    ...(event.title && event.rawInput !== undefined ? { toolFingerprint: `${event.title}\u0000${createHash("sha256").update(stableSerialize(event.rawInput)).digest("hex")}` } : {}),
+    ...(event.status ? { status: event.status } : {}),
+  };
   return null;
 }
 
-export function permissionModeFor(profile: Profile): "approve-reads" | "deny-all" { return profile.role === "writer" ? "approve-reads" : "deny-all"; }
+function stableSerialize(value: unknown): string {
+  if (value === null) return "null";
+  if (typeof value === "string") return JSON.stringify(value);
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (typeof value === "undefined") return "undefined";
+  if (Array.isArray(value)) return `[${value.map(stableSerialize).join(",")}]`;
+  if (typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${stableSerialize(item)}`).join(",")}}`;
+  }
+  return String(value);
+}
+
+export function permissionModeFor(_profile: Profile): "approve-reads" { return "approve-reads"; }
 
 function toHandle(handle: AcpRuntimeHandle): RuntimeHandle { return { ...handle }; }
 function fromHandle(handle: RuntimeHandle): AcpRuntimeHandle { return { ...handle }; }
@@ -27,15 +46,25 @@ export class AcpxRuntimePort implements RuntimePort {
   constructor(cwd: string, stateDir: string, profile: Profile) {
     const piAdapterArgv = [process.execPath, adapterEntry, "--pi-strings-worker", "--pi-tools-json", JSON.stringify(profile.tools)];
     if (profile.thinking) piAdapterArgv.push("--pi-thinking", profile.thinking);
-    this.runtime = new AcpxRuntime({
+    const runtimeOptions = {
       cwd,
       sessionStore: createFileSessionStore({ stateDir: resolve(stateDir, "acpx") }),
       agentRegistry: createAgentRegistry({ overrides: { pi: piAdapterArgv } }),
       permissionMode: permissionModeFor(profile),
-      nonInteractivePermissions: "deny",
+      nonInteractivePermissions: "deny" as const,
+      // ACPX's default approve-reads mode prompts for mutations when its host
+      // process has a TTY. Pi-strings has no permission UI, so use ACPX's
+      // native policy to settle those requests instead of leaving the turn
+      // waiting on readline. Writers remain usable without an interactive
+      // operator; read-only workers auto-approve reads/searches and deny the
+      // rest. No provider-specific callback or matcher is involved.
+      permissionPolicy: profile.role === "writer"
+        ? { defaultAction: "approve" as const }
+        : { autoApprove: ["read", "search"], defaultAction: "deny" as const },
       // Coordinator deadlines are authoritative; ACPX must not terminate turns independently.
       timeoutMs: 0,
-    });
+    };
+    this.runtime = new AcpxRuntime(runtimeOptions);
   }
 
   async ensureSession(input: { name: string; agent: string; cwd: string; profile: Profile; resumeSessionId?: string }): Promise<RuntimeHandle> {
@@ -52,6 +81,16 @@ export class AcpxRuntimePort implements RuntimePort {
     });
     if (input.agent === "codex") await this.runtime.setMode?.({ handle, mode: input.profile.role === "writer" ? "agent" : "read-only" });
     return { ...toHandle(handle), agent: input.agent, role: input.profile.role, cwd: input.cwd };
+  }
+
+  async getStatus(handle: RuntimeHandle): Promise<RuntimeStatus> {
+    const status = await this.runtime.getStatus({ handle: fromHandle(handle) });
+    if (!status.models) return { modelDiscoverySupported: false, availableModelIds: [] };
+    return {
+      modelDiscoverySupported: true,
+      ...(status.models.currentModelId ? { currentModelId: status.models.currentModelId } : {}),
+      availableModelIds: [...status.models.availableModelIds],
+    };
   }
 
   startTurn(input: { handle: RuntimeHandle; prompt: string; requestId: string; timeoutMs: number }): RuntimeTurn {

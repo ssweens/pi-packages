@@ -80,7 +80,7 @@ test("shutdown after failed initialization preserves corrupt state", async () =>
   assert.equal(await readFile(path, "utf8"), "{broken");
 });
 
-test("request usage, acceptance, attemptModels, and attempts round-trip through state", async () => {
+test("request usage, acceptance, model provenance, and attempts round-trip through state", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-strings-state-"));
   const store = new StateStore(root);
   await store.acquire();
@@ -91,7 +91,7 @@ test("request usage, acceptance, attemptModels, and attempts round-trip through 
       eventPath: join(root, "requests", "req-1.ndjson"),
       usage: { breakdown: { inputTokens: 10, outputTokens: 5, totalTokens: 15 }, cost: { amount: 0.01, currency: "USD" } },
       acceptance: { parsed: true, report: { changedFiles: ["a.ts"] } },
-      attemptModels: ["primary", "backup"], attempts: 2,
+      requestedModel: "primary", attemptModels: ["primary", "backup"], attempts: 2,
     }]);
     const loaded = await store.load();
     const request = loaded.requests[0];
@@ -100,6 +100,7 @@ test("request usage, acceptance, attemptModels, and attempts round-trip through 
     assert.equal(request!.usage?.cost?.amount, 0.01);
     assert.equal(request!.acceptance?.parsed, true);
     assert.deepEqual(request!.acceptance?.report, { changedFiles: ["a.ts"] });
+    assert.equal(request!.requestedModel, "primary");
     assert.deepEqual(request!.attemptModels, ["primary", "backup"]);
     assert.equal(request!.attempts, 2);
   } finally {

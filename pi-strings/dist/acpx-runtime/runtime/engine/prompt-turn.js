@@ -1,0 +1,45 @@
+import { TimeoutError, withTimeout } from "../../async-control.js";
+import { hasAgentReplyAfterPrompt, recordPromptResponseUsage, } from "../../session/conversation-model.js";
+const SESSION_REPLY_IDLE_MS = 1_000;
+const SESSION_REPLY_DRAIN_TIMEOUT_MS = 5_000;
+export async function runPromptTurn(params) {
+    try {
+        const promptPromise = params.client.prompt(params.sessionId, params.prompt);
+        await params.onPromptStarted?.();
+        const response = await withTimeout(promptPromise, params.timeoutMs);
+        await params.client
+            .waitForSessionUpdatesIdle?.({
+            idleMs: SESSION_REPLY_IDLE_MS,
+            timeoutMs: SESSION_REPLY_DRAIN_TIMEOUT_MS,
+        })
+            .catch(() => {
+            // Best effort. The prompt already completed successfully, so keep the
+            // original stop reason if late update draining itself times out.
+        });
+        recordPromptResponseUsage(params.conversation, response.usage, params.promptMessageId);
+        return {
+            stopReason: response.stopReason,
+            source: "rpc",
+        };
+    }
+    catch (error) {
+        if (!(error instanceof TimeoutError) || !params.promptMessageId) {
+            throw error;
+        }
+        await params.client
+            .waitForSessionUpdatesIdle?.({
+            idleMs: SESSION_REPLY_IDLE_MS,
+            timeoutMs: SESSION_REPLY_DRAIN_TIMEOUT_MS,
+        })
+            .catch(() => {
+            // Best effort. If the update drain itself times out, fall back to the prompt error.
+        });
+        if (hasAgentReplyAfterPrompt(params.conversation, params.promptMessageId)) {
+            return {
+                stopReason: "end_turn",
+                source: "session",
+            };
+        }
+        throw error;
+    }
+}

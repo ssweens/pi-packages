@@ -1,0 +1,2047 @@
+import { spawn, type ChildProcess, type ChildProcessByStdio } from "node:child_process";
+import { Readable, Writable } from "node:stream";
+import {
+  ClientSideConnection,
+  PROTOCOL_VERSION,
+  RequestError,
+  type AnyMessage,
+  type AuthMethod,
+  type ClientCapabilities,
+  type CreateTerminalRequest,
+  type CreateTerminalResponse,
+  type InitializeResponse,
+  type ListSessionsRequest,
+  type ListSessionsResponse,
+  type KillTerminalRequest,
+  type KillTerminalResponse,
+  type LoadSessionResponse,
+  type PromptResponse,
+  type ReadTextFileRequest,
+  type ReadTextFileResponse,
+  type ReleaseTerminalRequest,
+  type ReleaseTerminalResponse,
+  type ResumeSessionResponse,
+  type RequestPermissionRequest,
+  type RequestPermissionResponse,
+  type SessionNotification,
+  type SetSessionConfigOptionResponse,
+  type TerminalOutputRequest,
+  type TerminalOutputResponse,
+  type WaitForTerminalExitRequest,
+  type WaitForTerminalExitResponse,
+  type WriteTextFileRequest,
+  type WriteTextFileResponse,
+  type SessionConfigOption,
+} from "@agentclientprotocol/sdk";
+import { resolveBuiltInAgentLaunch } from "../agent-registry.js";
+import { TimeoutError, withTimeout } from "../async-control.js";
+import {
+  AgentDisconnectedError,
+  AgentSpawnError,
+  AgentStartupError,
+  AuthPolicyError,
+  ClaudeAcpSessionCreateTimeoutError,
+  GeminiAcpStartupTimeoutError,
+  PermissionDeniedError,
+  PermissionPromptUnavailableError,
+  UnsupportedPromptContentError,
+} from "../errors.js";
+import { FileSystemHandlers } from "../filesystem.js";
+import {
+  classifyPermissionDecision,
+  decisionToResponse,
+  inferToolKind,
+  resolvePermissionRequestWithDetails,
+} from "../permissions.js";
+import { getUnsupportedPromptContentMessage, textPrompt } from "../prompt-content.js";
+import { extractRuntimeSessionId } from "../session/runtime-session-id.js";
+import { buildAgentSpawnCommand, buildSpawnCommandOptions } from "../spawn-command-options.js";
+import type {
+  AcpClientOptions,
+  NonInteractivePermissionPolicy,
+  PermissionMode,
+  PermissionStats,
+  PromptInput,
+} from "../types.js";
+import { getAcpxVersion } from "../version.js";
+import {
+  buildClaudeAcpSessionCreateTimeoutMessage,
+  buildClaudeCodeOptionsMeta,
+  buildGeminiAcpStartupTimeoutMessage,
+  buildQoderAcpCommandArgs,
+  ensureCopilotAcpSupport,
+  isClaudeAcpCommand,
+  isCopilotAcpCommand,
+  isDevinAcpCommand,
+  isGeminiAcpCommand,
+  isQoderAcpCommand,
+  resolveAgentCloseAfterStdinEndMs,
+  resolveClaudeAcpSessionCreateTimeoutMs,
+  resolveClaudeCodeExecutable,
+  resolveClaudeCodeSettingSources,
+  resolveGeminiAcpStartupTimeoutMs,
+  resolveGeminiCommandArgs,
+  shouldIgnoreNonJsonAgentOutputLine,
+} from "./agent-command.js";
+import {
+  buildAgentSpawnOptions,
+  readEnvCredential,
+  resolveConfiguredAuthCredential,
+} from "./auth-env.js";
+import {
+  asAbsoluteCwd,
+  isoNow,
+  isChildProcessRunning,
+  requireAgentStdio,
+  resolveAgentCommandParts,
+  resolveAgentSessionCwd,
+  waitForChildExit,
+  waitForSpawn,
+} from "./client-process.js";
+import { extractAcpError } from "./error-shapes.js";
+import { isAcpMessageObject, isSessionUpdateNotification } from "./jsonrpc.js";
+import {
+  modelStateFromConfigOptions,
+  modelStateFromSessionResponse,
+  RequestedModelUnsupportedError,
+  resolveRequestedModelId,
+  type SessionModelState,
+} from "./model-support.js";
+import {
+  formatSessionControlAcpSummary,
+  maybeWrapSessionControlError,
+} from "./session-control-errors.js";
+import { TerminalManager } from "./terminal-manager.js";
+
+export { buildSpawnCommandOptions };
+export {
+  buildAgentSpawnOptions,
+  buildQoderAcpCommandArgs,
+  resolveAgentCloseAfterStdinEndMs,
+  resolveClaudeCodeSettingSources,
+  shouldIgnoreNonJsonAgentOutputLine,
+};
+
+const REPLAY_IDLE_MS = 80;
+const REPLAY_DRAIN_TIMEOUT_MS = 5_000;
+const DRAIN_POLL_INTERVAL_MS = 20;
+const AGENT_CLOSE_TERM_GRACE_MS = 1_500;
+const AGENT_CLOSE_KILL_GRACE_MS = 1_000;
+const STARTUP_STDERR_MAX_CHARS = 8_192;
+const DEVIN_COMPATIBILITY_CLIENT_CAPABILITIES_META = Object.freeze({
+  "cognition.ai/requestDiagnostics": true,
+});
+const DEVIN_COMPATIBILITY_CLIENT_NAME = "windsurf";
+// This is the embedded Windsurf IDE version bundled with Devin Desktop 3.1.7, the first locally verified version that passes Devin's server-side ACP precondition.
+const DEFAULT_DEVIN_COMPATIBILITY_CLIENT_VERSION = "1.110.1";
+
+function resolveClientInfo(devinAcp: boolean): { name: string; version: string } {
+  if (!devinAcp) {
+    return {
+      name: "acpx",
+      version: getAcpxVersion(),
+    };
+  }
+
+  return {
+    name: DEVIN_COMPATIBILITY_CLIENT_NAME,
+    version: process.env.ACPX_DEVIN_WINDSURF_VERSION ?? DEFAULT_DEVIN_COMPATIBILITY_CLIENT_VERSION,
+  };
+}
+
+function resolveClientCapabilities(params: {
+  devinAcp: boolean;
+  fs: boolean;
+  terminal: boolean;
+}): ClientCapabilities {
+  const baseCapabilities: ClientCapabilities = {
+    fs: {
+      readTextFile: params.fs,
+      writeTextFile: params.fs,
+    },
+    terminal: params.terminal,
+  };
+
+  if (!params.devinAcp) {
+    return baseCapabilities;
+  }
+
+  return {
+    ...baseCapabilities,
+    _meta: DEVIN_COMPATIBILITY_CLIENT_CAPABILITIES_META,
+  };
+}
+
+function isDevinRequestDiagnosticsMethod(method: string): boolean {
+  return method === "_cognition.ai/request_diagnostics";
+}
+
+type LoadSessionOptions = {
+  suppressReplayUpdates?: boolean;
+  replayIdleMs?: number;
+  replayDrainTimeoutMs?: number;
+};
+
+export type SessionCreateResult = {
+  sessionId: string;
+  agentSessionId?: string;
+  configOptions?: SessionConfigOption[];
+  models?: SessionModelState;
+  configOptionsPresent: boolean;
+  legacyModelMetadataPresent: boolean;
+};
+
+export type SessionLoadResult = {
+  agentSessionId?: string;
+  configOptions?: SessionConfigOption[];
+  models?: SessionModelState;
+  configOptionsPresent: boolean;
+  legacyModelMetadataPresent: boolean;
+};
+
+export type SessionResumeResult = SessionLoadResult;
+
+type ReconnectedSessionResponse = LoadSessionResponse | ResumeSessionResponse;
+
+function hasResponseField(response: unknown, field: string): boolean {
+  return !!response && typeof response === "object" && field in response;
+}
+
+function normalizeResponseConfigOptions(
+  response: { configOptions?: SessionConfigOption[] | null } | undefined,
+): SessionConfigOption[] | undefined {
+  if (!response || !("configOptions" in response)) {
+    return undefined;
+  }
+  return response.configOptions ?? [];
+}
+
+function toReconnectedSessionResult(
+  response: ReconnectedSessionResponse | undefined,
+): SessionLoadResult {
+  const configOptions = normalizeResponseConfigOptions(response);
+  return {
+    agentSessionId: extractRuntimeSessionId(response?._meta),
+    configOptions,
+    models: modelStateFromSessionResponse({ configOptions, response }),
+    configOptionsPresent: hasResponseField(response, "configOptions"),
+    legacyModelMetadataPresent: hasResponseField(response, "models"),
+  };
+}
+
+type AgentDisconnectReason = "process_exit" | "process_close" | "pipe_close" | "connection_close";
+
+type PendingConnectionRequest = {
+  settled: boolean;
+  reject: (error: unknown) => void;
+};
+
+type AuthSelection = {
+  methodId: string;
+  credential?: string;
+  source: "env" | "config" | "agent";
+};
+
+type AgentLaunchPlan = {
+  spawnCommand: string;
+  args: string[];
+  resolvedBuiltInLaunch: ReturnType<typeof resolveBuiltInAgentLaunch>;
+  devinAcp: boolean;
+  geminiAcp: boolean;
+  copilotAcp: boolean;
+  claudeAcp: boolean;
+  spawnOptions: ReturnType<typeof buildAgentSpawnOptions>;
+};
+
+type StartupFailureWatcher = {
+  promise: Promise<never>;
+  dispose: () => void;
+};
+
+type SessionUpdateSuppressionState = {
+  suppressSessionUpdates: boolean;
+  suppressReplaySessionUpdateMessages: boolean;
+};
+
+type ModelControl = { kind: "config_option"; configId: string } | { kind: "legacy_set_model" };
+type ModelControlOverride = Pick<SessionModelState, "configId"> &
+  Partial<Pick<SessionModelState, "availableModels">>;
+
+export type AgentExitInfo = {
+  exitCode: number | null;
+  signal: NodeJS.Signals | null;
+  exitedAt: string;
+  reason: AgentDisconnectReason;
+  unexpectedDuringPrompt: boolean;
+};
+
+export type AgentLifecycleSnapshot = {
+  pid?: number;
+  startedAt?: string;
+  running: boolean;
+  lastExit?: AgentExitInfo;
+};
+
+type ConsoleErrorMethod = typeof console.error;
+
+function childProcessIsRunning(
+  agent: ChildProcessByStdio<Writable, Readable, Readable> | undefined,
+): boolean {
+  if (!agent) {
+    return false;
+  }
+  return agent.exitCode == null && agent.signalCode == null && !agent.killed;
+}
+
+function cancelledPermissionResponse(): RequestPermissionResponse {
+  return {
+    outcome: {
+      outcome: "cancelled",
+    },
+  };
+}
+
+function shouldSuppressSdkConsoleError(args: unknown[]): boolean {
+  if (args.length === 0) {
+    return false;
+  }
+  return typeof args[0] === "string" && args[0] === "Error handling request";
+}
+
+function installSdkConsoleErrorSuppression(): () => void {
+  const originalConsoleError: ConsoleErrorMethod = console.error;
+  console.error = (...args: unknown[]) => {
+    if (shouldSuppressSdkConsoleError(args)) {
+      return;
+    }
+    originalConsoleError(...args);
+  };
+  return () => {
+    console.error = originalConsoleError;
+  };
+}
+
+function enqueueNdJsonLine(
+  agentCommand: string,
+  line: string,
+  controller: ReadableStreamDefaultController<AnyMessage>,
+): void {
+  const trimmedLine = line.trim();
+  if (!trimmedLine || shouldIgnoreNonJsonAgentOutputLine(agentCommand, trimmedLine)) {
+    return;
+  }
+  try {
+    const message = parseAcpJsonMessageLine(trimmedLine);
+    if (message) {
+      controller.enqueue(message);
+    }
+  } catch (err) {
+    console.error("Failed to parse JSON message:", trimmedLine, err);
+  }
+}
+
+export function parseAcpJsonMessageLine(line: string): AnyMessage | undefined {
+  const message: unknown = JSON.parse(line);
+  return isAcpMessageObject(message) ? message : undefined;
+}
+
+function enqueueNdJsonLines(
+  agentCommand: string,
+  lines: string[],
+  controller: ReadableStreamDefaultController<AnyMessage>,
+): void {
+  for (const line of lines) {
+    enqueueNdJsonLine(agentCommand, line, controller);
+  }
+}
+
+function createNdJsonMessageStream(
+  agentCommand: string,
+  output: WritableStream<Uint8Array>,
+  input: ReadableStream<Uint8Array>,
+): {
+  readable: ReadableStream<AnyMessage>;
+  writable: WritableStream<AnyMessage>;
+} {
+  const textEncoder = new TextEncoder();
+  const textDecoder = new TextDecoder();
+
+  const readable = new ReadableStream<AnyMessage>({
+    async start(controller) {
+      let content = "";
+      const reader = input.getReader();
+      try {
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) {
+            break;
+          }
+          if (!value) {
+            continue;
+          }
+          content += textDecoder.decode(value, { stream: true });
+          const lines = content.split("\n");
+          content = lines.pop() || "";
+          enqueueNdJsonLines(agentCommand, lines, controller);
+        }
+      } finally {
+        reader.releaseLock();
+        controller.close();
+      }
+    },
+  });
+
+  const writable = new WritableStream<AnyMessage>({
+    async write(message) {
+      const content = JSON.stringify(message) + "\n";
+      const writer = output.getWriter();
+      try {
+        await writer.write(textEncoder.encode(content));
+      } finally {
+        writer.releaseLock();
+      }
+    },
+  });
+
+  return { readable, writable };
+}
+
+export class AcpClient {
+  private options: AcpClientOptions;
+  private connection?: ClientSideConnection;
+  private agent?: ChildProcessByStdio<Writable, Readable, Readable>;
+  private initResult?: InitializeResponse;
+  private loadedSessionId?: string;
+  private eventHandlers: Pick<
+    AcpClientOptions,
+    | "onAcpMessage"
+    | "onAcpOutputMessage"
+    | "onSessionUpdate"
+    | "onClientOperation"
+    | "onPermissionEscalation"
+  >;
+  private readonly permissionStats: PermissionStats = {
+    requested: 0,
+    approved: 0,
+    denied: 0,
+    cancelled: 0,
+  };
+  private readonly filesystem: FileSystemHandlers;
+  private readonly terminalManager: TerminalManager;
+  private sessionUpdateChain: Promise<void> = Promise.resolve();
+  private observedSessionUpdates = 0;
+  private processedSessionUpdates = 0;
+  private suppressSessionUpdates = false;
+  private suppressReplaySessionUpdateMessages = false;
+  private activePrompt?: {
+    sessionId: string;
+    promise: Promise<PromptResponse>;
+  };
+  private readonly cancellingSessionIds = new Set<string>();
+  private readonly permissionAbortControllers = new Map<string, AbortController>();
+  private closing = false;
+  private agentStartedAt?: string;
+  private lastAgentExit?: AgentExitInfo;
+  private lastKnownPid?: number;
+  private readonly promptPermissionFailures = new Map<string, PermissionPromptUnavailableError>();
+  private readonly pendingConnectionRequests = new Set<PendingConnectionRequest>();
+  private readonly modelConfigIds = new Map<string, string>();
+  private readonly legacyModelSessionIds = new Set<string>();
+
+  constructor(options: AcpClientOptions) {
+    this.options = {
+      ...options,
+      cwd: asAbsoluteCwd(options.cwd),
+      authPolicy: options.authPolicy ?? "skip",
+    };
+    this.eventHandlers = {
+      onAcpMessage: this.options.onAcpMessage,
+      onAcpOutputMessage: this.options.onAcpOutputMessage,
+      onSessionUpdate: this.options.onSessionUpdate,
+      onClientOperation: this.options.onClientOperation,
+      onPermissionEscalation: this.options.onPermissionEscalation,
+    };
+
+    this.filesystem = new FileSystemHandlers({
+      cwd: this.options.cwd,
+      permissionMode: this.options.permissionMode,
+      nonInteractivePermissions: this.options.nonInteractivePermissions,
+      onOperation: (operation) => {
+        this.eventHandlers.onClientOperation?.(operation);
+      },
+    });
+    this.terminalManager = new TerminalManager({
+      cwd: this.options.cwd,
+      permissionMode: this.options.permissionMode,
+      nonInteractivePermissions: this.options.nonInteractivePermissions,
+      onOperation: (operation) => {
+        this.eventHandlers.onClientOperation?.(operation);
+      },
+    });
+  }
+
+  get initializeResult(): InitializeResponse | undefined {
+    return this.initResult;
+  }
+
+  getAgentPid(): number | undefined {
+    return this.agent?.pid ?? this.lastKnownPid;
+  }
+
+  getPermissionStats(): PermissionStats {
+    return { ...this.permissionStats };
+  }
+
+  getAgentLifecycleSnapshot(): AgentLifecycleSnapshot {
+    const pid = this.agent?.pid ?? this.lastKnownPid;
+    const running = childProcessIsRunning(this.agent);
+    return {
+      pid,
+      startedAt: this.agentStartedAt,
+      running,
+      lastExit: this.lastAgentExit ? { ...this.lastAgentExit } : undefined,
+    };
+  }
+
+  supportsLoadSession(): boolean {
+    return Boolean(this.initResult?.agentCapabilities?.loadSession);
+  }
+
+  supportsResumeSession(): boolean {
+    return Boolean(this.initResult?.agentCapabilities?.sessionCapabilities?.resume);
+  }
+
+  supportsCloseSession(): boolean {
+    return Boolean(this.initResult?.agentCapabilities?.sessionCapabilities?.close);
+  }
+
+  supportsListSessions(): boolean {
+    return Boolean(this.initResult?.agentCapabilities?.sessionCapabilities?.list);
+  }
+
+  setEventHandlers(
+    handlers: Pick<
+      AcpClientOptions,
+      | "onAcpMessage"
+      | "onAcpOutputMessage"
+      | "onSessionUpdate"
+      | "onClientOperation"
+      | "onPermissionEscalation"
+    >,
+  ): void {
+    this.eventHandlers = { ...handlers };
+  }
+
+  clearEventHandlers(): void {
+    this.eventHandlers = {};
+  }
+
+  updateRuntimeOptions(options: {
+    permissionMode?: PermissionMode;
+    nonInteractivePermissions?: NonInteractivePermissionPolicy;
+    permissionPolicy?: AcpClientOptions["permissionPolicy"];
+    fs?: boolean;
+    terminal?: boolean;
+    suppressSdkConsoleErrors?: boolean;
+    verbose?: boolean;
+  }): void {
+    const shouldRefreshPermissionPolicy =
+      options.permissionMode !== undefined || options.nonInteractivePermissions !== undefined;
+    if (options.permissionMode) {
+      this.options.permissionMode = options.permissionMode;
+    }
+    if (options.nonInteractivePermissions !== undefined) {
+      this.options.nonInteractivePermissions = options.nonInteractivePermissions;
+    }
+    if (Object.prototype.hasOwnProperty.call(options, "permissionPolicy")) {
+      this.options.permissionPolicy = options.permissionPolicy;
+    }
+    this.updateClientCapabilityPreferences(options);
+    this.refreshRuntimePermissionPolicy(shouldRefreshPermissionPolicy);
+    if (options.suppressSdkConsoleErrors !== undefined) {
+      this.options.suppressSdkConsoleErrors = options.suppressSdkConsoleErrors;
+    }
+    if (options.verbose !== undefined) {
+      this.options.verbose = options.verbose;
+    }
+  }
+
+  private updateClientCapabilityPreferences(options: { fs?: boolean; terminal?: boolean }): void {
+    if (options.fs !== undefined) {
+      this.options.fs = options.fs;
+    }
+    if (options.terminal !== undefined) {
+      this.options.terminal = options.terminal;
+    }
+  }
+
+  private refreshRuntimePermissionPolicy(enabled: boolean): void {
+    if (!enabled) {
+      return;
+    }
+    this.filesystem.updatePermissionPolicy(
+      this.options.permissionMode,
+      this.options.nonInteractivePermissions,
+    );
+    this.terminalManager.updatePermissionPolicy(
+      this.options.permissionMode,
+      this.options.nonInteractivePermissions,
+    );
+  }
+
+  hasReusableSession(sessionId: string): boolean {
+    return (
+      this.connection != null &&
+      this.agent != null &&
+      isChildProcessRunning(this.agent) &&
+      this.loadedSessionId === sessionId
+    );
+  }
+
+  hasActivePrompt(sessionId?: string): boolean {
+    if (!this.activePrompt) {
+      return false;
+    }
+    if (sessionId == null) {
+      return true;
+    }
+    return this.activePrompt.sessionId === sessionId;
+  }
+
+  async start(): Promise<void> {
+    if (this.connection && this.agent && isChildProcessRunning(this.agent)) {
+      return;
+    }
+    if (this.connection || this.agent) {
+      await this.close();
+    }
+
+    const launch = await this.resolveAgentLaunchPlan();
+    this.logAgentLaunch(launch);
+    await this.ensureLaunchSupport(launch);
+    const child = await this.spawnAgentProcess(launch);
+    this.closing = false;
+    this.agentStartedAt = isoNow();
+    this.lastAgentExit = undefined;
+    this.lastKnownPid = child.pid ?? undefined;
+    this.attachAgentLifecycleObservers(child);
+    const startupStderr: string[] = [];
+
+    child.stderr.on("data", (chunk: Buffer | string) => {
+      this.captureStartupStderr(startupStderr, chunk);
+      if (!this.options.verbose) {
+        return;
+      }
+      process.stderr.write(chunk);
+    });
+
+    const input = Writable.toWeb(child.stdin);
+    const output = Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>;
+    const stream = this.createTappedStream(
+      createNdJsonMessageStream(this.options.agentCommand, input, output),
+    );
+
+    const connection = this.createConnection(stream, launch);
+    connection.signal.addEventListener(
+      "abort",
+      () => {
+        this.recordAgentExit("connection_close", child.exitCode ?? null, child.signalCode ?? null);
+      },
+      { once: true },
+    );
+    const startupFailure = this.createStartupFailureWatcher(child, startupStderr);
+
+    await this.initializeAgentConnection({
+      child,
+      connection,
+      startupFailure,
+      startupStderr,
+      launch,
+    });
+  }
+
+  private async resolveAgentLaunchPlan(): Promise<AgentLaunchPlan> {
+    const configuredCommand = resolveAgentCommandParts(
+      this.options.agentCommand,
+      this.options.agentArgv,
+    );
+    const resolvedBuiltInLaunch = resolveBuiltInAgentLaunch(this.options.agentCommand);
+    const spawnCommand = resolvedBuiltInLaunch?.command ?? configuredCommand.command;
+    let args = resolvedBuiltInLaunch?.args ?? configuredCommand.args;
+    args = await resolveGeminiCommandArgs(spawnCommand, args);
+    if (isQoderAcpCommand(spawnCommand, args)) {
+      args = buildQoderAcpCommandArgs(args, this.options);
+    }
+    return {
+      spawnCommand,
+      args,
+      resolvedBuiltInLaunch,
+      devinAcp: isDevinAcpCommand(spawnCommand, args),
+      geminiAcp: isGeminiAcpCommand(spawnCommand, args),
+      copilotAcp: isCopilotAcpCommand(spawnCommand, args),
+      claudeAcp: isClaudeAcpCommand(spawnCommand, args),
+      spawnOptions: buildAgentSpawnOptions(
+        this.options.cwd,
+        this.options.authCredentials,
+        this.options.sessionOptions?.env,
+      ),
+    };
+  }
+
+  private logAgentLaunch(plan: AgentLaunchPlan): void {
+    const launch = plan.resolvedBuiltInLaunch;
+    if (launch?.source === "installed") {
+      this.log(
+        `spawning installed built-in agent ${launch.packageName}${launch.packageVersion ? `@${launch.packageVersion}` : ""} via ${plan.spawnCommand} ${plan.args.join(" ")}`,
+      );
+      return;
+    }
+    if (launch?.source === "package-exec") {
+      this.log(
+        `spawning built-in agent ${launch.packageName}@${launch.packageRange} via current Node package exec bridge ${plan.spawnCommand} ${plan.args.join(" ")}`,
+      );
+      return;
+    }
+    this.log(`spawning agent: ${plan.spawnCommand} ${plan.args.join(" ")}`);
+  }
+
+  private async ensureLaunchSupport(plan: AgentLaunchPlan): Promise<void> {
+    if (plan.copilotAcp) {
+      await ensureCopilotAcpSupport(plan.spawnCommand);
+    }
+    if (!plan.claudeAcp) {
+      return;
+    }
+    const claudeExe = resolveClaudeCodeExecutable(process.platform, plan.spawnOptions.env);
+    if (claudeExe) {
+      plan.spawnOptions.env.CLAUDE_CODE_EXECUTABLE = claudeExe;
+      this.log(`resolved system Claude Code executable: ${claudeExe}`);
+    }
+  }
+
+  private async spawnAgentProcess(
+    plan: AgentLaunchPlan,
+  ): Promise<ChildProcessByStdio<Writable, Readable, Readable>> {
+    const spawnCommand = buildAgentSpawnCommand(
+      plan.spawnCommand,
+      plan.args,
+      process.platform,
+      plan.spawnOptions.env,
+    );
+    const spawnedChild = spawn(spawnCommand.command, spawnCommand.args, {
+      ...plan.spawnOptions,
+      windowsVerbatimArguments: spawnCommand.windowsVerbatimArguments,
+    }) as ChildProcessByStdio<Writable, Readable, Readable>;
+    try {
+      await waitForSpawn(spawnedChild);
+    } catch (error) {
+      throw new AgentSpawnError(this.options.agentCommand, error);
+    }
+    return requireAgentStdio(spawnedChild);
+  }
+
+  private createConnection(
+    stream: {
+      readable: ReadableStream<AnyMessage>;
+      writable: WritableStream<AnyMessage>;
+    },
+    launch: Pick<AgentLaunchPlan, "devinAcp">,
+  ): ClientSideConnection {
+    return new ClientSideConnection(
+      () => ({
+        sessionUpdate: async (params: SessionNotification) => {
+          await this.handleSessionUpdate(params);
+        },
+        requestPermission: async (
+          params: RequestPermissionRequest,
+        ): Promise<RequestPermissionResponse> => {
+          return this.handlePermissionRequest(params);
+        },
+        extMethod: async (method: string): Promise<Record<string, unknown>> => {
+          if (launch.devinAcp && isDevinRequestDiagnosticsMethod(method)) {
+            return {};
+          }
+          const error = RequestError.methodNotFound(method);
+          if (!this.options.suppressSdkConsoleErrors) {
+            console.error(error.message);
+          }
+          throw error;
+        },
+        readTextFile: async (params: ReadTextFileRequest): Promise<ReadTextFileResponse> => {
+          return this.handleReadTextFile(params);
+        },
+        writeTextFile: async (params: WriteTextFileRequest): Promise<WriteTextFileResponse> => {
+          return this.handleWriteTextFile(params);
+        },
+        createTerminal: async (params: CreateTerminalRequest): Promise<CreateTerminalResponse> => {
+          return this.handleCreateTerminal(params);
+        },
+        terminalOutput: async (params: TerminalOutputRequest): Promise<TerminalOutputResponse> => {
+          return this.handleTerminalOutput(params);
+        },
+        waitForTerminalExit: async (
+          params: WaitForTerminalExitRequest,
+        ): Promise<WaitForTerminalExitResponse> => {
+          return this.handleWaitForTerminalExit(params);
+        },
+        killTerminal: async (params: KillTerminalRequest): Promise<KillTerminalResponse> => {
+          return this.handleKillTerminal(params);
+        },
+        releaseTerminal: async (
+          params: ReleaseTerminalRequest,
+        ): Promise<ReleaseTerminalResponse> => {
+          return this.handleReleaseTerminal(params);
+        },
+        extNotification: async (): Promise<void> => {},
+      }),
+      stream,
+    );
+  }
+
+  private async initializeAgentConnection(params: {
+    child: ChildProcessByStdio<Writable, Readable, Readable>;
+    connection: ClientSideConnection;
+    startupFailure: StartupFailureWatcher;
+    startupStderr: string[];
+    launch: AgentLaunchPlan;
+  }): Promise<void> {
+    try {
+      const initResult = await Promise.race([
+        this.initializeProtocolConnection(params.connection, params.launch),
+        params.startupFailure.promise,
+      ]);
+      params.startupFailure.dispose();
+      this.connection = params.connection;
+      this.agent = params.child;
+      this.initResult = initResult;
+      this.log(`initialized protocol version ${initResult.protocolVersion}`);
+    } catch (error) {
+      await this.handleInitializeFailure(params, error);
+    }
+  }
+
+  private async initializeProtocolConnection(
+    connection: ClientSideConnection,
+    launch: Pick<AgentLaunchPlan, "devinAcp" | "geminiAcp">,
+  ): Promise<InitializeResponse> {
+    const initializePromise = connection.initialize({
+      protocolVersion: PROTOCOL_VERSION,
+      clientCapabilities: resolveClientCapabilities({
+        devinAcp: launch.devinAcp,
+        fs: this.options.fs !== false,
+        terminal: this.options.terminal !== false,
+      }),
+      clientInfo: resolveClientInfo(launch.devinAcp),
+    });
+    const initialized = launch.geminiAcp
+      ? await withTimeout(initializePromise, resolveGeminiAcpStartupTimeoutMs())
+      : await initializePromise;
+    await this.authenticateIfRequired(connection, initialized.authMethods ?? []);
+    return initialized;
+  }
+
+  private async handleInitializeFailure(
+    params: {
+      child: ChildProcessByStdio<Writable, Readable, Readable>;
+      startupFailure: StartupFailureWatcher;
+      startupStderr: string[];
+      launch: AgentLaunchPlan;
+    },
+    error: unknown,
+  ): Promise<never> {
+    params.startupFailure.dispose();
+    const normalizedError = await this.normalizeInitializeError(
+      error,
+      params.child,
+      params.startupStderr,
+    );
+    try {
+      params.child.kill();
+    } catch {
+      // best effort
+    }
+    if (params.launch.geminiAcp && error instanceof TimeoutError) {
+      throw new GeminiAcpStartupTimeoutError(
+        await buildGeminiAcpStartupTimeoutMessage(params.launch.spawnCommand),
+        {
+          cause: error,
+          retryable: true,
+        },
+      );
+    }
+    throw normalizedError;
+  }
+
+  private createTappedStream(base: {
+    readable: ReadableStream<AnyMessage>;
+    writable: WritableStream<AnyMessage>;
+  }): {
+    readable: ReadableStream<AnyMessage>;
+    writable: WritableStream<AnyMessage>;
+  } {
+    const onAcpMessage = () => this.eventHandlers.onAcpMessage;
+    const onAcpOutputMessage = () => this.eventHandlers.onAcpOutputMessage;
+
+    const shouldSuppressInboundReplaySessionUpdate = (message: AnyMessage): boolean => {
+      return this.suppressReplaySessionUpdateMessages && isSessionUpdateNotification(message);
+    };
+
+    const readable = new ReadableStream<AnyMessage>({
+      async start(controller) {
+        const reader = base.readable.getReader();
+        try {
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) {
+              break;
+            }
+            if (!value) {
+              continue;
+            }
+            if (!shouldSuppressInboundReplaySessionUpdate(value)) {
+              onAcpOutputMessage()?.("inbound", value);
+              onAcpMessage()?.("inbound", value);
+            }
+            controller.enqueue(value);
+          }
+        } finally {
+          reader.releaseLock();
+          controller.close();
+        }
+      },
+    });
+
+    const writable = new WritableStream<AnyMessage>({
+      async write(message) {
+        onAcpOutputMessage()?.("outbound", message);
+        onAcpMessage()?.("outbound", message);
+        const writer = base.writable.getWriter();
+        try {
+          await writer.write(message);
+        } finally {
+          writer.releaseLock();
+        }
+      },
+    });
+
+    return { readable, writable };
+  }
+
+  async createSession(cwd = this.options.cwd): Promise<SessionCreateResult> {
+    const connection = this.getConnection();
+    const { command, args } = resolveAgentCommandParts(
+      this.options.agentCommand,
+      this.options.agentArgv,
+    );
+    const claudeAcp = isClaudeAcpCommand(command, args);
+    const sessionCwd = await resolveAgentSessionCwd(cwd, this.options.agentCommand);
+
+    let result: Awaited<ReturnType<typeof connection.newSession>>;
+    try {
+      const createPromise = this.runConnectionRequest(() =>
+        connection.newSession({
+          cwd: sessionCwd,
+          mcpServers: this.options.mcpServers ?? [],
+          _meta: buildClaudeCodeOptionsMeta(this.options.sessionOptions, claudeAcp),
+        }),
+      );
+      result = claudeAcp
+        ? await withTimeout(createPromise, resolveClaudeAcpSessionCreateTimeoutMs())
+        : await createPromise;
+    } catch (error) {
+      if (claudeAcp && error instanceof TimeoutError) {
+        throw new ClaudeAcpSessionCreateTimeoutError(buildClaudeAcpSessionCreateTimeoutMessage(), {
+          cause: error,
+          retryable: true,
+        });
+      }
+      throw error;
+    }
+
+    this.loadedSessionId = result.sessionId;
+    const configOptions = normalizeResponseConfigOptions(result);
+    const models = modelStateFromSessionResponse({ configOptions, response: result });
+    this.rememberSessionModels(result.sessionId, models);
+
+    return {
+      sessionId: result.sessionId,
+      agentSessionId: extractRuntimeSessionId(result._meta),
+      configOptions,
+      models,
+      configOptionsPresent: hasResponseField(result, "configOptions"),
+      legacyModelMetadataPresent: hasResponseField(result, "models"),
+    };
+  }
+
+  async loadSession(sessionId: string, cwd = this.options.cwd): Promise<SessionLoadResult> {
+    this.getConnection();
+    return await this.loadSessionWithOptions(sessionId, cwd, {});
+  }
+
+  async loadSessionWithOptions(
+    sessionId: string,
+    cwd = this.options.cwd,
+    options: LoadSessionOptions = {},
+  ): Promise<SessionLoadResult> {
+    const connection = this.getConnection();
+    const sessionCwd = await resolveAgentSessionCwd(cwd, this.options.agentCommand);
+    const previousSuppression = this.applySessionUpdateSuppression(
+      Boolean(options.suppressReplayUpdates),
+    );
+
+    let response: LoadSessionResponse | undefined;
+
+    try {
+      response = await this.runConnectionRequest(() =>
+        connection.loadSession({
+          sessionId,
+          cwd: sessionCwd,
+          mcpServers: this.options.mcpServers ?? [],
+        }),
+      );
+
+      await this.waitForSessionUpdateDrain(
+        options.replayIdleMs ?? REPLAY_IDLE_MS,
+        options.replayDrainTimeoutMs ?? REPLAY_DRAIN_TIMEOUT_MS,
+      );
+    } finally {
+      this.restoreSessionUpdateSuppression(previousSuppression);
+    }
+
+    this.loadedSessionId = sessionId;
+    const result = toReconnectedSessionResult(response);
+    this.updateRememberedSessionModels(sessionId, result);
+    return result;
+  }
+
+  async resumeSession(sessionId: string, cwd = this.options.cwd): Promise<SessionResumeResult> {
+    const connection = this.getConnection();
+    const sessionCwd = await resolveAgentSessionCwd(cwd, this.options.agentCommand);
+    const response = await this.runConnectionRequest(() =>
+      connection.resumeSession({
+        sessionId,
+        cwd: sessionCwd,
+        mcpServers: this.options.mcpServers ?? [],
+      }),
+    );
+
+    this.loadedSessionId = sessionId;
+    const result = toReconnectedSessionResult(response);
+    this.updateRememberedSessionModels(sessionId, result);
+    return result;
+  }
+
+  private applySessionUpdateSuppression(enabled: boolean): SessionUpdateSuppressionState {
+    const previous = {
+      suppressSessionUpdates: this.suppressSessionUpdates,
+      suppressReplaySessionUpdateMessages: this.suppressReplaySessionUpdateMessages,
+    };
+    this.suppressSessionUpdates = previous.suppressSessionUpdates || enabled;
+    this.suppressReplaySessionUpdateMessages =
+      previous.suppressReplaySessionUpdateMessages || enabled;
+    return previous;
+  }
+
+  private restoreSessionUpdateSuppression(previous: SessionUpdateSuppressionState): void {
+    this.suppressSessionUpdates = previous.suppressSessionUpdates;
+    this.suppressReplaySessionUpdateMessages = previous.suppressReplaySessionUpdateMessages;
+  }
+
+  async prompt(sessionId: string, prompt: PromptInput | string): Promise<PromptResponse> {
+    const connection = this.getConnection();
+    const normalizedPrompt = this.normalizePromptForAgent(prompt);
+    const restoreConsoleError = this.options.suppressSdkConsoleErrors
+      ? installSdkConsoleErrorSuppression()
+      : undefined;
+
+    let promptPromise: Promise<PromptResponse>;
+    try {
+      promptPromise = this.runConnectionRequest(() =>
+        connection.prompt({
+          sessionId,
+          prompt: normalizedPrompt,
+        }),
+      );
+    } catch (error) {
+      restoreConsoleError?.();
+      throw error;
+    }
+
+    this.activePrompt = {
+      sessionId,
+      promise: promptPromise,
+    };
+
+    try {
+      return this.returnPromptResponseOrPermissionFailure(sessionId, await promptPromise);
+    } catch (error) {
+      this.throwPromptPermissionFailureIfPresent(sessionId);
+      throw error;
+    } finally {
+      restoreConsoleError?.();
+      if (this.activePrompt?.promise === promptPromise) {
+        this.activePrompt = undefined;
+      }
+      this.cancellingSessionIds.delete(sessionId);
+      this.abortAndDropPermissionSignal(sessionId);
+      this.promptPermissionFailures.delete(sessionId);
+    }
+  }
+
+  private normalizePromptForAgent(prompt: PromptInput | string): PromptInput {
+    const normalizedPrompt = typeof prompt === "string" ? textPrompt(prompt) : prompt;
+    const unsupportedPromptContent = getUnsupportedPromptContentMessage(
+      normalizedPrompt,
+      this.initResult?.agentCapabilities,
+    );
+    if (unsupportedPromptContent) {
+      throw new UnsupportedPromptContentError(unsupportedPromptContent);
+    }
+    return normalizedPrompt;
+  }
+
+  private returnPromptResponseOrPermissionFailure(
+    sessionId: string,
+    response: PromptResponse,
+  ): PromptResponse {
+    this.throwPromptPermissionFailureIfPresent(sessionId);
+    return response;
+  }
+
+  private throwPromptPermissionFailureIfPresent(sessionId: string): void {
+    const permissionFailure = this.consumePromptPermissionFailure(sessionId);
+    if (permissionFailure) {
+      throw permissionFailure;
+    }
+  }
+
+  async setSessionMode(sessionId: string, modeId: string): Promise<void> {
+    const connection = this.getConnection();
+    try {
+      await this.runConnectionRequest(() =>
+        connection.setSessionMode({
+          sessionId,
+          modeId,
+        }),
+      );
+    } catch (error) {
+      throw maybeWrapSessionControlError("session/set_mode", error, `for mode "${modeId}"`);
+    }
+  }
+
+  async setSessionConfigOption(
+    sessionId: string,
+    configId: string,
+    value: string,
+  ): Promise<SetSessionConfigOptionResponse> {
+    const connection = this.getConnection();
+    try {
+      return await this.runConnectionRequest(() =>
+        connection.setSessionConfigOption({
+          sessionId,
+          configId,
+          value,
+        }),
+      );
+    } catch (error) {
+      throw maybeWrapSessionControlError(
+        "session/set_config_option",
+        error,
+        `for "${configId}"="${value}"`,
+      );
+    }
+  }
+
+  async setSessionModel(
+    sessionId: string,
+    modelId: string,
+    controlOverride?: ModelControlOverride,
+  ): Promise<SetSessionConfigOptionResponse | undefined> {
+    const control = this.resolveModelControl(sessionId, controlOverride);
+    if (!control) {
+      throw new RequestedModelUnsupportedError(
+        `Cannot set model "${modelId}": the ACP session did not advertise a model config option or legacy session/set_model support.`,
+        "missing-capability",
+      );
+    }
+    const resolvedModelId = resolveRequestedModelId({
+      requestedModel: modelId,
+      models: controlOverride?.availableModels
+        ? { availableModels: controlOverride.availableModels }
+        : undefined,
+      agentCommand: this.options.agentCommand,
+    });
+    return control.kind === "config_option"
+      ? await this.setSessionModelThroughConfig(sessionId, resolvedModelId, control.configId)
+      : await this.setSessionModelThroughLegacyMethod(sessionId, resolvedModelId);
+  }
+
+  private async setSessionModelThroughConfig(
+    sessionId: string,
+    modelId: string,
+    configId: string,
+  ): Promise<SetSessionConfigOptionResponse> {
+    const connection = this.getConnection();
+    try {
+      const response = await this.runConnectionRequest(() =>
+        connection.setSessionConfigOption({
+          sessionId,
+          configId,
+          value: modelId,
+        }),
+      );
+      this.rememberSessionModels(sessionId, modelStateFromConfigOptions(response.configOptions));
+      return response;
+    } catch (error) {
+      return this.throwSessionModelError("session/set_config_option", modelId, error);
+    }
+  }
+
+  private async setSessionModelThroughLegacyMethod(
+    sessionId: string,
+    modelId: string,
+  ): Promise<undefined> {
+    const connection = this.getConnection();
+    try {
+      await this.runConnectionRequest(() =>
+        connection.extMethod("session/set_model", { sessionId, modelId }),
+      );
+      return undefined;
+    } catch (error) {
+      return this.throwSessionModelError("session/set_model", modelId, error);
+    }
+  }
+
+  private throwSessionModelError(
+    method: "session/set_model" | "session/set_config_option",
+    modelId: string,
+    error: unknown,
+  ): never {
+    const wrapped = maybeWrapSessionControlError(method, error, `for model "${modelId}"`);
+    if (wrapped !== error) {
+      throw wrapped;
+    }
+    const acp = extractAcpError(error);
+    const summary = acp
+      ? formatSessionControlAcpSummary(acp)
+      : error instanceof Error
+        ? error.message
+        : String(error);
+    throw new Error(`Failed ${method} for model "${modelId}": ${summary}`, {
+      cause: error,
+    });
+  }
+
+  private resolveModelControl(
+    sessionId: string,
+    controlOverride: ModelControlOverride | undefined,
+  ): ModelControl | undefined {
+    if (controlOverride) {
+      return controlOverride.configId
+        ? { kind: "config_option", configId: controlOverride.configId }
+        : { kind: "legacy_set_model" };
+    }
+    const configId = this.modelConfigIds.get(sessionId);
+    if (configId) {
+      return { kind: "config_option", configId };
+    }
+    return this.legacyModelSessionIds.has(sessionId) ? { kind: "legacy_set_model" } : undefined;
+  }
+
+  private rememberSessionModels(sessionId: string, models: SessionModelState | undefined): void {
+    if (!models) {
+      this.modelConfigIds.delete(sessionId);
+      this.legacyModelSessionIds.delete(sessionId);
+      return;
+    }
+    if (models.configId) {
+      this.modelConfigIds.set(sessionId, models.configId);
+      this.legacyModelSessionIds.delete(sessionId);
+      return;
+    }
+    this.modelConfigIds.delete(sessionId);
+    this.legacyModelSessionIds.add(sessionId);
+  }
+
+  private updateRememberedSessionModels(sessionId: string, result: SessionLoadResult): void {
+    const explicitConfigRemoval = result.configOptionsPresent && this.modelConfigIds.has(sessionId);
+    if (result.models || result.legacyModelMetadataPresent || explicitConfigRemoval) {
+      this.rememberSessionModels(sessionId, result.models);
+    }
+  }
+
+  async cancel(sessionId: string): Promise<void> {
+    const connection = this.getConnection();
+    this.cancellingSessionIds.add(sessionId);
+    this.abortAndDropPermissionSignal(sessionId);
+    await this.runConnectionRequest(() =>
+      connection.cancel({
+        sessionId,
+      }),
+    );
+  }
+
+  async closeSession(sessionId: string): Promise<void> {
+    const connection = this.getConnection();
+    await this.runConnectionRequest(() =>
+      connection.closeSession({
+        sessionId,
+      }),
+    );
+    if (this.loadedSessionId === sessionId) {
+      this.loadedSessionId = undefined;
+    }
+    this.modelConfigIds.delete(sessionId);
+    this.legacyModelSessionIds.delete(sessionId);
+  }
+
+  async listSessions(params: ListSessionsRequest = {}): Promise<ListSessionsResponse> {
+    const connection = this.getConnection();
+    return await this.runConnectionRequest(() => connection.listSessions(params));
+  }
+
+  async requestCancelActivePrompt(): Promise<boolean> {
+    const active = this.activePrompt;
+    if (!active) {
+      return false;
+    }
+    await this.cancel(active.sessionId);
+    return true;
+  }
+
+  async cancelActivePrompt(waitMs = 2_500): Promise<PromptResponse | undefined> {
+    const active = this.activePrompt;
+    if (!active) {
+      return undefined;
+    }
+
+    try {
+      await this.cancel(active.sessionId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.log(`failed to send session/cancel: ${message}`);
+    }
+
+    if (waitMs <= 0) {
+      return undefined;
+    }
+
+    let timer: NodeJS.Timeout | number | undefined;
+    const timeoutPromise = new Promise<undefined>((resolve) => {
+      timer = setTimeout(resolve, waitMs);
+    });
+
+    try {
+      return await Promise.race([
+        active.promise.then(
+          (response) => response,
+          () => undefined,
+        ),
+        timeoutPromise,
+      ]);
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    }
+  }
+
+  async close(): Promise<void> {
+    this.closing = true;
+
+    await this.terminalManager.shutdown();
+
+    const agent = this.agent;
+    if (agent) {
+      await this.terminateAgentProcess(agent);
+    }
+    if (this.pendingConnectionRequests.size > 0) {
+      this.rejectPendingConnectionRequests(
+        this.lastAgentExit
+          ? new AgentDisconnectedError(
+              this.lastAgentExit.reason,
+              this.lastAgentExit.exitCode,
+              this.lastAgentExit.signal,
+              {
+                outputAlreadyEmitted: Boolean(this.activePrompt),
+              },
+            )
+          : new AgentDisconnectedError("connection_close", null, null, {
+              outputAlreadyEmitted: Boolean(this.activePrompt),
+            }),
+      );
+    }
+
+    this.sessionUpdateChain = Promise.resolve();
+    this.observedSessionUpdates = 0;
+    this.processedSessionUpdates = 0;
+    this.suppressSessionUpdates = false;
+    this.suppressReplaySessionUpdateMessages = false;
+    this.activePrompt = undefined;
+    this.cancellingSessionIds.clear();
+    for (const controller of this.permissionAbortControllers.values()) {
+      controller.abort();
+    }
+    this.permissionAbortControllers.clear();
+    this.promptPermissionFailures.clear();
+    this.loadedSessionId = undefined;
+    this.modelConfigIds.clear();
+    this.legacyModelSessionIds.clear();
+    this.initResult = undefined;
+    this.connection = undefined;
+    this.agent = undefined;
+  }
+
+  private async terminateAgentProcess(
+    child: ChildProcessByStdio<Writable, Readable, Readable>,
+  ): Promise<void> {
+    const stdinCloseGraceMs = resolveAgentCloseAfterStdinEndMs(this.options.agentCommand);
+    this.endAgentStdin(child);
+    let exited = await waitForChildExit(child, stdinCloseGraceMs);
+    exited = await this.killAgentIfRunning(child, exited, "SIGTERM", AGENT_CLOSE_TERM_GRACE_MS);
+    if (!exited) {
+      this.log(`agent did not exit after ${AGENT_CLOSE_TERM_GRACE_MS}ms; forcing SIGKILL`);
+      exited = await this.killAgentIfRunning(child, exited, "SIGKILL", AGENT_CLOSE_KILL_GRACE_MS);
+    }
+
+    // Ensure stdio handles don't keep this process alive after close() returns.
+    this.detachAgentHandles(child, !exited);
+  }
+
+  private endAgentStdin(child: ChildProcessByStdio<Writable, Readable, Readable>): void {
+    // Closing stdin is the most graceful shutdown signal for stdio-based ACP agents.
+    if (child.stdin.destroyed) {
+      return;
+    }
+    try {
+      child.stdin.end();
+    } catch {
+      // best effort
+    }
+  }
+
+  private async killAgentIfRunning(
+    child: ChildProcessByStdio<Writable, Readable, Readable>,
+    alreadyExited: boolean,
+    signal: NodeJS.Signals,
+    waitMs: number,
+  ): Promise<boolean> {
+    if (alreadyExited || !isChildProcessRunning(child)) {
+      return alreadyExited;
+    }
+    try {
+      child.kill(signal);
+    } catch {
+      // best effort
+    }
+    return await waitForChildExit(child, waitMs);
+  }
+
+  private detachAgentHandles(agent: ChildProcess, unref: boolean): void {
+    const stdin = agent.stdin;
+    const stdout = agent.stdout;
+    const stderr = agent.stderr;
+
+    stdin?.destroy();
+    stdout?.destroy();
+    stderr?.destroy();
+
+    if (unref) {
+      try {
+        agent.unref();
+      } catch {
+        // best effort
+      }
+    }
+  }
+
+  private getConnection(): ClientSideConnection {
+    if (!this.connection) {
+      throw new Error("ACP client not started");
+    }
+    return this.connection;
+  }
+
+  private log(message: string): void {
+    if (!this.options.verbose) {
+      return;
+    }
+    process.stderr.write(`[acpx] ${message}\n`);
+  }
+
+  private captureStartupStderr(target: string[], chunk: Buffer | string): void {
+    const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
+    if (text.length === 0) {
+      return;
+    }
+    target.push(text);
+    const overflow = target.join("").length - STARTUP_STDERR_MAX_CHARS;
+    if (overflow <= 0) {
+      return;
+    }
+    const joined = target.join("");
+    target.splice(0, target.length, joined.slice(-STARTUP_STDERR_MAX_CHARS));
+  }
+
+  private summarizeStartupStderr(target: string[]): string | undefined {
+    const joined = target.join("").trim();
+    if (!joined) {
+      return undefined;
+    }
+    const collapsed = joined.replace(/\s+/gu, " ").trim();
+    return collapsed.slice(0, STARTUP_STDERR_MAX_CHARS);
+  }
+
+  private createStartupFailureWatcher(
+    child: ChildProcessByStdio<Writable, Readable, Readable>,
+    startupStderr: string[],
+  ): StartupFailureWatcher {
+    let settled = false;
+    let rejectPromise: (error: unknown) => void;
+
+    const cleanup = () => {
+      child.off("error", onError);
+      child.off("exit", onExit);
+      child.off("close", onClose);
+    };
+
+    const finish = (error?: unknown) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      if (error) {
+        rejectPromise(error);
+      }
+    };
+
+    const createError = (params?: {
+      cause?: unknown;
+      exitCode?: number | null;
+      signal?: NodeJS.Signals | null;
+    }) =>
+      new AgentStartupError({
+        agentCommand: this.options.agentCommand,
+        exitCode: params?.exitCode ?? child.exitCode ?? null,
+        signal: params?.signal ?? child.signalCode ?? null,
+        stderrSummary: this.summarizeStartupStderr(startupStderr),
+        cause: params?.cause,
+      });
+
+    const onError = (error: Error) => {
+      finish(createError({ cause: error }));
+    };
+
+    const onExit = (exitCode: number | null, signal: NodeJS.Signals | null) => {
+      finish(createError({ exitCode, signal }));
+    };
+
+    const onClose = (exitCode: number | null, signal: NodeJS.Signals | null) => {
+      finish(createError({ exitCode, signal }));
+    };
+
+    const promise = new Promise<never>((_resolve, reject) => {
+      rejectPromise = reject;
+      child.once("error", onError);
+      child.once("exit", onExit);
+      child.once("close", onClose);
+    });
+
+    return {
+      promise,
+      dispose: () => finish(),
+    };
+  }
+
+  private async normalizeInitializeError(
+    error: unknown,
+    child: ChildProcessByStdio<Writable, Readable, Readable>,
+    startupStderr: string[],
+  ): Promise<unknown> {
+    if (error instanceof AgentStartupError) {
+      return error;
+    }
+
+    const connectionClosedDuringInitialize =
+      error instanceof Error && /acp connection closed/i.test(error.message);
+    await waitForChildExit(child, 100);
+    const childExited = child.exitCode !== null || child.signalCode !== null;
+    if (!connectionClosedDuringInitialize && !childExited) {
+      return error;
+    }
+
+    return new AgentStartupError({
+      agentCommand: this.options.agentCommand,
+      exitCode: child.exitCode ?? null,
+      signal: child.signalCode ?? null,
+      stderrSummary: this.summarizeStartupStderr(startupStderr),
+      cause: error,
+    });
+  }
+
+  private selectAuthMethod(methods: AuthMethod[]): AuthSelection | undefined {
+    for (const method of methods) {
+      const envCredential = readEnvCredential(method.id);
+      if (envCredential) {
+        return {
+          methodId: method.id,
+          credential: envCredential,
+          source: "env",
+        };
+      }
+
+      const configCredential = resolveConfiguredAuthCredential(
+        method.id,
+        this.options.authCredentials,
+      );
+      if (typeof configCredential === "string" && configCredential.trim().length > 0) {
+        return {
+          methodId: method.id,
+          credential: configCredential,
+          source: "config",
+        };
+      }
+
+      const agentSpecificEnvCredential = this.readAgentSpecificEnvCredential(method.id);
+      if (agentSpecificEnvCredential) {
+        return {
+          methodId: method.id,
+          credential: agentSpecificEnvCredential,
+          source: "env",
+        };
+      }
+    }
+
+    for (const method of methods) {
+      const agentManagedSelection = this.selectAgentManagedAuthMethod(method.id);
+      if (agentManagedSelection) {
+        return agentManagedSelection;
+      }
+    }
+
+    return undefined;
+  }
+
+  private readAgentSpecificEnvCredential(methodId: string): string | undefined {
+    if (!this.isGrokBuildAcpCommand() || methodId !== "xai.api_key") {
+      return undefined;
+    }
+    const value = process.env.XAI_API_KEY;
+    return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+  }
+
+  private selectAgentManagedAuthMethod(methodId: string): AuthSelection | undefined {
+    if (!this.isGrokBuildAcpCommand() || methodId !== "cached_token") {
+      return undefined;
+    }
+    return {
+      methodId,
+      source: "agent",
+    };
+  }
+
+  private isGrokBuildAcpCommand(): boolean {
+    const { command, args } = resolveAgentCommandParts(
+      this.options.agentCommand,
+      this.options.agentArgv,
+    );
+    const executable = command
+      .replace(/\\/g, "/")
+      .split("/")
+      .pop()
+      ?.replace(/\.(cmd|exe|ps1)$/iu, "")
+      .toLowerCase();
+    return executable === "grok" && args[0] === "agent" && args[1] === "stdio";
+  }
+
+  private async authenticateIfRequired(
+    connection: ClientSideConnection,
+    methods: AuthMethod[],
+  ): Promise<void> {
+    if (methods.length === 0) {
+      return;
+    }
+
+    const selected = this.selectAuthMethod(methods);
+    if (!selected) {
+      if (this.options.authPolicy === "fail") {
+        throw new AuthPolicyError(
+          `agent advertised auth methods [${methods.map((m) => m.id).join(", ")}] but no matching credentials found`,
+        );
+      }
+
+      this.log(
+        `agent advertised auth methods [${methods.map((m) => m.id).join(", ")}] but no matching credentials found — skipping (agent may handle auth internally)`,
+      );
+      return;
+    }
+
+    await connection.authenticate({
+      methodId: selected.methodId,
+    });
+
+    this.log(`authenticated with method ${selected.methodId} (${selected.source})`);
+  }
+
+  private async handlePermissionRequest(
+    params: RequestPermissionRequest,
+  ): Promise<RequestPermissionResponse> {
+    if (this.cancellingSessionIds.has(params.sessionId)) {
+      return cancelledPermissionResponse();
+    }
+
+    const hostResponse = await this.tryHandlePermissionRequestWithHost(params);
+    if (hostResponse) {
+      return hostResponse;
+    }
+
+    const { response, recorded } = await this.resolvePermissionRequestFromMode(params);
+    if (!recorded) {
+      const decision = classifyPermissionDecision(params, response);
+      this.recordPermissionDecision(decision);
+    }
+
+    return response;
+  }
+
+  private async tryHandlePermissionRequestWithHost(
+    params: RequestPermissionRequest,
+  ): Promise<RequestPermissionResponse | undefined> {
+    if (!this.options.onPermissionRequest) {
+      return undefined;
+    }
+    const signal = this.cancellationSignalForSession(params.sessionId);
+    try {
+      const decision = await this.options.onPermissionRequest(
+        {
+          sessionId: params.sessionId,
+          raw: params,
+          inferredKind: inferToolKind(params),
+        },
+        { signal },
+      );
+      return this.hostPermissionDecisionResponse(params, signal, decision);
+    } catch (error) {
+      return this.hostPermissionErrorResponse(params, signal, error);
+    }
+  }
+
+  private hostPermissionDecisionResponse(
+    params: RequestPermissionRequest,
+    signal: AbortSignal,
+    decision: Parameters<typeof decisionToResponse>[1] | undefined,
+  ): RequestPermissionResponse | undefined {
+    if (signal.aborted || this.cancellingSessionIds.has(params.sessionId)) {
+      this.recordPermissionDecision("cancelled");
+      return cancelledPermissionResponse();
+    }
+    if (!decision) {
+      return undefined;
+    }
+    const response = decisionToResponse(params, decision);
+    this.recordPermissionDecision(classifyPermissionDecision(params, response));
+    return response;
+  }
+
+  private hostPermissionErrorResponse(
+    params: RequestPermissionRequest,
+    signal: AbortSignal,
+    error: unknown,
+  ): RequestPermissionResponse | undefined {
+    if (signal.aborted || this.cancellingSessionIds.has(params.sessionId)) {
+      this.recordPermissionDecision("cancelled");
+      return cancelledPermissionResponse();
+    }
+    // Fall through to the mode-based resolver so a host UI error
+    // doesn't take down the turn.
+    this.log(
+      `onPermissionRequest threw, falling through to mode-based resolver: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    return undefined;
+  }
+
+  private async resolvePermissionRequestFromMode(
+    params: RequestPermissionRequest,
+  ): Promise<{ response: RequestPermissionResponse; recorded: boolean }> {
+    try {
+      const result = await resolvePermissionRequestWithDetails(
+        params,
+        this.options.permissionMode,
+        this.options.nonInteractivePermissions ?? "deny",
+        this.options.permissionPolicy,
+      );
+      this.emitPermissionEscalation(result.escalation);
+      return { response: result.response, recorded: false };
+    } catch (error) {
+      return this.handleModePermissionError(params.sessionId, error);
+    }
+  }
+
+  private emitPermissionEscalation(
+    escalation: Parameters<NonNullable<AcpClientOptions["onPermissionEscalation"]>>[0] | undefined,
+  ): void {
+    if (escalation) {
+      this.eventHandlers.onPermissionEscalation?.(escalation);
+    }
+  }
+
+  private handleModePermissionError(
+    sessionId: string,
+    error: unknown,
+  ): { response: RequestPermissionResponse; recorded: boolean } {
+    if (!(error instanceof PermissionPromptUnavailableError)) {
+      throw error;
+    }
+    this.notePromptPermissionFailure(sessionId, error);
+    this.recordPermissionDecision("cancelled");
+    return { response: cancelledPermissionResponse(), recorded: true };
+  }
+
+  private attachAgentLifecycleObservers(
+    child: ChildProcessByStdio<Writable, Readable, Readable>,
+  ): void {
+    child.once("exit", (exitCode, signal) => {
+      this.recordAgentExit("process_exit", exitCode, signal);
+    });
+
+    child.once("close", (exitCode, signal) => {
+      this.recordAgentExit("process_close", exitCode, signal);
+    });
+
+    child.stdout.once("close", () => {
+      this.recordAgentExit("pipe_close", child.exitCode ?? null, child.signalCode ?? null);
+    });
+  }
+
+  private recordAgentExit(
+    reason: AgentDisconnectReason,
+    exitCode: number | null,
+    signal: NodeJS.Signals | null,
+  ): void {
+    if (this.lastAgentExit) {
+      return;
+    }
+
+    this.lastAgentExit = {
+      exitCode,
+      signal,
+      exitedAt: isoNow(),
+      reason,
+      unexpectedDuringPrompt: !this.closing && Boolean(this.activePrompt),
+    };
+    this.rejectPendingConnectionRequests(
+      new AgentDisconnectedError(reason, exitCode, signal, {
+        outputAlreadyEmitted: Boolean(this.activePrompt),
+      }),
+    );
+  }
+
+  private notePromptPermissionFailure(
+    sessionId: string,
+    error: PermissionPromptUnavailableError,
+  ): void {
+    if (!this.promptPermissionFailures.has(sessionId)) {
+      this.promptPermissionFailures.set(sessionId, error);
+    }
+  }
+
+  private consumePromptPermissionFailure(
+    sessionId: string,
+  ): PermissionPromptUnavailableError | undefined {
+    const error = this.promptPermissionFailures.get(sessionId);
+    if (error) {
+      this.promptPermissionFailures.delete(sessionId);
+    }
+    return error;
+  }
+
+  private async runConnectionRequest<T>(run: () => Promise<T>): Promise<T> {
+    return await new Promise<T>((resolve, reject) => {
+      const pending: PendingConnectionRequest = {
+        settled: false,
+        reject,
+      };
+
+      const finish = (cb: () => void) => {
+        if (pending.settled) {
+          return;
+        }
+        pending.settled = true;
+        this.pendingConnectionRequests.delete(pending);
+        cb();
+      };
+
+      this.pendingConnectionRequests.add(pending);
+      void Promise.resolve()
+        .then(run)
+        .then(
+          (value) => finish(() => resolve(value)),
+          (error) => finish(() => reject(error)),
+        );
+    });
+  }
+
+  private rejectPendingConnectionRequests(error: unknown): void {
+    for (const pending of this.pendingConnectionRequests) {
+      if (pending.settled) {
+        this.pendingConnectionRequests.delete(pending);
+        continue;
+      }
+      pending.settled = true;
+      this.pendingConnectionRequests.delete(pending);
+      pending.reject(error);
+    }
+  }
+
+  private async handleReadTextFile(params: ReadTextFileRequest): Promise<ReadTextFileResponse> {
+    try {
+      return await this.filesystem.readTextFile(params);
+    } catch (error) {
+      this.recordPermissionError(params.sessionId, error);
+      throw error;
+    }
+  }
+
+  private async handleWriteTextFile(params: WriteTextFileRequest): Promise<WriteTextFileResponse> {
+    try {
+      return await this.filesystem.writeTextFile(params);
+    } catch (error) {
+      this.recordPermissionError(params.sessionId, error);
+      throw error;
+    }
+  }
+
+  private async handleCreateTerminal(
+    params: CreateTerminalRequest,
+  ): Promise<CreateTerminalResponse> {
+    try {
+      return await this.terminalManager.createTerminal(params);
+    } catch (error) {
+      this.recordPermissionError(params.sessionId, error);
+      throw error;
+    }
+  }
+
+  private async handleTerminalOutput(
+    params: TerminalOutputRequest,
+  ): Promise<TerminalOutputResponse> {
+    return await this.terminalManager.terminalOutput(params);
+  }
+
+  private async handleWaitForTerminalExit(
+    params: WaitForTerminalExitRequest,
+  ): Promise<WaitForTerminalExitResponse> {
+    return await this.terminalManager.waitForTerminalExit(params);
+  }
+
+  private async handleKillTerminal(params: KillTerminalRequest): Promise<KillTerminalResponse> {
+    return await this.terminalManager.killTerminal(params);
+  }
+
+  private async handleReleaseTerminal(
+    params: ReleaseTerminalRequest,
+  ): Promise<ReleaseTerminalResponse> {
+    return await this.terminalManager.releaseTerminal(params);
+  }
+
+  private cancellationSignalForSession(sessionId: string): AbortSignal {
+    let controller = this.permissionAbortControllers.get(sessionId);
+    if (!controller) {
+      controller = new AbortController();
+      this.permissionAbortControllers.set(sessionId, controller);
+    }
+    return controller.signal;
+  }
+
+  private abortAndDropPermissionSignal(sessionId: string): void {
+    const controller = this.permissionAbortControllers.get(sessionId);
+    if (controller) {
+      controller.abort();
+      this.permissionAbortControllers.delete(sessionId);
+    }
+  }
+
+  private recordPermissionDecision(decision: "approved" | "denied" | "cancelled"): void {
+    this.permissionStats.requested += 1;
+    if (decision === "approved") {
+      this.permissionStats.approved += 1;
+      return;
+    }
+    if (decision === "denied") {
+      this.permissionStats.denied += 1;
+      return;
+    }
+    this.permissionStats.cancelled += 1;
+  }
+
+  private recordPermissionError(sessionId: string, error: unknown): void {
+    if (error instanceof PermissionPromptUnavailableError) {
+      this.notePromptPermissionFailure(sessionId, error);
+      this.recordPermissionDecision("cancelled");
+      return;
+    }
+    if (error instanceof PermissionDeniedError) {
+      this.recordPermissionDecision("denied");
+    }
+  }
+
+  private async handleSessionUpdate(notification: SessionNotification): Promise<void> {
+    const sequence = ++this.observedSessionUpdates;
+    this.sessionUpdateChain = this.sessionUpdateChain.then(async () => {
+      try {
+        if (!this.suppressSessionUpdates) {
+          this.eventHandlers.onSessionUpdate?.(notification);
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.log(`session update handler failed: ${message}`);
+      } finally {
+        this.processedSessionUpdates = sequence;
+      }
+    });
+
+    await this.sessionUpdateChain;
+  }
+
+  private async waitForSessionUpdateDrain(idleMs: number, timeoutMs: number): Promise<void> {
+    const normalizedIdleMs = Math.max(0, idleMs);
+    const normalizedTimeoutMs = Math.max(normalizedIdleMs, timeoutMs);
+    const deadline = Date.now() + normalizedTimeoutMs;
+    let lastObserved = this.observedSessionUpdates;
+    let idleSince = Date.now();
+
+    while (Date.now() <= deadline) {
+      const observed = this.observedSessionUpdates;
+      if (observed !== lastObserved) {
+        lastObserved = observed;
+        idleSince = Date.now();
+      }
+
+      if (
+        this.processedSessionUpdates === this.observedSessionUpdates &&
+        Date.now() - idleSince >= normalizedIdleMs
+      ) {
+        await this.sessionUpdateChain;
+        if (this.processedSessionUpdates === this.observedSessionUpdates) {
+          return;
+        }
+      }
+
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, DRAIN_POLL_INTERVAL_MS);
+      });
+    }
+
+    throw new Error(`Timed out waiting for session replay drain after ${normalizedTimeoutMs}ms`);
+  }
+
+  async waitForSessionUpdatesIdle(options?: {
+    idleMs?: number;
+    timeoutMs?: number;
+  }): Promise<void> {
+    await this.waitForSessionUpdateDrain(options?.idleMs ?? 0, options?.timeoutMs ?? 0);
+  }
+}

@@ -3,21 +3,22 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { AcpxRuntime, createAgentRegistry, createFileSessionStore } from "acpx/runtime";
+import { AcpxRuntime, createAgentRegistry, createFileSessionStore } from "../dist/acpx-runtime/runtime.js";
 import { normalize } from "../extensions/pi-strings/runtime/acpx-runtime.js";
-
 const fixture = new URL("./fixtures/fake-acp-agent.ts", import.meta.url).pathname;
 
-async function runtimeHarness() {
+async function runtimeHarness(options: { permissionMode?: "approve-reads" | "deny-all"; permissionPolicy?: { autoApprove?: string[]; defaultAction?: "approve" | "deny" } } = {}) {
   const root = await mkdtemp(join(tmpdir(), "pi-strings-acpx-contract-"));
-  const runtime = new AcpxRuntime({
+  const runtimeOptions = {
     cwd: process.cwd(),
     sessionStore: createFileSessionStore({ stateDir: join(root, "sessions") }),
     agentRegistry: createAgentRegistry({ overrides: { fixture: [process.execPath, "--import", "tsx", fixture, join(root, "fixture-state.json")] } }),
-    permissionMode: "deny-all",
-    nonInteractivePermissions: "deny",
+    permissionMode: options.permissionMode ?? "deny-all",
+    nonInteractivePermissions: "deny" as const,
+    ...(options.permissionPolicy ? { permissionPolicy: options.permissionPolicy } : {}),
     timeoutMs: 0,
-  });
+  };
+  const runtime = new AcpxRuntime(runtimeOptions);
   return { runtime, root };
 }
 
@@ -58,7 +59,17 @@ test("acpx fixture cancellation settles a blocked turn as cancelled", async () =
   await runtime.close({ handle, reason: "done", discardPersistentState: true });
 });
 
-test("acpx 0.13 runtime exposes no genuine steering capability", async () => {
+test("acpx native permission policy settles reads and mutations without prompting", async () => {
+  const { runtime } = await runtimeHarness({ permissionMode: "deny-all", permissionPolicy: { autoApprove: ["read", "search"], defaultAction: "deny" } });
+  const handle = await runtime.ensureSession({ sessionKey: "permissions", agent: "fixture", mode: "persistent", cwd: process.cwd() });
+  const result = await collect(runtime.startTurn({ handle, text: "PERMISSIONS", requestId: "permissions", timeoutMs: 2_000, mode: "prompt" }));
+  assert.match(result.text, /read:selected:allow/);
+  assert.match(result.text, /edit:selected:reject/);
+  assert.equal(result.status, "completed");
+  await runtime.close({ handle, reason: "done", discardPersistentState: true });
+});
+
+test("vendored ACPX runtime exposes no genuine steering capability", async () => {
   const { runtime } = await runtimeHarness();
   const capabilities = await runtime.getCapabilities?.({});
   assert.equal(capabilities?.controls.includes("session/steer" as never), false);

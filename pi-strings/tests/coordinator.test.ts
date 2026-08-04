@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { Coordinator, resumeIdentityMatches } from "../extensions/pi-strings/orchestration/coordinator.ts";
 import { StateStore } from "../extensions/pi-strings/persistence/state-store.ts";
-import type { NormalizedEvent, Profile, RuntimeHandle, RuntimePort, RuntimeTerminal, RuntimeTurn } from "../extensions/pi-strings/domain/types.ts";
+import type { NormalizedEvent, Profile, RuntimeHandle, RuntimePort, RuntimeStatus, RuntimeTerminal, RuntimeTurn } from "../extensions/pi-strings/domain/types.ts";
 
 class Deferred<T> {
   promise: Promise<T>;
@@ -78,8 +78,11 @@ class FakeRuntime implements RuntimePort {
   ensureGate?: Promise<void>;
   lastPrompt?: string;
   setConfigOptionCalls: Array<{ key: string; value: string }> = [];
-  async ensureSession(input: { name: string; cwd: string }): Promise<RuntimeHandle> {
+  currentModelId?: string;
+  availableModelIds = ["primary", "backup", "third"];
+  async ensureSession(input: { name: string; cwd: string; profile?: Profile }): Promise<RuntimeHandle> {
     this.ensureCalls += 1;
+    if (input.profile?.model) this.currentModelId = input.profile.model;
     await this.ensureGate;
     return { sessionKey: input.name, backend: "fake", runtimeSessionName: input.name, cwd: input.cwd, backendSessionId: `session-${input.name}` };
   }
@@ -88,8 +91,12 @@ class FakeRuntime implements RuntimePort {
     this.lastPrompt = input.prompt;
     const turn = new ControlledTurn(input.requestId); this.turns.push(turn); return turn;
   }
+  async getStatus(_handle: RuntimeHandle): Promise<RuntimeStatus> {
+    return { modelDiscoverySupported: true, ...(this.currentModelId ? { currentModelId: this.currentModelId } : {}), availableModelIds: this.availableModelIds };
+  }
   async setConfigOption(input: { handle: RuntimeHandle; key: string; value: string }): Promise<void> {
     this.setConfigOptionCalls.push({ key: input.key, value: input.value });
+    if (input.key === "model") this.currentModelId = input.value;
   }
   async close(_handle: RuntimeHandle, _reason: string, discardPersistentState: boolean): Promise<void> {
     this.closed = true;
@@ -691,6 +698,36 @@ test("sequential turns preserve worker session identity and use distinct request
   } finally { await coordinator.shutdown(); }
 });
 
+test("direct worker restart preserves exact tools and selected model", async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), "pi-strings-direct-reconnect-"));
+  const firstProfiles: Profile[] = [];
+  const firstRuntime = new FakeRuntime();
+  const first = new Coordinator(process.cwd(), {
+    stateDir,
+    profiles: {},
+    runtimeFactory: (_cwd, _state, profile) => { firstProfiles.push(profile); return firstRuntime; },
+  });
+  try {
+    const spawned = await first.execute({ action: "spawn", name: "restricted", agent: "pi", role: "writer", tools: ["read", "bash"], model: "primary", cwd: process.cwd() });
+    assert.equal(spawned.ok, true);
+    assert.deepEqual(firstProfiles[0]?.tools, ["read", "bash"]);
+  } finally { await first.shutdown(); }
+  const secondProfiles: Profile[] = [];
+  const secondRuntime = new FakeRuntime();
+  const second = new Coordinator(process.cwd(), {
+    stateDir,
+    profiles: {},
+    runtimeFactory: (_cwd, _state, profile) => { secondProfiles.push(profile); return secondRuntime; },
+  });
+  try {
+    const listed = await second.execute({ action: "list" });
+    assert.equal(listed.ok, true);
+    assert.deepEqual(secondProfiles[0]?.tools, ["read", "bash"]);
+    assert.equal(secondProfiles[0]?.model, "primary");
+    assert.equal(secondProfiles[0]?.role, "writer");
+  } finally { await second.shutdown(); }
+});
+
 test("idle worker reconnects with the same session after coordinator restart", async () => {
   const stateDir = await mkdtemp(join(tmpdir(), "pi-strings-reconnect-"));
   const profile = { agent: "pi", role: "read-only" as const, tools: ["read"], timeoutMs: 10_000, cancellationGraceMs: 100, maxOutputBytes: 4_096 };
@@ -934,7 +971,50 @@ test("exceeding the turn budget cancels and terminalizes as failed", async () =>
   } finally { await coordinator.shutdown(); }
 });
 
-test("a worker repeating an identical tool call is stopped as stalled", async () => {
+test("streaming updates for one tool call do not trigger stall detection", async () => {
+  const { coordinator, runtimes } = await harnessProfiles({ "pi-reviewer": { ...REVIEWER, maxTurns: 2 } });
+  try {
+    await spawnProfile(coordinator, "updates", "pi-reviewer", process.cwd());
+    const sent = await coordinator.execute({ action: "send", name: "updates", prompt: "inspect" });
+    assert.equal(sent.ok, true);
+    const turn = runtimes[0]!.turns[0]!;
+    for (const text of ["tool call (pending)", "tool call (pending)", "tool call (pending): .", "ls (completed): ."]) {
+      turn.emit({ type: "tool", text, toolCallId: "call-1", status: "pending" });
+    }
+    turn.finish({ status: "completed" });
+    if (sent.ok) {
+      await coordinator.execute({ action: "wait", requestId: sent.details.requestId, waitTimeoutMs: 1_000 });
+      const result = await coordinator.execute({ action: "result", requestId: sent.details.requestId });
+      assert.equal(result.ok && result.details.status, "completed");
+      assert.equal(turn.cancelled, false);
+    }
+  } finally { await coordinator.shutdown(); }
+});
+
+test("parallel same-tool calls use completed inputs instead of provisional text for stalls", async () => {
+  const { coordinator, runtimes } = await harnessProfiles({ "pi-reviewer": REVIEWER });
+  try {
+    await spawnProfile(coordinator, "parallel-calls", "pi-reviewer");
+    const sent = await coordinator.execute({ action: "send", name: "parallel-calls", prompt: "inspect" });
+    assert.equal(sent.ok, true);
+    const turn = runtimes[0]!.turns[0]!;
+    for (let i = 0; i < 4; i += 1) {
+      turn.emit({ type: "tool", text: "read (pending)", toolCallId: `parallel-${i}`, status: "in_progress" });
+    }
+    for (let i = 0; i < 4; i += 1) {
+      turn.emit({ type: "tool", text: "read (completed)", toolCallId: `parallel-${i}`, toolFingerprint: `read\u0000{\"path\":\"file-${i}.ts\"}`, status: "completed" });
+    }
+    turn.finish({ status: "completed" });
+    if (sent.ok) {
+      await coordinator.execute({ action: "wait", requestId: sent.details.requestId, waitTimeoutMs: 1_000 });
+      const result = await coordinator.execute({ action: "result", requestId: sent.details.requestId });
+      assert.equal(result.ok && result.details.status, "completed");
+      assert.equal(turn.cancelled, false);
+    }
+  } finally { await coordinator.shutdown(); }
+});
+
+test("a worker repeating distinct identical tool calls is stopped as stalled", async () => {
   const { coordinator, runtimes } = await harnessProfiles({ "pi-reviewer": REVIEWER });
   try {
     await spawnProfile(coordinator, "stall", "pi-reviewer", process.cwd());
@@ -942,7 +1022,7 @@ test("a worker repeating an identical tool call is stopped as stalled", async ()
     assert.equal(sent.ok, true);
     const turn = runtimes[0]!.turns[0]!;
     turn.onCancel = () => turn.finishResult({ status: "cancelled" });
-    for (let i = 0; i < 4; i += 1) turn.emit({ type: "tool", text: "read same" });
+    for (let i = 0; i < 4; i += 1) turn.emit({ type: "tool", text: "read same", toolCallId: `call-${i}`, toolFingerprint: "read\u0000{\"path\":\"same\"}", status: "completed" });
     if (sent.ok) {
       await coordinator.execute({ action: "wait", requestId: sent.details.requestId, waitTimeoutMs: 1_000 });
       const result = await coordinator.execute({ action: "result", requestId: sent.details.requestId });
@@ -950,6 +1030,84 @@ test("a worker repeating an identical tool call is stopped as stalled", async ()
       assert.equal(result.ok && (result.details.failure as { code?: string } | undefined)?.code, "STALLED");
       assert.equal(turn.cancelled, true);
     }
+  } finally { await coordinator.shutdown(); }
+});
+
+test("direct workers default to Pi and accept an explicit ACP agent", async () => {
+  const { coordinator, runtimes } = await harnessProfiles({ "pi-reviewer": REVIEWER });
+  try {
+    const pi = await coordinator.execute({ action: "spawn", name: "default", cwd: process.cwd() });
+    assert.equal(pi.ok && pi.details.agent, "pi");
+    const open = await coordinator.execute({ action: "spawn", name: "open", agent: "opencode", cwd: process.cwd() });
+    assert.equal(open.ok && open.details.agent, "opencode");
+    const overridden = await coordinator.execute({ action: "spawn", name: "override", profile: "pi-reviewer", agent: "opencode", cwd: process.cwd() });
+    assert.equal(overridden.ok && overridden.details.agent, "opencode");
+    assert.equal(runtimes.length, 3);
+  } finally { await coordinator.shutdown(); }
+});
+
+test("op_status exposes discovered models and send records selected model provenance", async () => {
+  const profile: Profile = { ...REVIEWER, model: "primary" };
+  const { coordinator, runtimes } = await harnessProfiles({ "pi-reviewer": profile });
+  try {
+    await spawnProfile(coordinator, "status", "pi-reviewer");
+    const status = await coordinator.execute({ action: "status", name: "status" });
+    assert.equal(status.ok, true);
+    assert.equal(status.ok && status.details.currentModelId, "primary");
+    assert.deepEqual(status.ok && status.details.availableModelIds, ["primary", "backup", "third"]);
+    const sent = await coordinator.execute({ action: "send", name: "status", prompt: "inspect", model: "backup" });
+    assert.equal(sent.ok && sent.details.requestedModel, "backup");
+    const turn = runtimes[0]!.turns[0]!;
+    turn.finish({ status: "completed" });
+    if (sent.ok) {
+      await coordinator.execute({ action: "wait", requestId: sent.details.requestId, waitTimeoutMs: 1_000 });
+      const result = await coordinator.execute({ action: "result", requestId: sent.details.requestId });
+      assert.equal(result.ok && result.details.requestedModel, "backup");
+    }
+    assert.deepEqual(runtimes[0]!.setConfigOptionCalls, [{ key: "model", value: "backup" }]);
+  } finally { await coordinator.shutdown(); }
+});
+
+test("unsupported discovery and selection fail explicitly", async () => {
+  const { coordinator, runtimes } = await harnessProfiles({ "pi-reviewer": REVIEWER });
+  try {
+    await spawnProfile(coordinator, "unsupported", "pi-reviewer");
+    (runtimes[0] as unknown as { getStatus?: unknown }).getStatus = undefined;
+    const discovery = await coordinator.execute({ action: "send", name: "unsupported", prompt: "inspect", model: "backup" });
+    assert.equal(discovery.ok, false);
+    assert.equal(!discovery.ok && discovery.error.code, "MODEL_DISCOVERY_UNSUPPORTED");
+  } finally { await coordinator.shutdown(); }
+
+  const selectionHarness = await harnessProfiles({ "pi-reviewer": REVIEWER });
+  try {
+    await spawnProfile(selectionHarness.coordinator, "unsupported", "pi-reviewer");
+    (selectionHarness.runtimes[0] as unknown as { setConfigOption?: unknown }).setConfigOption = undefined;
+    const selection = await selectionHarness.coordinator.execute({ action: "send", name: "unsupported", prompt: "inspect", model: "backup" });
+    assert.equal(selection.ok, false);
+    assert.equal(!selection.ok && selection.error.code, "MODEL_SELECTION_UNSUPPORTED");
+  } finally { await selectionHarness.coordinator.shutdown(); }
+});
+
+test("direct spawn unavailable models clean up without registering a worker", async () => {
+  const { coordinator, runtimes } = await harnessProfiles({});
+  try {
+    const result = await coordinator.execute({ action: "spawn", name: "bad-model", model: "missing", cwd: process.cwd() });
+    assert.equal(result.ok, false);
+    assert.equal(!result.ok && result.error.code, "MODEL_UNAVAILABLE");
+    assert.equal(runtimes[0]?.closed, true);
+    const listed = await coordinator.execute({ action: "list" });
+    assert.equal(listed.ok && (listed.details.workers as unknown[]).length, 0);
+  } finally { await coordinator.shutdown(); }
+});
+
+test("requested unavailable models fail explicitly before a turn starts", async () => {
+  const { coordinator, runtimes } = await harnessProfiles({ "pi-reviewer": REVIEWER });
+  try {
+    await spawnProfile(coordinator, "unavailable", "pi-reviewer");
+    const result = await coordinator.execute({ action: "send", name: "unavailable", prompt: "inspect", model: "missing" });
+    assert.equal(result.ok, false);
+    assert.equal(!result.ok && result.error.code, "MODEL_UNAVAILABLE");
+    assert.equal(runtimes[0]!.turns.length, 0);
   } finally { await coordinator.shutdown(); }
 });
 
@@ -968,6 +1126,27 @@ test("a retryable failure retries on the fallback model and completes", async ()
       const result = await coordinator.execute({ action: "result", requestId: sent.details.requestId });
       assert.equal(result.ok && result.details.status, "completed");
       assert.deepEqual(result.ok && (result.details.attemptModels as string[] | undefined), ["primary", "backup"]);
+      assert.equal(result.ok && (result.details.attempts as number | undefined), 2);
+      assert.deepEqual(runtimes[0]!.setConfigOptionCalls, [{ key: "model", value: "backup" }]);
+    }
+  } finally { await coordinator.shutdown(); }
+});
+
+test("a missing primary model does not attribute fallback zero to attempt one", async () => {
+  const retryable: Profile = { ...REVIEWER, fallbackModels: ["backup"], maxAttempts: 2 };
+  const { coordinator, runtimes } = await harnessProfiles({ "pi-reviewer": retryable });
+  try {
+    await spawnProfile(coordinator, "fallback-only", "pi-reviewer", process.cwd());
+    const sent = await coordinator.execute({ action: "send", name: "fallback-only", prompt: "work" });
+    assert.equal(sent.ok, true);
+    runtimes[0]!.turns[0]!.finish({ status: "failed", error: { code: "PROVIDER_OVERLOAD", message: "capacity", retryable: true } });
+    await waitFor(async () => runtimes[0]!.turns.length >= 2);
+    runtimes[0]!.turns[1]!.finish({ status: "completed" });
+    if (sent.ok) {
+      await coordinator.execute({ action: "wait", requestId: sent.details.requestId, waitTimeoutMs: 1_000 });
+      const result = await coordinator.execute({ action: "result", requestId: sent.details.requestId });
+      assert.equal(result.ok && result.details.status, "completed");
+      assert.deepEqual(result.ok && (result.details.attemptModels as string[] | undefined), ["backup"]);
       assert.equal(result.ok && (result.details.attempts as number | undefined), 2);
       assert.deepEqual(runtimes[0]!.setConfigOptionCalls, [{ key: "model", value: "backup" }]);
     }

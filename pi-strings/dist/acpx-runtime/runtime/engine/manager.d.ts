@@ -1,0 +1,82 @@
+import { AcpClient } from "../../acp/client.js";
+import type { SessionRecord } from "../../types.js";
+import type { AcpRuntimeEvent, AcpRuntimeHandle, AcpRuntimeOptions, AcpRuntimePromptMode, AcpRuntimeStatus, AcpRuntimeTurnAttachment, AcpRuntimeTurn } from "../public/contract.js";
+import { type SessionAgentOptions } from "./session-options.js";
+export type AcpRuntimeManagerDeps = {
+    clientFactory?: (options: ConstructorParameters<typeof AcpClient>[0]) => AcpClient;
+};
+export declare class AcpRuntimeManager {
+    private readonly options;
+    private readonly deps;
+    private readonly activeControllers;
+    private readonly pendingPersistentClients;
+    private readonly closingActiveRecords;
+    constructor(options: AcpRuntimeOptions, deps?: AcpRuntimeManagerDeps);
+    private createClient;
+    private readPendingPersistentClient;
+    private closePendingPersistentClient;
+    private refreshClosedState;
+    private retainPersistentClientAfterTurn;
+    private withRuntimeControlSession;
+    ensureSession(input: {
+        sessionKey: string;
+        agent: string;
+        mode: "persistent" | "oneshot";
+        cwd?: string;
+        resumeSessionId?: string;
+        sessionOptions?: SessionAgentOptions;
+    }): Promise<SessionRecord>;
+    private createAndSaveRuntimeRecord;
+    private keepPersistentClient;
+    startTurn(input: {
+        handle: AcpRuntimeHandle;
+        text: string;
+        attachments?: AcpRuntimeTurnAttachment[];
+        mode: AcpRuntimePromptMode;
+        sessionMode: "persistent" | "oneshot";
+        requestId: string;
+        timeoutMs?: number;
+        signal?: AbortSignal;
+    }): AcpRuntimeTurn;
+    private runRuntimeTurnTask;
+    private prepareRuntimeTurn;
+    private createTurnClient;
+    private createRuntimeTurnCheckpoint;
+    private buildRuntimeTurnController;
+    private waitForRuntimeControlSession;
+    private requestRuntimeTurnCancel;
+    private setRuntimeResolvedSessionConfigOption;
+    private applyRuntimeConfigOptionState;
+    private installRuntimeTurnEventHandlers;
+    private emitRuntimeTurnEvent;
+    private connectRuntimeTurn;
+    private connectRuntimeTurnClient;
+    private publishRuntimeTurnController;
+    private resolveRuntimeTurnReady;
+    private emitRuntimeTurnLoadStatus;
+    private cancelRuntimeTurnBeforePrompt;
+    private applyPendingRuntimeTurnCancel;
+    private saveCompletedRuntimeTurn;
+    private failRuntimeTurn;
+    private finalizeRuntimeTurn;
+    private finalizeRuntimeTurnRecord;
+    runTurn(input: {
+        handle: AcpRuntimeHandle;
+        text: string;
+        attachments?: AcpRuntimeTurnAttachment[];
+        mode: AcpRuntimePromptMode;
+        sessionMode: "persistent" | "oneshot";
+        requestId: string;
+        timeoutMs?: number;
+        signal?: AbortSignal;
+    }): AsyncIterable<AcpRuntimeEvent>;
+    getStatus(handle: AcpRuntimeHandle): Promise<AcpRuntimeStatus>;
+    setMode(handle: AcpRuntimeHandle, mode: string, sessionMode?: "persistent" | "oneshot"): Promise<void>;
+    setConfigOption(handle: AcpRuntimeHandle, key: string, value: string, sessionMode?: "persistent" | "oneshot"): Promise<void>;
+    cancel(handle: AcpRuntimeHandle): Promise<void>;
+    close(handle: AcpRuntimeHandle, options?: {
+        discardPersistentState?: boolean;
+    }): Promise<void>;
+    private closeBackendSession;
+    private requireRecord;
+}

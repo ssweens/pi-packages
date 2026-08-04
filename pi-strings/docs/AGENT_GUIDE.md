@@ -8,7 +8,7 @@ Delegate only when independent context, parallelism, specialization, or adversar
 
 ## 2. Tool calls
 
-The extension exposes a family of seven `op_*` tools (`op_spawn`, `op_send`, `op_wait`, `op_result`, `op_list`, `op_cancel`, `op_close`) with strict per-tool schemas. Inspect persistent workers before creating new ones:
+The extension exposes eight strict-schema `op_*` tools (`op_spawn`, `op_status`, `op_send`, `op_wait`, `op_result`, `op_list`, `op_cancel`, `op_close`). Inspect persistent workers before creating new ones:
 
 ```json
 {"tool":"op_list","input":{}}
@@ -20,17 +20,27 @@ Project to specific live workers when you already know their names:
 {"tool":"op_list","input":{"names":["audit","fix"]}}
 ```
 
-Spawn read-only workers in the parent checkout:
+Spawn workers directly from an ACP agent; `agent` defaults to `pi`, and direct workers default to safe read-only tools:
 
 ```json
-{"tool":"op_spawn","input":{"name":"audit","profile":"pi-reviewer","cwd":"/absolute/path/to/repo"}}
+{"tool":"op_spawn","input":{"name":"audit","agent":"opencode","cwd":"/absolute/path/to/repo"}}
+{"tool":"op_spawn","input":{"name":"default"}}
 ```
 
-Spawn writers in the parent checkout (shared by default) or in a linked worktree (`isolation: "worktree"`):
+Profiles remain optional reusable policy bundles. Spawn a configured profile when its role, tools, isolation, or timeout policy is desired:
 
 ```json
 {"tool":"op_spawn","input":{"name":"fix","profile":"pi-writer","cwd":"/absolute/path/to/repo"}}
 ```
+
+Use `op_status` to inspect model discovery, then select a model at spawn or send time:
+
+```json
+{"tool":"op_status","input":{"name":"audit"}}
+{"tool":"op_send","input":{"name":"audit","model":"provider/model","prompt":"Inspect ..."}}
+```
+
+Unavailable models and runtimes without discovery/selection support fail explicitly. A request result records `requestedModel` (and retry attempt models when configured).
 
 Start one normal turn and retain its request ID:
 

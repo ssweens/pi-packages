@@ -11,11 +11,13 @@ test("default read-only Pi profile excludes shell and mutation tools", async () 
   assert.equal(profiles["pi-reviewer"]?.tools.includes("bash"), false);
 });
 
-test("unverified external adapters cannot claim read-only policy", async () => {
+test("external adapters use the native ACPX read-only permission mode", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-strings-config-"));
   await mkdir(join(root, ".pi"));
-  await writeFile(join(root, ".pi", "pi-strings.json"), JSON.stringify({ profiles: { unsafe: { agent: "claude", role: "read-only", tools: [] } } }));
-  await assert.rejects(loadProfiles(root), (error: unknown) => (error as { code?: string }).code === "POLICY_UNENFORCEABLE");
+  await writeFile(join(root, ".pi", "pi-strings.json"), JSON.stringify({ profiles: { external: { agent: "claude", role: "read-only", tools: ["read", "grep", "find", "ls"] } } }));
+  const profiles = await loadProfiles(root);
+  assert.equal(profiles.external?.agent, "claude");
+  assert.equal(profiles.external?.role, "read-only");
 });
 
 test("invalid explicit profile bounds fail instead of becoming defaults", async () => {

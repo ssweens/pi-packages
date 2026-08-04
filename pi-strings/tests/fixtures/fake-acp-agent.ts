@@ -30,6 +30,19 @@ const agent: any = {
     const state = await load(); const session = state[params.sessionId] ??= {};
     const set = /SET:([^\s]+)/.exec(text)?.[1]; if (set) { session.nonce = set; await save(state); }
     if (text.includes("WAIT")) await new Promise<void>(resolve => waits.set(params.sessionId, resolve));
+    if (text.includes("PERMISSIONS")) {
+      for (const kind of ["read", "edit"]) {
+        const permission = await connection.requestPermission({
+          sessionId: params.sessionId,
+          toolCall: { toolCallId: `permission-${kind}`, title: kind, kind },
+          options: [
+            { kind: "allow_once", name: "Allow once", optionId: "allow" },
+            { kind: "reject_once", name: "Reject once", optionId: "reject" },
+          ],
+        });
+        await connection.sessionUpdate({ sessionId: params.sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: `${kind}:${permission.outcome.outcome}:${permission.outcome.outcome === "selected" ? permission.outcome.optionId : "cancelled"}` } } });
+      }
+    }
     const output = text.includes("GET") ? `NONCE:${session.nonce ?? "missing"}` : text.includes("WAIT") ? "CANCELLED" : "READY";
     await connection.sessionUpdate({ sessionId: params.sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: output } } });
     return { stopReason: text.includes("WAIT") ? "cancelled" : "end_turn" };

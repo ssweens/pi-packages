@@ -34,22 +34,36 @@ export default function piStrings(pi: ExtensionAPI): void {
   register({
     name: "op_spawn",
     label: "Spawn worker",
-    description: `Create or restore a named worker from a configured profile. The name must match ${NAME_PATTERN} and be unique among live workers; the profile must exist in config; one live writer per canonical cwd is enforced; worktree profiles must target a linked worktree via cwd; resumeSessionId restores only when agent, role, profile, and cwd match the original session.`,
+    description: `Create or restore a named worker directly from an ACP agent (agent defaults to pi) or from an optional reusable profile. The name must match ${NAME_PATTERN}; one live writer per canonical cwd is enforced; worktree profiles must target a linked worktree via cwd; resumeSessionId restores only when agent, role, profile, and cwd match the original session. Direct workers default to safe read-only tools; optional model is validated against live ACPX discovery before admission.`,
     parameters: Type.Object({
       name: Type.String(),
-      profile: Type.String(),
+      profile: Type.Optional(Type.String()),
+      agent: Type.Optional(Type.String()),
+      role: Type.Optional(Type.Union([Type.Literal("read-only"), Type.Literal("writer")])),
+      tools: Type.Optional(Type.Array(Type.String())),
       cwd: Type.Optional(Type.String()),
       resumeSessionId: Type.Optional(Type.String()),
+      model: Type.Optional(Type.String()),
     }, { additionalProperties: false }),
     action: "spawn",
   });
   register({
+    name: "op_status",
+    label: "Worker model status",
+    description: "Discover the current and available model IDs for a live worker through ACPX getStatus. Discovery must be advertised by the runtime; unsupported discovery is an explicit error.",
+    parameters: Type.Object({
+      name: Type.String(),
+    }, { additionalProperties: false }),
+    action: "status",
+  });
+  register({
     name: "op_send",
     label: "Send turn",
-    description: `Start one turn on a worker. The prompt is decorated with the worker's role and acceptance contracts; the appended decoration is returned as decoratedPromptSuffix. Returns status "running" plus a requestId; do not send again until the request is terminal (use op_wait). requestTimeoutMs bounds the entire request (default: the profile's timeoutMs). predecessorRequestId reassigns from a cancelled, failed, or timed-out request whose worker has been closed.`,
+    description: `Start one turn on a worker. The prompt is decorated with the worker's role and acceptance contracts; the appended decoration is returned as decoratedPromptSuffix. An optional model is discovered and selected before this turn; unavailable or unsupported models fail explicitly. Returns status "running" plus a requestId; do not send again until the request is terminal (use op_wait). requestTimeoutMs bounds the entire request (default: the profile's timeoutMs). predecessorRequestId reassigns from a cancelled, failed, or timed-out request whose worker has been closed.`,
     parameters: Type.Object({
       name: Type.String(),
       prompt: Type.String(),
+      model: Type.Optional(Type.String()),
       requestTimeoutMs: Type.Optional(Type.Number()),
       predecessorRequestId: Type.Optional(Type.String()),
     }, { additionalProperties: false }),

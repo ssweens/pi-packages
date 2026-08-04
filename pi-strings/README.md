@@ -2,7 +2,7 @@
 
 Reliable multi-agent orchestration for [Pi](https://github.com/earendil-works/pi), using ACP rather than terminal scraping.
 
-`pi-strings` keeps the current Pi session in control while named workers run through the exact-pinned `acpx/runtime` API. Every agent, including Pi, uses the same `AcpxRuntimePort`; Pi is exposed through the vendored ACP adapter command.
+`pi-strings` keeps the current Pi session in control while named workers run through a vendored ACPX runtime snapshot. Every agent, including Pi, uses the same `AcpxRuntimePort`; Pi is exposed through the vendored ACP adapter command.
 
 ## Design promises
 
@@ -10,18 +10,19 @@ Reliable multi-agent orchestration for [Pi](https://github.com/earendil-works/pi
 - One persistent worker session has at most one active turn; different workers may run concurrently.
 - A normal `send` starts a turn. After terminal completion, another ordinary `send` continues the same persistent session. There is no in-flight steering, question, or reply product surface.
 - **Shared checkout is the default for writers.** One live writer per canonical cwd; a second writer in the same cwd is rejected. Worktree isolation is an opt-in compatibility mode (`isolation: "worktree"`), not a requirement. Future stronger isolation may use CoW temp copies.
-- Read-only workers use the configured read-only profile. Writers use the writer profile with `approve-reads` permissions; read-only profiles use `deny-all`.
-- ACPX is the only production runtime port. Non-interactive permissions use `deny`.
+- Workers can be spawned directly from any ACP agent (`agent` defaults to `pi`) with safe read-only defaults, or from an optional configured profile. All roles use ACPX's native permission controls: reads/searches are auto-approved, and mutation requests settle without an unanswered prompt.
+- ACPX is the only production runtime and permission layer. pi-strings passes ACPX-native permission options; it does not implement provider-specific callbacks or custom permission matching.
 - The coordinator owns request deadlines. A timed-out request is terminalized as `timed_out`, cleaned up within bounded grace, and leaves its worker unusable until explicit close/replacement.
 - Cancellation, timeout, provider failure, and transport failure are never reported as success.
 - tmux is optional for humans. Automation never uses `send-keys`, pane scraping, or prompt detection.
 
 ## Agent tools
 
-The extension registers seven `op_*` tools with strict per-tool schemas:
+The extension registers eight `op_*` tools with strict per-tool schemas:
 
-- `op_spawn` — create or restore a named worker from a profile
-- `op_send` — start an ordinary turn (`requestTimeoutMs` bounds the entire request; default is the profile `timeoutMs`)
+- `op_spawn` — create or restore a worker directly from an ACP agent (`agent` defaults to `pi`) or an optional profile; direct workers default to read-only `read`, `grep`, `find`, and `ls`
+- `op_status` — discover a live worker's `currentModelId` and `availableModelIds` through ACPX `getStatus`
+- `op_send` — start an ordinary turn, optionally selecting a discovered model before the turn (`requestTimeoutMs` bounds the entire request; default is the profile `timeoutMs`)
 - `op_wait` — wait for one, the first (`mode: "any"`), or all (`mode: "all"`) selected turns using a fixed snapshot (`waitTimeoutMs` bounds the call, default 300000)
 - `op_result` — inspect retained output and terminal status
 - `op_list` — inspect workers and requests (optional `names` projection)
@@ -34,7 +35,24 @@ See [`docs/AGENT_GUIDE.md`](docs/AGENT_GUIDE.md) for operating recipes, [`docs/A
 
 ## Configuration
 
-Project configuration is loaded from `.pi/pi-strings.json`; user configuration is loaded from `~/.pi/agent/pi-strings.json`. Project values override user values by profile name.
+Project configuration is loaded from `.pi/pi-strings.json`; user configuration is loaded from `~/.pi/agent/pi-strings.json`. Project values override user values by profile name. Profiles remain reusable policy bundles, not a prerequisite for worker construction.
+
+Direct construction examples:
+
+```json
+{"name":"worker"}
+{"name":"open","agent":"opencode","model":"provider/model"}
+{"name":"writer","role":"writer","tools":["read","grep","find","ls","bash","edit","write"]}
+```
+
+Use `op_status` before choosing a model when the provider advertises discovery:
+
+```json
+{"name":"open"}
+// {"currentModelId":"provider/model","availableModelIds":["provider/model","provider/other"]}
+```
+
+A requested model is checked against live discovery and selected before `op_send`. Unsupported discovery/selection and unavailable model IDs return explicit errors; omitted `model` preserves the current behavior. Requests retain `requestedModel` provenance.
 
 ```json
 {
@@ -115,7 +133,7 @@ Terminal results carry `usage` (token breakdown and cost) sourced from ACP `usag
 pi install @ssweens/pi-strings
 ```
 
-The package builds its vendored adapter before publication. Local development requires running `npm run build` after dependencies are installed.
+The package builds its vendored ACPX runtime and Pi adapter before publication. Local development requires running `npm run build` after dependencies are installed.
 
 ## Documentation
 

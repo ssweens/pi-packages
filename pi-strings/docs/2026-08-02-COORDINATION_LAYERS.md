@@ -6,7 +6,7 @@
 
 ## Reference boundary
 
-The only production runtime is `AcpxRuntimePort` over exact-pinned `acpx/runtime`. ACPX owns process launch, persistent sessions, normalized events, cancellation primitives, permissions, mode controls, and close. The vendored Pi adapter is an ACP executable command override, not a second runtime.
+The only production runtime is `AcpxRuntimePort` over the vendored ACPX `0.13.0` snapshot at commit `e91cc504` (PR #468). ACPX owns process launch, persistent sessions, normalized events, cancellation primitives, permissions, mode controls, and close. The vendored Pi adapter is an ACP executable command override, not a second runtime.
 
 ACPX's `steer` mode is not an in-flight delivery primitive in this version; it is treated as a normal prompt by the runtime. `pi-strings` therefore exposes no steer, question, or reply action. Portable continuation is an ordinary later `send` after terminal completion on the same persistent session.
 
@@ -21,7 +21,7 @@ ACPX's `steer` mode is not an in-flight delivery primitive in this version; it i
 - Atomic private state, strict schema validation, lease ownership, restart classification, and session provenance.
 - Byte-bounded retained output plus private normalized event logs.
 - Linked-worktree admission and writer ownership checks.
-- ACPX policy routing: read-only `deny-all`, writer `approve-reads`, non-interactive `deny`.
+- ACPX policy routing: all roles use native `approve-reads`; read-only workers auto-approve reads/searches and deny other requests through ACPX's native policy, while writers auto-approve explicit mutations without waiting on a permission prompt.
 
 ### Promotion criteria for baseline changes
 
