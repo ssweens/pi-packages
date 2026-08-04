@@ -49,7 +49,16 @@ export class AcpxRuntimePort implements RuntimePort {
     const runtimeOptions = {
       cwd,
       sessionStore: createFileSessionStore({ stateDir: resolve(stateDir, "acpx") }),
-      agentRegistry: createAgentRegistry({ overrides: { pi: piAdapterArgv } }),
+      agentRegistry: createAgentRegistry({
+        overrides: {
+          pi: piAdapterArgv,
+          // Amp Code via its ACP adapter: drives the locally-installed `amp` CLI
+          // for streaming. Requires paid Amp credits (free tier is not ACP-eligible)
+          // and `amp login`. Native `amp`-mode tools are NOT confined by the ACP
+          // permission layer (same provider-native boundary as Codex's Guardian).
+          amp: ["npx", "-y", "amp-acp"],
+        },
+      }),
       permissionMode: permissionModeFor(profile),
       nonInteractivePermissions: "deny" as const,
       // ACPX's default approve-reads mode prompts for mutations when its host
@@ -80,6 +89,9 @@ export class AcpxRuntimePort implements RuntimePort {
       },
     });
     if (input.agent === "codex") await this.runtime.setMode?.({ handle, mode: input.profile.role === "writer" ? "agent" : "read-only" });
+    // Amp exposes its own permission + effort config options (Default/Bypass and
+    // low/medium/high/ultra) via ACP config options rather than ACP session modes,
+    // so no setMode call here; the adapter default (Default permissions) is used.
     return { ...toHandle(handle), agent: input.agent, role: input.profile.role, cwd: input.cwd };
   }
 

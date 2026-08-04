@@ -12,6 +12,17 @@ Reliable multi-agent orchestration for [Pi](https://github.com/earendil-works/pi
 - **Shared checkout is the default for writers.** One live writer per canonical cwd; a second writer in the same cwd is rejected. Worktree isolation is an opt-in compatibility mode (`isolation: "worktree"`), not a requirement. Future stronger isolation may use CoW temp copies.
 - Workers can be spawned directly from any ACP agent (`agent` defaults to `pi`) with safe read-only defaults, or from an optional configured profile. All roles use ACPX's native permission controls: reads/searches are auto-approved, and mutation requests settle without an unanswered prompt.
 - ACPX is the only production runtime and permission layer. pi-strings passes ACPX-native permission options; it does not implement provider-specific callbacks or custom permission matching.
+
+### Supported agents
+
+Any ACP agent works through the same `AcpxRuntimePort`. Well-exercised ones:
+
+- `pi` (default) — through the vendored Pi adapter
+- `codex`, `opencode` — via the ACPX built-in registry
+- `amp` — via the `amp` registry override (`npx -y amp-acp`, i.e. `tao12345666333/amp-acp`)
+- `claude` — via the ACPX built-in `claude` entry (`@agentclientprotocol/claude-agent-acp`)
+
+Provider write-tool behavior differs: Codex (Guardian Review) and Amp (`apply_patch`) decide write permission *inside* the provider, **bypassing the ACP permission layer**. Claude routes its `Write`/`Edit` through ACP `session/request_permission`, so it is seen by ACPX — it only escapes because writers use `permissionPolicy: { defaultAction: "approve" }` and ACPX's policy is not path-scoped. The boundary is a documented provider/ACP-policy limitation, not something ACPX params currently confine (see `docs/ARCHITECTURE.md` §4).
 - The coordinator owns request deadlines. A timed-out request is terminalized as `timed_out`, cleaned up within bounded grace, and leaves its worker unusable until explicit close/replacement.
 - Cancellation, timeout, provider failure, and transport failure are never reported as success.
 - tmux is optional for humans. Automation never uses `send-keys`, pane scraping, or prompt detection.

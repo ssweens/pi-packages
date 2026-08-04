@@ -12,6 +12,8 @@ const configured = {
   pi: process.env.PI_STRINGS_TEST_PI_MODEL,
   codex: process.env.PI_STRINGS_TEST_CODEX_MODEL,
   opencode: process.env.PI_STRINGS_TEST_OPENCODE_MODEL ?? "opencode/north-mini-code-free",
+  amp: process.env.PI_STRINGS_TEST_AMP_MODEL,
+  claude: process.env.PI_STRINGS_TEST_CLAUDE_MODEL,
 };
 
 function available(command: string): boolean {
@@ -28,7 +30,10 @@ function skipReason(agent: keyof typeof configured): string | undefined {
 }
 
 function profile(agent: keyof typeof configured, role: "read-only" | "writer", tools: string[]): Profile {
-  return { agent, role, ...(configured[agent] ? { model: configured[agent] } : {}), tools, timeoutMs: 120_000, cancellationGraceMs: 5_000, maxOutputBytes: 32_000 };
+  // Amp does not take an ACP model: it uses its own default model / effort modes
+  // under the authenticated account. PI_STRINGS_TEST_AMP_MODEL only gates the test.
+  const model = agent === "amp" ? undefined : configured[agent];
+  return { agent, role, ...(model ? { model } : {}), tools, timeoutMs: 120_000, cancellationGraceMs: 5_000, maxOutputBytes: 32_000 };
 }
 
 async function closeAll(coordinator: Coordinator, names: string[]): Promise<void> {
@@ -280,7 +285,7 @@ async function writerResume(): Promise<void> {
   } finally { await closeAll(second, ["writer-resumed"]); await rm(markerPath, { force: true }); }
 }
 
-async function externalWriterReassignment(agent: "codex" | "opencode"): Promise<void> {
+async function externalWriterReassignment(agent: "codex" | "opencode" | "amp" | "claude"): Promise<void> {
   const worktree = process.env.PI_STRINGS_E2E_WRITER_WORKTREE!;
   const { mkdtemp } = await import("node:fs/promises");
   const stateDir = await mkdtemp(join(tmpdir(), `pi-strings-${agent}-reassign-`));
@@ -358,7 +363,7 @@ async function writerReviewer(): Promise<void> {
   } finally { await closeAll(coordinator, ["writer", "reviewer"]); await rm(markerPath, { force: true }); }
 }
 
-async function externalWriterBoundary(agent: "codex" | "opencode"): Promise<void> {
+async function externalWriterBoundary(agent: "codex" | "opencode" | "amp" | "claude"): Promise<void> {
   const worktree = process.env.PI_STRINGS_E2E_WRITER_WORKTREE!;
   const { mkdtemp } = await import("node:fs/promises");
   const stateDir = await mkdtemp(join(tmpdir(), `pi-strings-${agent}-writer-`));
@@ -416,7 +421,7 @@ async function externalWriterBoundary(agent: "codex" | "opencode"): Promise<void
 }
 
 const writerSkip = process.env.PI_STRINGS_E2E_WRITER_WORKTREE ? skipReason("pi") : "set PI_STRINGS_E2E_WRITER_WORKTREE to an existing linked worktree";
-function externalWriterSkip(agent: "codex" | "opencode"): string | undefined {
+function externalWriterSkip(agent: "codex" | "opencode" | "amp" | "claude"): string | undefined {
   if (!process.env.PI_STRINGS_E2E_WRITER_WORKTREE) return "set PI_STRINGS_E2E_WRITER_WORKTREE to an existing linked worktree";
   return skipReason(agent) ?? skipReason("pi");
 }
@@ -432,5 +437,10 @@ test("real Pi writer cancellation then reassignment preserves authority", { skip
 test("real Pi writer resume preserves role and worktree authority", { skip: writerSkip }, writerResume);
 test("real Codex writer permission boundary", { skip: externalWriterSkip("codex") }, async () => externalWriterBoundary("codex"));
 test("real OpenCode writer permission boundary", { skip: externalWriterSkip("opencode") }, async () => externalWriterBoundary("opencode"));
+test("real Amp writer permission boundary", { skip: externalWriterSkip("amp") }, async () => externalWriterBoundary("amp"));
 test("real Codex writer cancellation then reassignment preserves authority", { skip: externalWriterSkip("codex") }, async () => externalWriterReassignment("codex"));
 test("real OpenCode writer cancellation then reassignment preserves authority", { skip: externalWriterSkip("opencode") }, async () => externalWriterReassignment("opencode"));
+test("real Amp writer cancellation then reassignment preserves authority", { skip: externalWriterSkip("amp") }, async () => externalWriterReassignment("amp"));
+test("real Claude ACP spawn-send-wait smoke", { skip: skipReason("claude") }, async () => smoke("claude"));
+test("real Claude writer permission boundary", { skip: externalWriterSkip("claude") }, async () => externalWriterBoundary("claude"));
+test("real Claude writer cancellation then reassignment preserves authority", { skip: externalWriterSkip("claude") }, async () => externalWriterReassignment("claude"));

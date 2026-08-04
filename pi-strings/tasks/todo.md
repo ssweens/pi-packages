@@ -42,6 +42,32 @@
 - Fix: pass ACPX-native `permissionPolicy`; read-only workers auto-approve read/search and default-deny other permission requests, while writers default-approve explicit mutations.
 - Verification: vendored ACPX PR #468 source snapshot; `npm run typecheck`; `npm test` (110 tests, 96 passed, 14 opt-in skipped); `git diff --check`; fresh-process OpenCode native-write probe completed with no file created. Reloaded live probe `req_78273f80-dc6b-4b08-acff-6bd88683f0df` completed in 5.9s: native OpenCode `write` was explicitly rejected, the request terminalized, and the probe file was absent.
 
+## Amp Code via ACP
+- [x] Wire `amp` agent (tao12345666333/amp-acp) into `createAgentRegistry` overrides (`acpx-runtime.ts`)
+- [x] Typecheck + unit tests clean (95/95)
+- [x] Live read-only smoke passed: spawn -> send -> wait -> result = `completed`, output `AMP_ACK pi-strings` (session `S-mse5yxfe-oocsee`)
+- [x] Real Amp writer reassignment E2E: PASSED — cancellation then predecessor-reassignment preserves authority.
+- [x] Write-boundary investigation — corrected after deeper dig: **Amp IS confinable at the provider level** (unlike an initial read): its built-in permission rule 121 is `allow apply_patch` (unscoped), and a higher-precedence user rule (`reject apply_patch`) **does** override it (proven: `amp permissions test` -> `reject, matched-rule 0, source user`; blunt reject blocks the escape). But precise worktree-scoping is fragile: Amp's `apply_patch` emits **absolute paths even for in-worktree files**, and the match condition is the free-text `diff` arg, so "allow in-worktree / reject outside" is unreliable via regex (the marker write is rejected too). `edit_file --path` scopes cleanly, but Amp's model prefers `apply_patch`. Bottom line: the escape is NOT unfixable; it needs a tuned Amp permission profile injected per worker (provider-specific), and `amp-acp` does not currently forward per-session permission rules — the same class of gap as Codex (different mechanism: permission rules vs hardcoded trust). The `real Amp writer permission boundary` E2E reflects the default (loose) policy and fails until that provider wiring exists.
+
+## Claude Code via ACP (auth-blocked in this env)
+- [x] `agent: "claude"` resolves natively via ACPX's built-in `claude` registry (`npx @agentclientprotocol/claude-agent-acp@^0.60.0`) — no override needed; adapter boots and spawn succeeds.
+- [x] Live probe returns RUNTIME auth failure: "Your organization has disabled Claude subscription access for Claude Code · Use an Anthropic API key instead". `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` unset.
+- [x] Claude added to E2E harness (`PI_STRINGS_TEST_CLAUDE_MODEL` gate; smoke + writer boundary + reassignment) for parity.
+- [x] Verified with `ANTHROPIC_API_KEY` set: live smoke **PASSED** (`CLAUDE_ACK pi-strings`); writer reassignment **PASSED**; writer permission boundary **FAILS** — Claude's native `Write` tool writes outside the worktree.
+- [x] **Deep dive (Claude is ACP-confinable):** Claude's `Write`/`Edit` route through the SDK `canUseTool` hook → real ACP `session/request_permission` (unlike Codex/Amp which bypass ACP). It escapes only because writers use `permissionPolicy: { defaultAction: "approve" }`, and ACPX's `permissionPolicy` is not path-scoped (`vendor/acpx/src/permissions.ts`). A path-aware ACPX permission decision (approve writes only within cwd) WOULD confine Claude without forking the provider — the only native writer where that's true. Recorded in ARCHITECTURE §4 / README.
+- [x] Document Claude in README + ARCHITECTURE (ACP-routed Write; auth via `ANTHROPIC_API_KEY`).
+- [x] **NOTED (note only — no implementation now):** Claude Code confinement needs + future direction. Claude's `Write`/`Edit` route through ACP `session/request_permission`, so it is the one native writer that a **path-scoped ACP decision** could confine (approve writes only within the worker `cwd`) without forking the provider. Per-provider options tracked for later (the "B" direction): forward a scoped `pre_tool_use` hook / `permissions` config (B1/B2), with post-turn reconcile (C1) as the universal backstop that also catches Codex/Amp. See `docs/ARCHITECTURE.md` §4. We'll likely do B down the road.
+
+## Vendor codex-acp (provider write-boundary flaw) — NOT yet done
+- [x] Investigate and root-cause the Codex out-of-worktree write (see `vendor/codex-acp/README.md`)
+- [ ] Decide scope (trust fix and/or ACP-routed Guardian approval) with user
+- [ ] Vendor `@agentclientprotocol/codex-acp` source at a pinned commit into `vendor/codex-acp/` with provenance
+- [ ] Build boundary + `build:codex-acp` into `dist/codex-acp` (mirror `tsconfig.acpx.json`)
+- [ ] Override the `codex` agent in `createAgentRegistry` to the local build (`acpx-runtime.ts`)
+- [ ] Apply the fix to `src/CodexAcpClient.ts` `createSessionConfig` (line 498 `trust_level`)
+- [ ] Re-run `real Codex writer permission boundary` — forbidden write must now be rejected
+- [ ] Record diff + release-handoff note in `vendor/codex-acp/README.md`
+
 ## Vendored ACPX PR #468
 - [x] Vendor upstream ACPX source at commit `e91cc50439e7ed58845fca82e23c72dcaaf7fd8a`
 - [x] Build the local runtime and declarations under `dist/acpx-runtime`
@@ -51,6 +77,28 @@
 ### Review
 - The external `acpx` dependency is removed; `vendor/acpx/README.md` records provenance, license, and the release handoff.
 - The runtime contract test uses `deny-all` plus a policy that auto-approves reads, proving manager forwarding rather than fallback permission-mode behavior.
+
+## Live E2E verification (real Pi / Codex / OpenCode)
+Ran `test:e2e` with real executables and models (`PI_STRINGS_E2E=1`).
+
+Passing once the correct model IDs are supplied (`deepseek/deepseek-v4-flash` for Pi, not the un-prefixed bare name):
+- [x] real Codex ACP spawn-send-wait smoke
+- [x] real OpenCode ACP spawn-send-wait smoke
+- [x] real Pi ACP spawn-send-wait smoke
+- [x] real Pi cooperative cancellation remains cancelled
+- [x] real Pi writer then fresh reviewer remains worktree-isolated
+- [x] real Pi writer cancellation then reassignment preserves authority
+- [x] real Codex writer cancellation then reassignment preserves authority
+- [x] real OpenCode writer cancellation then reassignment preserves authority
+
+Failures and root cause:
+- [ ] real Pi parent kill: `hosted-parent-owner.ts` fixture probes `worker.runtime.child?.pid` (does not exist) -> always `agentPid=0`; fixture bug, not product. Needs pid discovery via `ps` scan of `--pi-strings-worker`.
+- [ ] real Pi overlap / session continuity / writer resume: intermittent deepseek `503 Service too busy` provider errors; standalone `pi-reconnect-repro` shows continuity works (follow-up retained the token). Piper retries internally but the turn is still surfaced as `RUNTIME`/`Internal error`, retryable=false; needs a deeper adapter/ACPX interaction look.
+- [x] real Codex writer permission boundary: reproduced deterministically with codex-acp @ 1.1.9 (latest, resolves via `^1.1.4`). Even though 1.1.9 forwards `sandboxPolicy: workspaceWrite` to Codex's `sendPrompt`, Codex's provider-native **Guardian Review** auto-approved the `apply_patch` to the path outside the worktree, honoring the prompt's explicit instruction (`Authorization: high`, `Risk: low`). It never emits `session/request_permission`, so neither the ACPX `permissionPolicy` nor the workspace-write root can intercept it. Not a pi-strings/ACPX param error — `cwd`, `mode=agent`, and `permissionPolicy` are all forwarded correctly.
+  - Verified NOT a writable-root misconfig: ACPX passes no `additionalDirectories`/`_meta.additionalRoots` to codex, so the parent path is genuinely outside every writable root. The session `cwd` is the worktree; ACPX sends no extra roots.
+  - Direct answer to 'can codex launch strict / does codex-acp use that': codex accepts strict launch flags (`--sandbox workspace-write`, `-c sandbox_mode`, `-c approval_policy`, `-c sandbox_permissions`), but codex-acp does NOT use them — it spawns `codex app-server` with no sandbox flags and relies on the per-turn `sandboxPolicy`. That per-turn workspace-write IS already in effect (the transcript shows Guardian gating the call), yet Guardian still granted the out-of-root write because `codex-acp` marks the session project `trusted` (createSessionConfig), which lets Codex's native Guardian escalate a workspace-write into the parent. Launching `--sandbox workspace-write` would be the same policy that's already active -> no change; only `read-only` (breaks writers) blocks it. Fixing it requires changing codex-acp (provider-specific, upstream, violates thin proxy).
+  - Test expectation ('must be rejected') overclaims the thin-proxy guarantee; needs a decision: document + reconcile test, or accept as known limitation.
+- [ ] real OpenCode writer permission boundary: marker write flaked once in the E2E run but passed three standalone reproductions (no config, with config, full harness); non-reproducible flake.
 
 ## Goal
 Make pi-strings a complete subagent product: keep the lifecycle core, add role-specialized distillation (Amp), loosen writer isolation (shared default, worktree opt-in), add production resilience (retry/fallback, telemetry), and harden the drain race.

@@ -77,6 +77,19 @@ Permission enforcement is entirely native to ACPX:
 
 `permissionMode` and `permissionPolicy` are ACPX choices, not a pi-strings reimplementation. Profile tool lists, ACPX `cwd`, and provider-native sandbox behavior are not claimed as universal enforcement for arbitrary provider-native tools.
 
+Provider-native write scoping is provider-specific and is **not enforced by ACPX params**:
+
+- **Codex**: escapes via `codex-acp`, which hardcodes `projects.<cwd>.trust_level = "trusted"` (`CodexAcpClient.ts:498`); Codex's Guardian Review can then auto-approve an out-of-worktree `apply_patch` despite the forwarded workspace-write sandbox. Fix requires changing `codex-acp` (vendor plan: `vendor/codex-acp/README.md`).
+- **Amp**: by default it can also write outside the worktree, but it **is** confinable via its permission plugin: the loose builtin rule is `allow apply_patch` (rule 121), and a higher-precedence user rule `reject …` overrides it. Precise "allow in-worktree / reject outside" is fragile because Amp's `apply_patch` emits absolute paths and the match condition is the free-text `diff` arg (`edit_file --path` scopes cleanly but Amp prefers `apply_patch`). `amp-acp` does not currently forward per-session permission rules.
+- **OpenCode**: confined by its own `permission` config (e.g. `{ edit: "allow", external_directory: "deny" }`), which the boundary test injects.
+- **Claude Code**: supported via ACPX's built-in `claude` registry entry (`npx @agentclientprotocol/claude-agent-acp@^0.64.2`); `agent: "claude"` resolves natively (no override needed). Requires Claude Code subscription access (org-enabled) or an `ANTHROPIC_API_KEY`.
+
+  **Deep-dive (why Claude escapes, and why it is the one that is *ACP-confinable*):** Claude's native `Write`/`Edit` route through the SDK's `canUseTool` hook (`claude-agent-acp/src/acp-agent.ts`), which forwards a real ACP `session/request_permission` to the host in the default (non-bypass) mode. So unlike Codex (Guardian Review) and Amp (`apply_patch`), Claude's write **goes through the ACP permission layer** — ACPX sees it and resolves it via its `permissionPolicy`. The escape happens only because pi-strings gives writers `permissionPolicy: { defaultAction: "approve" }`, and ACPX's `permissionPolicy` shapes (`defaultAction`/`autoApprove`) match by tool kind/name, **not by path** (`vendor/acpx/src/permissions.ts`). The worktree path is never examined.
+
+  **Implication:** a **path-aware ACPX permission decision** (approve writes only within the worker `cwd`) would confine Claude without forking the provider — the only one of the three native writers where that's true. That would require path-based permission matching at the ACPX host layer (a deliberate step against the thin-proxy "no custom permission matching" stance), or a cwd-scoped policy. Currently not done; Claude's `real … permission boundary` E2E fails on the default approve policy.
+
+`agent: "amp"` is supported via the `amp` registry override (`npx -y amp-acp`); see `tasks/todo.md` and `vendor/codex-acp/README.md`.
+
 ### Turn budget and stall detection
 
 `maxTurns` (default: none) approximates a turn budget by counting distinct tool invocations. ACPX can emit many lifecycle and input-streaming updates for one invocation; updates sharing a `toolCallId` count once. A worker exceeding its budget is cancelled and terminalized as `failed` with code `TURN_BUDGET_EXCEEDED`. Stall detection evaluates identified calls only when their completed update arrives, fingerprinting ACPX tool identity (`title`) plus a SHA-256 digest of stable final `rawInput` when available rather than provisional display text. Raw tool inputs do not cross the normalization boundary or enter request event logs. A worker issuing an identical completed call `STALL_THRESHOLD` (4) times under distinct call IDs is cancelled and terminalized as `failed` with code `STALLED`. Both are non-retryable policy violations.

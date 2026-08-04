@@ -15,3 +15,10 @@ upstream module boundaries. The runtime continues to use this package's direct
 
 When ACPX releases the equivalent change, replace this snapshot with the released
 source and re-run the ACPX contract tests before removing the vendor copy.
+
+## Related: `codex-acp` write-boundary flaw
+
+pi-strings may later vendor `@agentclientprotocol/codex-acp` to fix a provider
+write-boundary bug (Codex's Guardian Review can write outside the worktree because
+`codex-acp` hardcodes `trust_level: "trusted"`). Plan, evidence, and the exact
+procedure are in [`../codex-acp/README.md`](../codex-acp/README.md).
