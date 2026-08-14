@@ -11,6 +11,60 @@
 import type { VertexModelConfig } from "../types.js";
 
 export const CLAUDE_MODELS: VertexModelConfig[] = [
+  // Claude 5 series
+  // Note: Claude 5 models on Vertex require provider data sharing to be enabled
+  // on the publisher model config, otherwise requests fail with HTTP 403.
+  {
+    id: "claude-opus-5",
+    name: "Claude Opus 5",
+    apiId: "claude-opus-5",
+    publisher: "anthropic",
+    endpointType: "maas",
+    contextWindow: 1000000,
+    maxTokens: 128000,
+    input: ["text", "image"],
+    reasoning: true,
+    tools: true,
+    cost: {
+      input: 5.00,
+      output: 25.00,
+      cacheRead: 0.50,
+      cacheWrite: 6.25,
+    },
+    costRegional: {
+      input: 5.50,
+      output: 27.50,
+      cacheRead: 0.55,
+      cacheWrite: 6.875,
+    },
+    region: "global",
+  },
+  {
+    id: "claude-sonnet-5",
+    name: "Claude Sonnet 5",
+    apiId: "claude-sonnet-5",
+    publisher: "anthropic",
+    endpointType: "maas",
+    contextWindow: 1000000,
+    maxTokens: 128000,
+    input: ["text", "image"],
+    reasoning: true,
+    tools: true,
+    cost: {
+      input: 2.00,
+      output: 10.00,
+      cacheRead: 0.20,
+      cacheWrite: 2.50,
+    },
+    costRegional: {
+      input: 2.20,
+      output: 11.00,
+      cacheRead: 0.22,
+      cacheWrite: 2.75,
+    },
+    region: "global",
+  },
+
   // Claude Fable 5 (Mythos-class)
   {
     id: "claude-fable-5",
@@ -20,7 +74,7 @@ export const CLAUDE_MODELS: VertexModelConfig[] = [
     endpointType: "maas",
     contextWindow: 1000000,
     maxTokens: 128000,
-    input: ["text", "image", "file"],
+    input: ["text", "image"],
     reasoning: true,
     tools: true,
     cost: {

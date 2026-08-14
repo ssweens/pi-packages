@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.0] - 2026-08-14
+### Added
+- **Gemini 3.7 Flash** (`gemini-3.7-flash`) — GA on 2026-08-13. Google's current workhorse Flash model for coding and agents. 1M context, 65,536 max output, reasoning via thinking levels, tools. $0.75/$3.75 per 1M tokens, $0.075/1M cache read — cheaper *and* newer than 3.5/3.6 Flash.
+- **Gemini 3.6 Flash** (`gemini-3.6-flash`) — GA on 2026-07-21. Improved token efficiency and agentic planning over 3.5 Flash at a lower output price. 1M context, 65,536 max output. $1.50/$7.50 per 1M tokens, $0.15/1M cache read.
+- **Gemini 3.5 Flash Lite** (`gemini-3.5-flash-lite`) — GA on 2026-07-21. The current high-volume/low-cost route. 1M context, 65,536 max output. $0.30/$2.50 per 1M tokens, $0.03/1M cache read.
+- **Claude Opus 5** (`claude-opus-5`) — Anthropic's Claude 5 flagship on Vertex Model Garden. 1M context, 128K max output. $5.00/$25.00 global, 10% regional premium.
+- **Claude Sonnet 5** (`claude-sonnet-5`) — 1M context, 128K max output. $2.00/$10.00 global, 10% regional premium — a price cut versus Sonnet 4.6's $3.00/$15.00.
+
+### Changed
+- **Gemini 3.1 Flash Lite promoted to GA** — API id moved from `gemini-3.1-flash-lite-preview` to `gemini-3.1-flash-lite`. Its `maxTokens` also corrected from `65535` to `65536`.
+- `ModelInputType` now documents that it intentionally mirrors pi-ai's `Model["input"]` (`("text" | "image")[]`) and must not be widened.
+
+### Removed
+- **Gemini 2.0 Flash / Flash Lite** (`gemini-2.0-flash`, `gemini-2.0-flash-lite`) — Google shut these endpoints down on Vertex on 2026-06-01. They were still being advertised in pi's model selector and would fail at request time. Migrate to `gemini-2.5-flash` / `gemini-2.5-flash-lite`, or better, a 3.x Flash model since the 2.5 line retires on 2026-10-16.
+
+### Fixed
+- **Package no longer type-checks clean → now it does.** Two pre-existing `tsc --noEmit` errors were blocking a clean build:
+  - `models/claude.ts` declared `input: ["text", "image", "file"]` on `claude-fable-5`, but `"file"` is not a member of `ModelInputType` (nor of pi-ai's `Model["input"]`, which is the hard downstream constraint). The modality was never actually deliverable, so it has been dropped rather than the type widened.
+  - `streaming/gemini.ts` pushed `output.stopReason` into a `done` event, whose `reason` only accepts `"stop" | "length" | "toolUse"`. Safety blocks and unmapped finish reasons now emit an `error` event instead, matching the catch block's behavior.
+
+### Notes
+- `gemini-3.1-pro` remains a Preview offering on Vertex; its API id stays `gemini-3.1-pro-preview`.
+- Claude 5 models require provider data sharing enabled on the publisher model config or Vertex returns HTTP 403.
+
 ## [1.1.14] - 2026-07-17
 ### Fixed
 - **Provider registration failing with `"baseUrl" is required when defining custom models"`** — `toPiModel()` set `baseUrl: ""` on every per-model entry passed to `registerProvider`. Since `??` only falls through on `null`/`undefined`, that empty string beat the provider-level `baseUrl` fallback in pi-coding-agent's resolution (`definition.baseUrl ?? providerConfig.baseUrl`), so every model resolved to an empty URL and the extension failed to load. Per-model entries now correctly omit `baseUrl` (and `provider`, which isn't part of the per-model shape either), letting them inherit the provider's `baseUrl`.

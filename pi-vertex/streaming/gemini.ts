@@ -311,7 +311,15 @@ export function streamGemini(
         throw new Error("Request was aborted");
       }
 
-      stream.push({ type: "done", reason: output.stopReason, message: output });
+      // A "done" event only carries successful stop reasons. Safety blocks and
+      // unmapped finish reasons surface as an error event instead, matching the
+      // catch block below.
+      const finalReason = output.stopReason;
+      if (finalReason === "stop" || finalReason === "length" || finalReason === "toolUse") {
+        stream.push({ type: "done", reason: finalReason, message: output });
+      } else {
+        stream.push({ type: "error", reason: finalReason, error: output });
+      }
       stream.end();
     } catch (error) {
       output.stopReason = options?.signal?.aborted ? "aborted" : "error";

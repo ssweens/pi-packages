@@ -26,6 +26,10 @@ export type {
 
 // Vertex-specific types
 
+/**
+ * Mirrors pi-ai's `Model["input"]`, which is `("text" | "image")[]`.
+ * Do not widen: pi-coding-agent rejects any other modality at registration.
+ */
 export type ModelInputType = "text" | "image";
 export type EndpointType = "gemini" | "maas";
 
