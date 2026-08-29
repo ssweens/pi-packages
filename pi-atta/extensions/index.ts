@@ -329,12 +329,16 @@ class SessionPickerModal implements Component {
 	render(width: number): string[] {
 		const t = this.theme;
 		const dim = (s: string) => t.fg("dim", s);
-		// Exact geometry: every row is exactly W visible chars
-		const W = Math.min(width - 2, 150);
+		// Exact geometry: every row is exactly W visible chars, fixed cap so
+		// the overlay reservation and the render always agree
+		const W = Math.min(width - 2, 140);
 		const PW = Math.max(50, Math.floor(W * 0.58)); // right box outer width
 		const LW = W - PW - 1;                          // left cell width incl. its border
 		const LIST_ROWS = this.listRows();
-		const border = (s: string) => t.fg("border", s);
+		// Raw structural chars — theme-independent so compositing never breaks
+		const border = (s: string) => s;
+		// Theme-independent inverse video for the selected row
+		const invert = (s: string) => `\x1b[7m${s}\x1b[27m`;
 
 		// Cell builders — always exactly LW / PW visible wide
 		const leftCell = (content: string) => border("│") + pad(trunc(content, LW - 1), LW - 1);
@@ -382,9 +386,9 @@ class SessionPickerModal implements Component {
 				const titleW = LW - 2 - vw(time) - 1;
 				const titleTxt = trunc(sessionTitle(s), Math.max(10, titleW));
 				const row = ` ${titleTxt} ${dim(time)}`;
-				// Selected: full-width highlight bar; unselected: border + content. Both exactly LW wide.
+				// Selected: full-width inverse-video bar; unselected: border + content. Both exactly LW wide.
 				left = isSel
-					? t.bg("selectedBg", pad(row, LW))
+					? invert(pad(row, LW))
 					: border("│") + pad(row, LW - 1);
 			} else {
 				left = leftCell("");
@@ -425,7 +429,7 @@ export default function attaExtension(pi: ExtensionAPI): void {
 					modal = new SessionPickerModal(tui, theme, ctx.cwd, (r) => done(r));
 					return modal;
 				},
-				{ overlay: true, overlayOptions: { anchor: "center", width: Math.min((process.stdout.columns || 120) - 8, 152), maxHeight: (process.stdout.rows || 40) - 6 } }
+				{ overlay: true, overlayOptions: { anchor: "center", width: 142, maxHeight: (process.stdout.rows || 40) - 6 } }
 			) ?? null;
 			if (!session) return null;
 			return { session, leftover: modal?.leftover ?? "" };
