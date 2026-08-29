@@ -16,6 +16,8 @@ const SESSION_ENTRY_TYPE = "leash-auto-mode";
 const VERDICT_ENTRY_TYPE = "leash-auto-verdict";
 const VERDICT_STATUS_KEY = "leash-auto-verdict";
 const VERDICT_STATUS_TIMEOUT_MS = 8_000;
+const AUTO_BUSY_FRAME_INTERVAL_MS = 180;
+const AUTO_BUSY_COLORS = ["accent", "warning", "success"] as const;
 
 type SettingsAction = "toggle" | "select-model" | "close";
 
@@ -246,6 +248,9 @@ export function setupAutoMode(
   let enabled = config.permissionGate.autoMode.enabled;
   let audit = createAutoModeAudit();
   let verdictTimer: ReturnType<typeof setTimeout> | undefined;
+  let classifierRequests = 0;
+  let classifierFrame = 0;
+  let classifierTimer: ReturnType<typeof setInterval> | undefined;
 
   const clearVerdictStatus = (ctx: ExtensionContext) => {
     if (verdictTimer) clearTimeout(verdictTimer);
@@ -290,13 +295,67 @@ export function setupAutoMode(
     showVerdictStatus(recorded, ctx);
   };
 
+  const renderAutoStatus = (ctx: ExtensionContext) => {
+    if (!enabled) {
+      ctx.ui.setStatus("leash-auto", undefined);
+      return;
+    }
+
+    if (classifierRequests === 0) {
+      ctx.ui.setStatus(
+        "leash-auto",
+        ctx.ui.theme.fg("accent", "⏵⏵ leash auto"),
+      );
+      return;
+    }
+
+    const first = AUTO_BUSY_COLORS[classifierFrame % AUTO_BUSY_COLORS.length];
+    const second =
+      AUTO_BUSY_COLORS[(classifierFrame + 1) % AUTO_BUSY_COLORS.length];
+    const marker = `${ctx.ui.theme.fg(first, "⏵")}${ctx.ui.theme.fg(second, "⏵")}`;
+    ctx.ui.setStatus(
+      "leash-auto",
+      `${marker} ${ctx.ui.theme.fg("accent", "leash auto")}`,
+    );
+  };
+
+  const clearClassifierAnimation = () => {
+    if (classifierTimer) clearInterval(classifierTimer);
+    classifierTimer = undefined;
+    classifierFrame = 0;
+  };
+
+  const ensureClassifierAnimation = (ctx: ExtensionContext) => {
+    if (classifierRequests === 0 || classifierTimer) return;
+    classifierTimer = setInterval(() => {
+      classifierFrame = (classifierFrame + 1) % AUTO_BUSY_COLORS.length;
+      renderAutoStatus(ctx);
+    }, AUTO_BUSY_FRAME_INTERVAL_MS);
+    classifierTimer.unref?.();
+  };
+
+  const startClassifierAnimation = (ctx: ExtensionContext) => {
+    classifierRequests += 1;
+    classifierFrame = 0;
+    renderAutoStatus(ctx);
+    ensureClassifierAnimation(ctx);
+  };
+
+  const stopClassifierAnimation = (ctx: ExtensionContext) => {
+    classifierRequests = Math.max(0, classifierRequests - 1);
+    if (classifierRequests === 0) clearClassifierAnimation();
+    renderAutoStatus(ctx);
+  };
+
   const updateStatus = (ctx: ExtensionContext) => {
     if (!enabled) {
+      clearClassifierAnimation();
       ctx.ui.setStatus("leash-auto", undefined);
       clearVerdictStatus(ctx);
       return;
     }
-    ctx.ui.setStatus("leash-auto", ctx.ui.theme.fg("accent", "⏵⏵ leash auto"));
+    renderAutoStatus(ctx);
+    ensureClassifierAnimation(ctx);
   };
 
   const setEnabled = (next: boolean, ctx: ExtensionContext): boolean => {
@@ -395,14 +454,26 @@ export function setupAutoMode(
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
+    classifierRequests = 0;
+    clearClassifierAnimation();
     ctx.ui.setStatus("leash-auto", undefined);
     clearVerdictStatus(ctx);
   });
 
   return {
     isEnabled: () => enabled,
-    classify: (action, ctx) =>
-      classifyAutoModeAction(action, config.permissionGate.autoMode, ctx),
+    classify: async (action, ctx) => {
+      startClassifierAnimation(ctx);
+      try {
+        return await classifyAutoModeAction(
+          action,
+          config.permissionGate.autoMode,
+          ctx,
+        );
+      } finally {
+        stopClassifierAnimation(ctx);
+      }
+    },
     recordVerdict,
   };
 }

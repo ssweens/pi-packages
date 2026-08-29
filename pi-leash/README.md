@@ -209,7 +209,7 @@ Enable it per session with either:
 
 The classifier receives the proposed action, direct user requests, and prior agent Bash **source** from the current session. It never receives tool output as safety evidence. It must return `allow`, `ask`, or `deny`; unavailable/timed-out/invalid classifier responses fall through to the existing human approval dialog. `sudo` is a soft gate: an auto `allow` skips the generic dangerous-command prompt but still enters Leash's dedicated sudo password flow. Unclear sudo intent returns `ask`.
 
-Every gated action briefly shows `⏵⏵ leash allow|ask|deny [source] · reason` in the footer. The persistent auto indicator intentionally contains no model name. `/leash status` reports session counts and the last verdict, including verdicts restored after reload or resume.
+While the classifier model is pending, the two `⏵` markers in the persistent `leash auto` footer indicator rotate theme colors; the label and footer width stay fixed. Every gated action then briefly shows `⏵⏵ leash allow|ask|deny [source] · reason`. The persistent indicator intentionally contains no model name. `/leash status` reports session counts and the last verdict, including verdicts restored after reload or resume.
 
 Like Claude Code, the default classifier hard-deny tier is data exfiltration across the trusted Environment boundary. Local destruction, recursive deletion, privileged host operations, and runtime-computed targets are soft gates: direct, exact user intent can clear them; otherwise the classifier returns `ask`. Only explicit `autoDenyPatterns` block before classification. The classifier does not guess runtime variable values. A visible `mktemp` → exact cleanup relationship is classifier evidence, not a fabricated path resolution.
 

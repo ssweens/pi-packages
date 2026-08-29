@@ -2,15 +2,24 @@ import { initTheme } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import type * as ConfigModule from "../config";
 import type { ResolvedConfig } from "../config";
+import type * as AutoModeClassifierModule from "../lib/auto-mode-classifier";
 import { setupAutoMode } from "./auto-mode";
 
-const { updateAutoModeConfigMock } = vi.hoisted(() => ({
-  updateAutoModeConfigMock: vi.fn(),
-}));
+const { updateAutoModeConfigMock, classifyAutoModeActionMock } = vi.hoisted(
+  () => ({
+    updateAutoModeConfigMock: vi.fn(),
+    classifyAutoModeActionMock: vi.fn(),
+  }),
+);
 
 vi.mock("../config", async (importOriginal) => ({
   ...(await importOriginal<typeof ConfigModule>()),
   updateAutoModeConfig: updateAutoModeConfigMock,
+}));
+
+vi.mock("../lib/auto-mode-classifier", async (importOriginal) => ({
+  ...(await importOriginal<typeof AutoModeClassifierModule>()),
+  classifyAutoModeAction: classifyAutoModeActionMock,
 }));
 
 initTheme();
@@ -141,6 +150,96 @@ describe("Leash auto-mode controls", () => {
     expect(notices).toContain(
       "Leash auto mode enabled. Dangerous Bash actions are classifier-gated.",
     );
+  });
+
+  it("rotates only the auto marker while the classifier is pending", async () => {
+    vi.useFakeTimers();
+    classifyAutoModeActionMock.mockReset();
+    try {
+      const eventHandlers = new Map<
+        string,
+        (event: unknown, ctx: unknown) => Promise<void>
+      >();
+      const commands = new Map<
+        string,
+        { handler(args: string, ctx: unknown): Promise<void> }
+      >();
+      const statuses = new Map<string, string | undefined>();
+      let resolveClassifier!: (verdict: {
+        decision: "allow";
+        reason: string;
+        source: "classifier";
+      }) => void;
+      classifyAutoModeActionMock.mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveClassifier = resolve;
+        }),
+      );
+
+      const pi = {
+        on(
+          event: string,
+          handler: (event: unknown, ctx: unknown) => Promise<void>,
+        ) {
+          eventHandlers.set(event, handler);
+        },
+        registerCommand(
+          name: string,
+          definition: { handler(args: string, ctx: unknown): Promise<void> },
+        ) {
+          commands.set(name, definition);
+        },
+        registerShortcut() {},
+        appendEntry() {},
+      };
+      const ctx = {
+        hasUI: true,
+        model: { provider: "test", id: "classifier" },
+        ui: {
+          theme: {
+            fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
+          },
+          setStatus(key: string, value: string | undefined) {
+            statuses.set(key, value);
+          },
+          notify() {},
+        },
+        sessionManager: { getBranch: () => [] },
+      };
+
+      const controller = setupAutoMode(pi as never, structuredClone(config));
+      await eventHandlers.get("session_start")?.({}, ctx as never);
+      await commands.get("leash")?.handler("auto", ctx as never);
+
+      const pending = controller.classify(
+        {
+          toolName: "bash",
+          input: { command: "rm -rf /tmp/leash-test" },
+          command: "rm -rf /tmp/leash-test",
+          description: "recursive force delete",
+          pattern: "rm -rf",
+        },
+        ctx as never,
+      );
+
+      expect(statuses.get("leash-auto")).toBe(
+        "<accent>⏵</accent><warning>⏵</warning> <accent>leash auto</accent>",
+      );
+      await vi.advanceTimersByTimeAsync(180);
+      expect(statuses.get("leash-auto")).toBe(
+        "<warning>⏵</warning><success>⏵</success> <accent>leash auto</accent>",
+      );
+
+      resolveClassifier({
+        decision: "allow",
+        reason: "Bounded test cleanup.",
+        source: "classifier",
+      });
+      await pending;
+      expect(statuses.get("leash-auto")).toBe("<accent>⏵⏵ leash auto</accent>");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("restores auto verdict counts and the last decision from the session", async () => {

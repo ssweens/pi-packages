@@ -9,9 +9,10 @@ All notable changes to this project will be documented in this file.
 - Claude-style provenance input: classifiers receive direct user requests and prior agent Bash source, but never tool output. Custom `environment`, `allow`, `softDeny`, and `hardDeny` natural-language rule lists are supported under `permissionGate.autoMode`.
 - Claude-aligned auto-mode tiers: data exfiltration across the trusted Environment boundary is the default hard deny; destructive local and host operations are soft gates requiring direct, exact user intent.
 - Transient footer verdict trace plus `/leash status` session counters and last-decision detail for auto-mode `allow`, `ask`, and `deny` outcomes.
+- Animated, color-rotating auto footer marker while the classifier model is pending; it returns to the static indicator immediately after a verdict.
 
 ### Changed
-+- `sudo` is now an explicit-intent auto-mode soft gate rather than a hard deny. An auto approval skips only generic dangerous-command confirmation; Leash's dedicated sudo password flow still runs.
+- `sudo` is now an explicit-intent auto-mode soft gate rather than a hard deny. An auto approval skips only generic dangerous-command confirmation; Leash's dedicated sudo password flow still runs.
 
 
 ## [1.2.3] - 2026-07-18
