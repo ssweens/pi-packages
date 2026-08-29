@@ -401,10 +401,9 @@ class SessionPickerModal implements Component {
 				const titleW = LW - 2 - vw(time) - 1;
 				const titleTxt = trunc(sessionTitle(s), Math.max(10, titleW));
 				const row = ` ${titleTxt} ${dim(time)}`;
-				// Selected: full-width inverse-video bar; unselected: border + content. Both exactly LW wide.
-				left = isSel
-					? invert(pad(row, LW))
-					: border("│") + pad(row, LW - 1);
+				// Border char stays outside the inversion so selected rows align
+				// with unselected ones. Both exactly LW wide.
+				left = border("│") + (isSel ? invert(pad(row, LW - 1)) : pad(row, LW - 1));
 			} else {
 				left = leftCell("");
 			}
