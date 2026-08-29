@@ -262,23 +262,26 @@ class SessionPickerModal implements Component {
 		this.previewMsgs = loadPreviewMsgs(s);
 	}
 
-	/** Wrap + color messages into renderable preview lines at actual pane width */
+	/** Wrap + color messages into renderable preview lines at exact pane width */
 	private buildPreviewLines(wrapW: number): string[] {
 		const t = this.theme;
 		const out: string[] = [];
+		const w = Math.max(20, wrapW);
 		for (const m of this.previewMsgs) {
 			if (m.role === "user") {
+				// Green left bar; continuations align under the bar text
 				const bar = t.fg("success", "▎");
-				for (const wl of wrapTextWithAnsi(t.fg("success", m.text), Math.max(20, wrapW - 2))) {
+				for (const wl of wrapTextWithAnsi(t.fg("success", m.text), w - 2)) {
 					out.push(`${bar} ${wl}`);
 				}
 			} else if (m.role === "assistant") {
-				for (const wl of wrapTextWithAnsi(m.text, Math.max(20, wrapW))) {
-					out.push(`  ${wl}`);
+				// Flush left, full width
+				for (const wl of wrapTextWithAnsi(m.text, w)) {
+					out.push(wl);
 				}
 			} else {
-				for (const wl of wrapTextWithAnsi(t.fg("dim", m.text), Math.max(20, wrapW))) {
-					out.push(`  ${wl}`);
+				for (const wl of wrapTextWithAnsi(t.fg("dim", m.text), w)) {
+					out.push(wl);
 				}
 			}
 			out.push("");
@@ -321,43 +324,42 @@ class SessionPickerModal implements Component {
 	render(width: number): string[] {
 		const t = this.theme;
 		const dim = (s: string) => t.fg("dim", s);
+		// Exact geometry: every row is exactly W visible chars
 		const W = Math.min(width - 2, 150);
-		const PW = Math.max(50, Math.floor(W * 0.58)); // preview box outer width
-		const LW = W - PW - 2;                          // left column inner width
+		const PW = Math.max(50, Math.floor(W * 0.58)); // right box outer width
+		const LW = W - PW - 1;                          // left cell width incl. its border
 		const LIST_ROWS = this.listRows();
-		const PREV_ROWS = LIST_ROWS;
 		const border = (s: string) => t.fg("border", s);
+
+		// Cell builders — always exactly LW / PW visible wide
+		const leftCell = (content: string) => border("│") + pad(trunc(content, LW - 1), LW - 1);
+		const rightCell = (inner: string, bc = "│") => border("│") + pad(trunc(inner, PW - 2), PW - 2) + border(bc);
 
 		const lines: string[] = [];
 
 		// ── Top border with embedded title + count ──────────────
 		const title = ` ${t.fg("accent", t.bold("Session History"))} `;
 		const countStr = this.loaded ? dim(`(${this.filtered.length}) `) : "";
-		const topUsed = 2 + vw(title) + vw(countStr);
-		lines.push(border("╭─") + title + countStr + border("─".repeat(Math.max(0, W - topUsed)) + "╮"));
+		const topUsed = 1 + vw(title) + vw(countStr);
+		lines.push(border("╭") + title + countStr + border("─".repeat(Math.max(0, W - topUsed - 1)) + "╮"));
 
-		// ── Search row + preview box top ────────────────────────
+		// ── Search row ──────────────────────────────────────────
 		const fv = this.filterInput.getValue();
 		const search = ` ${t.fg("accent", ">")} ${fv ? t.fg("accent", fv) : dim("")}▋`;
-		lines.push(border("│") + pad(search, LW + 1) + " " + border("╭" + "─".repeat(PW - 2) + "╮"));
+		lines.push(leftCell(search) + " " + rightCell(""));
 
 		// ── Preview header row ──────────────────────────────────
 		const prevHeader = dim("Session Preview");
 		const phPad = Math.max(0, Math.floor((PW - 2 - vw(prevHeader)) / 2));
-		const previewRow = (inner: string, borderChar = "│") =>
-			border("│") + pad(inner, PW - 2) + border(borderChar);
+		lines.push(leftCell("") + " " + rightCell(" ".repeat(phPad) + prevHeader));
 
-		// ── Content rows ────────────────────────────────────────
-		// First preview row is the centered header
-		lines.push(border("│") + pad("", LW + 1) + " " + previewRow(" ".repeat(phPad) + prevHeader));
-
-		// Build wrapped preview lines at actual width
-		const rendered = this.buildPreviewLines(PW - 5);
+		// Build wrapped preview lines at exact inner width
+		const rendered = this.buildPreviewLines(PW - 2);
 
 		// Scrollbar math
 		const totalP = rendered.length;
-		const thumbSize = totalP > PREV_ROWS ? Math.max(1, Math.round((PREV_ROWS * PREV_ROWS) / totalP)) : 0;
-		const thumbStart = totalP > PREV_ROWS ? Math.round((this.previewScroll / totalP) * PREV_ROWS) : -1;
+		const thumbSize = totalP > LIST_ROWS ? Math.max(1, Math.round((LIST_ROWS * LIST_ROWS) / totalP)) : 0;
+		const thumbStart = totalP > LIST_ROWS ? Math.round((this.previewScroll / totalP) * LIST_ROWS) : -1;
 
 		for (let i = 0; i < LIST_ROWS; i++) {
 			// Left: list row
@@ -369,26 +371,25 @@ class SessionPickerModal implements Component {
 				const s = this.filtered[idx];
 				const isSel = idx === this.sel;
 				const time = relTime(s.timestamp);
-				const titleW = LW - vw(time) - 3;
-				const titleTxt = trunc(sessionTitle(s), titleW);
-				if (isSel) {
-					left = t.bg("selectedBg", pad(` ${titleTxt}${" ".repeat(Math.max(1, titleW - vw(titleTxt)))}${dim(time)} `, LW + 1));
-				} else {
-					left = pad(` ${titleTxt}${" ".repeat(Math.max(1, titleW - vw(titleTxt)))}${dim(time)} `, LW + 1);
-				}
+				const titleW = LW - 2 - vw(time) - 1;
+				const titleTxt = trunc(sessionTitle(s), Math.max(10, titleW));
+				const row = ` ${titleTxt} ${dim(time)}`;
+				// Selected: full-width highlight bar; unselected: border + content. Both exactly LW wide.
+				left = isSel
+					? t.bg("selectedBg", pad(row, LW))
+					: border("│") + pad(row, LW - 1);
 			} else {
-				left = pad("", LW + 1);
+				left = leftCell("");
 			}
 
 			// Right: preview row
 			const inner = this.loaded ? (rendered[this.previewScroll + i] ?? "") : (i === 0 ? dim(" Loading…") : "");
 			const inThumb = thumbStart >= 0 && i >= thumbStart && i < thumbStart + thumbSize;
-			const bc = inThumb ? "┃" : "│";
-			lines.push(border("│") + left + " " + previewRow(inner, bc));
+			lines.push(left + " " + rightCell(inner, inThumb ? "┃" : "│"));
 		}
 
 		// ── Preview box bottom ──────────────────────────────────
-		lines.push(border("│") + pad("", LW + 1) + " " + border("╰" + "─".repeat(PW - 2) + "╯"));
+		lines.push(leftCell("") + " " + border("╰") + border("─".repeat(PW - 2)) + border("╯"));
 
 		// ── Bottom border with key hints ────────────────────────
 		const hints = ` ${t.fg("accent", "Tab")}${dim(" all workspaces")} · ${t.fg("accent", "PgUp/PgDn")}${dim(" scroll")} · ${t.fg("accent", "Esc")}${dim(" close")} `;
