@@ -1,0 +1,53 @@
+{
+  "name": "@ssweens/pi-omp",
+  "version": "0.1.0",
+  "description": "Consolidated extension that ports omp's best self-contained behaviors to stock pi — personas, engineering policy, model roles, phased todos, auto-thinking, auto-learn, and commit.",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "persona",
+    "todo",
+    "model-roles",
+    "auto-thinking",
+    "auto-learn",
+    "commit"
+  ],
+  "type": "module",
+  "license": "MIT",
+  "author": "ssweens",
+  "files": [
+    "extensions/",
+    "skills/",
+    "src/",
+    "README.md",
+    "DESIGN.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "check": "tsc --noEmit -p tsconfig.json",
+    "test": "bun test"
+  },
+  "pi": {
+    "extensions": [
+      "extensions"
+    ],
+    "skills": [
+      "skills"
+    ]
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-tui": "*",
+    "@sinclair/typebox": "*"
+  },
+  "devDependencies": {
+    "@mariozechner/pi-ai": "^0.73.1",
+    "@mariozechner/pi-agent-core": "^0.73.1",
+    "@mariozechner/pi-coding-agent": "^0.73.1",
+    "@mariozechner/pi-tui": "^0.73.1",
+    "@sinclair/typebox": "^0.34.49",
+    "@types/bun": "latest",
+    "typescript": "^6.0.2"
+  }
+}
