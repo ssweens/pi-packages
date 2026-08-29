@@ -1,0 +1,31 @@
+{
+  "name": "@ssweens/pi-atta",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "@@ session picker for pi — type @@ to browse and reference prior sessions",
+  "keywords": [
+    "pi-package",
+    "session-picker",
+    "atta",
+    "session-reference",
+    "context"
+  ],
+  "author": "ssweens",
+  "license": "MIT",
+  "files": [
+    "extensions/",
+    "README.md",
+    "LICENSE"
+  ],
+  "peerDependencies": {
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-agent-core": "*",
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-tui": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ]
+  }
+}
