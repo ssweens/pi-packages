@@ -109,7 +109,7 @@ function getSessions(): SessionInfo[] {
 	} catch { return []; }
 }
 
-/** Load session messages — reads only first 100KB */
+/** Load the most recent session messages — reads only the last 100KB */
 function loadPreviewMsgs(session: SessionInfo, maxMsgs = 40): PreviewMsg[] {
 	const result: PreviewMsg[] = [];
 	try {
@@ -117,10 +117,13 @@ function loadPreviewMsgs(session: SessionInfo, maxMsgs = 40): PreviewMsg[] {
 		const readSize = Math.min(size, 100 * 1024);
 		const fd = openSync(session.path, "r");
 		const buf = Buffer.alloc(readSize);
-		readSync(fd, buf, 0, readSize, 0);
+		readSync(fd, buf, 0, readSize, size - readSize); // read the TAIL
 		closeSync(fd);
 
-		for (const line of buf.toString("utf8").split("\n")) {
+		let lines = buf.toString("utf8").split("\n");
+		if (readSize < size) lines = lines.slice(1); // drop partial first line
+
+		for (const line of lines) {
 			if (!line.trim()) continue;
 			try {
 				const e = JSON.parse(line);
