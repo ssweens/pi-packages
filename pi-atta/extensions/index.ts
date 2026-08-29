@@ -199,9 +199,6 @@ function matchesFilter(s: SessionInfo, q: string): boolean {
 
 // ── Modal Component ───────────────────────────────────────────────
 
-const LIST_ROWS = 14;   // visible list rows
-const PREV_ROWS = LIST_ROWS + 2; // preview box inner height
-
 class SessionPickerModal implements Component {
 	private all: SessionInfo[] = [];
 	private filtered: SessionInfo[] = [];
@@ -289,9 +286,16 @@ class SessionPickerModal implements Component {
 		return out;
 	}
 
+	/** Visible list rows sized to the terminal */
+	private listRows(): number {
+		const rows = this.tui.terminal?.rows ?? 24;
+		return Math.max(8, Math.min(60, rows - 7));
+	}
+
 	private ensureVisible() {
+		const lr = this.listRows();
 		if (this.sel < this.scroll) this.scroll = this.sel;
-		else if (this.sel >= this.scroll + LIST_ROWS) this.scroll = this.sel - LIST_ROWS + 1;
+		else if (this.sel >= this.scroll + lr) this.scroll = this.sel - lr + 1;
 	}
 
 	handleInput(data: string) {
@@ -300,10 +304,11 @@ class SessionPickerModal implements Component {
 		if (matchesKey(data, Key.tab)) { this.showAll = !this.showAll; this.applyFilter(); return; }
 		if (matchesKey(data, Key.up) && this.sel > 0) { this.sel--; this.ensureVisible(); this.loadPreview(); return; }
 		if (matchesKey(data, Key.down) && this.sel < this.filtered.length - 1) { this.sel++; this.ensureVisible(); this.loadPreview(); return; }
-		if (matchesKey(data, Key.pageUp)) { this.previewScroll = Math.max(0, this.previewScroll - PREV_ROWS); return; }
+		if (matchesKey(data, Key.pageUp)) { this.previewScroll = Math.max(0, this.previewScroll - this.listRows()); return; }
 		if (matchesKey(data, Key.pageDown)) {
-			const maxScroll = Math.max(0, this.buildPreviewLines(60).length - PREV_ROWS);
-			this.previewScroll = Math.min(maxScroll, this.previewScroll + PREV_ROWS);
+			const lr = this.listRows();
+			const maxScroll = Math.max(0, this.buildPreviewLines(60).length - lr);
+			this.previewScroll = Math.min(maxScroll, this.previewScroll + lr);
 			return;
 		}
 		this.filterInput.handleInput(data);
@@ -316,9 +321,11 @@ class SessionPickerModal implements Component {
 	render(width: number): string[] {
 		const t = this.theme;
 		const dim = (s: string) => t.fg("dim", s);
-		const W = Math.min(width - 2, 118);
+		const W = Math.min(width - 2, 150);
 		const PW = Math.max(50, Math.floor(W * 0.58)); // preview box outer width
 		const LW = W - PW - 2;                          // left column inner width
+		const LIST_ROWS = this.listRows();
+		const PREV_ROWS = LIST_ROWS;
 		const border = (s: string) => t.fg("border", s);
 
 		const lines: string[] = [];
@@ -409,7 +416,7 @@ export default function attaExtension(pi: ExtensionAPI): void {
 					modal = new SessionPickerModal(tui, theme, ctx.cwd, (r) => done(r));
 					return modal;
 				},
-				{ overlay: true, overlayOptions: { anchor: "center", width: 120, maxHeight: 22 } }
+				{ overlay: true, overlayOptions: { anchor: "center", width: Math.min((process.stdout.columns || 120) - 2, 152), maxHeight: (process.stdout.rows || 40) - 2 } }
 			) ?? null;
 			if (!session) return null;
 			return { session, leftover: modal?.leftover ?? "" };
