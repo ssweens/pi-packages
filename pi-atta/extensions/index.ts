@@ -286,10 +286,10 @@ class SessionPickerModal implements Component {
 		return out;
 	}
 
-	/** Visible list rows sized to the terminal */
+	/** Visible list rows sized to the terminal, leaving margin */
 	private listRows(): number {
 		const rows = this.tui.terminal?.rows ?? 24;
-		return Math.max(8, Math.min(60, rows - 7));
+		return Math.max(8, Math.min(24, rows - 16));
 	}
 
 	private ensureVisible() {
@@ -416,7 +416,7 @@ export default function attaExtension(pi: ExtensionAPI): void {
 					modal = new SessionPickerModal(tui, theme, ctx.cwd, (r) => done(r));
 					return modal;
 				},
-				{ overlay: true, overlayOptions: { anchor: "center", width: Math.min((process.stdout.columns || 120) - 2, 152), maxHeight: (process.stdout.rows || 40) - 2 } }
+				{ overlay: true, overlayOptions: { anchor: "center", width: Math.min((process.stdout.columns || 120) - 8, 152), maxHeight: (process.stdout.rows || 40) - 6 } }
 			) ?? null;
 			if (!session) return null;
 			return { session, leftover: modal?.leftover ?? "" };
