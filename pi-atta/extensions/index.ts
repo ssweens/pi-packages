@@ -258,7 +258,8 @@ class SessionPickerModal implements Component {
 		if (!s) { this.previewMsgs = []; this.previewRendered = []; this.previewId = null; this.previewScroll = 0; return; }
 		if (s.id === this.previewId) return;
 		this.previewId = s.id;
-		this.previewScroll = 0;
+		// -1 = sentinel: pin to latest (bottom) on next render
+		this.previewScroll = -1;
 		this.previewMsgs = loadPreviewMsgs(s);
 	}
 
@@ -307,10 +308,14 @@ class SessionPickerModal implements Component {
 		if (matchesKey(data, Key.tab)) { this.showAll = !this.showAll; this.applyFilter(); return; }
 		if (matchesKey(data, Key.up) && this.sel > 0) { this.sel--; this.ensureVisible(); this.loadPreview(); return; }
 		if (matchesKey(data, Key.down) && this.sel < this.filtered.length - 1) { this.sel++; this.ensureVisible(); this.loadPreview(); return; }
-		if (matchesKey(data, Key.pageUp)) { this.previewScroll = Math.max(0, this.previewScroll - this.listRows()); return; }
-		if (matchesKey(data, Key.pageDown)) {
-			const lr = this.listRows();
-			const maxScroll = Math.max(0, this.buildPreviewLines(60).length - lr);
+		const lr = this.listRows();
+		const maxScroll = Math.max(0, this.buildPreviewLines(60).length - lr);
+		if (this.previewScroll < 0) this.previewScroll = maxScroll;
+		if (matchesKey(data, Key.pageUp) || matchesKey(data, Key.shift("up"))) {
+			this.previewScroll = Math.max(0, this.previewScroll - lr);
+			return;
+		}
+		if (matchesKey(data, Key.pageDown) || matchesKey(data, Key.shift("down"))) {
 			this.previewScroll = Math.min(maxScroll, this.previewScroll + lr);
 			return;
 		}
@@ -356,6 +361,9 @@ class SessionPickerModal implements Component {
 		// Build wrapped preview lines at exact inner width
 		const rendered = this.buildPreviewLines(PW - 2);
 
+		// Resolve "pin to latest" sentinel now that we know the wrapped length
+		if (this.previewScroll < 0) this.previewScroll = Math.max(0, rendered.length - LIST_ROWS);
+
 		// Scrollbar math
 		const totalP = rendered.length;
 		const thumbSize = totalP > LIST_ROWS ? Math.max(1, Math.round((LIST_ROWS * LIST_ROWS) / totalP)) : 0;
@@ -392,7 +400,7 @@ class SessionPickerModal implements Component {
 		lines.push(leftCell("") + " " + border("╰") + border("─".repeat(PW - 2)) + border("╯"));
 
 		// ── Bottom border with key hints ────────────────────────
-		const hints = ` ${t.fg("accent", "Tab")}${dim(" all workspaces")} · ${t.fg("accent", "PgUp/PgDn")}${dim(" scroll")} · ${t.fg("accent", "Esc")}${dim(" close")} `;
+		const hints = ` ${t.fg("accent", "Tab")}${dim(" workspaces")} · ${t.fg("accent", "PgUp/PgDn")}${dim(" scroll preview")} · ${t.fg("accent", "Esc")}${dim(" close")} `;
 		const botDash = Math.max(0, W - vw(hints) - 1);
 		lines.push(border("╰" + "─".repeat(botDash) + hints + "╯"));
 
