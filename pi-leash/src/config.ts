@@ -20,8 +20,8 @@
  * }
  */
 
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { getAgentDir } from "@mariozechner/pi-coding-agent";
 
 export function getConfigPath(): string {
@@ -85,6 +85,27 @@ export interface PolicyRule {
  * User-facing guardrails configuration.
  * All fields are optional - defaults are applied.
  */
+export interface AutoModeConfig {
+  /** Auto-mode setting. Changes via /leash settings apply immediately; new sessions initialize from it. */
+  enabled?: boolean;
+  /** Classifier model in `provider/model-id` form. Null uses Pi's active model. */
+  model?: string | null;
+  /** Classifier deadline in milliseconds. Default: 10000. */
+  timeout?: number;
+  /** Trusted-environment facts for the classifier. */
+  environment?: string[];
+  /** Natural-language exceptions to soft-deny rules. */
+  allow?: string[];
+  /** Natural-language destructive actions that need explicit user intent. */
+  softDeny?: string[];
+  /** Natural-language boundaries the classifier must always deny. */
+  hardDeny?: string[];
+}
+
+/**
+ * User-facing guardrails configuration.
+ * All fields are optional - defaults are applied.
+ */
 export interface GuardrailsConfig {
   /** Enable/disable guardrails entirely. Default: true */
   enabled?: boolean;
@@ -125,6 +146,8 @@ export interface GuardrailsConfig {
     explainModel?: string;
     /** Timeout for explanation requests. Default: 5000 */
     explainTimeout?: number;
+    /** Classifier-backed automatic permission decisions. Default: disabled. */
+    autoMode?: AutoModeConfig;
     /** Sudo mode configuration */
     sudoMode?: {
       /** Enable sudo password prompts and execution. Default: false */
@@ -178,6 +201,7 @@ export interface ResolvedConfig {
     explainCommands: boolean;
     explainModel: string | null;
     explainTimeout: number;
+    autoMode: Required<AutoModeConfig>;
     sudoMode: {
       enabled: boolean;
       timeout: number;
@@ -245,6 +269,23 @@ function mergeConfig(userConfig: GuardrailsConfig): ResolvedConfig {
     explainCommands: pg.explainCommands ?? false,
     explainModel: pg.explainModel ?? null,
     explainTimeout: pg.explainTimeout ?? 5000,
+    autoMode: {
+      enabled: pg.autoMode?.enabled ?? false,
+      model: pg.autoMode?.model?.trim() || null,
+      timeout: Math.max(1000, pg.autoMode?.timeout ?? 10000),
+      environment: (pg.autoMode?.environment ?? []).filter(
+        (rule) => rule.trim().length > 0,
+      ),
+      allow: (pg.autoMode?.allow ?? []).filter(
+        (rule) => rule.trim().length > 0,
+      ),
+      softDeny: (pg.autoMode?.softDeny ?? []).filter(
+        (rule) => rule.trim().length > 0,
+      ),
+      hardDeny: (pg.autoMode?.hardDeny ?? []).filter(
+        (rule) => rule.trim().length > 0,
+      ),
+    },
     sudoMode: {
       enabled: pg.sudoMode?.enabled ?? true,
       timeout: pg.sudoMode?.timeout ?? 30000,
@@ -308,6 +349,38 @@ export function loadConfig(): ResolvedConfig {
  */
 export function clearConfigCache(): void {
   _cachedConfig = null;
+}
+
+/**
+ * Persist only the supplied auto-mode fields without discarding unrelated
+ * Leash settings or future config keys.
+ */
+export function updateAutoModeConfig(patch: Partial<AutoModeConfig>): void {
+  const configPath = getConfigPath();
+  let raw: Record<string, unknown> = {};
+
+  if (existsSync(configPath)) {
+    try {
+      raw = JSON.parse(readFileSync(configPath, "utf-8")) as Record<
+        string,
+        unknown
+      >;
+    } catch {
+      // Preserve the existing load behavior: replace an unreadable config only
+      // when a user explicitly saves an auto-mode setting.
+    }
+  }
+
+  const permissionGate = (raw.permissionGate ?? {}) as Record<string, unknown>;
+  const autoMode = {
+    ...((permissionGate.autoMode ?? {}) as Record<string, unknown>),
+    ...patch,
+  };
+  raw.permissionGate = { ...permissionGate, autoMode };
+
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(configPath, JSON.stringify(raw, null, 2), { mode: 0o600 });
+  clearConfigCache();
 }
 
 /**

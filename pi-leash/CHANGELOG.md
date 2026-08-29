@@ -3,6 +3,16 @@
 All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
+### Added
+- Classifier-backed **Leash auto mode** for dangerous Bash operations. `Ctrl+Alt+L` and `/leash auto|manual|toggle` control a session-scoped mode; `/leash settings` applies changes immediately, persists the next-session initial state, and reuses Pi's built-in provider/model selector for its dedicated classifier.
+- Fail-closed classifier contract: only strict `allow`, `ask`, or `deny` JSON verdicts are accepted; missing model, timeout, abort, or malformed output returns to the ordinary human approval dialog.
+- Claude-style provenance input: classifiers receive direct user requests and prior agent Bash source, but never tool output. Custom `environment`, `allow`, `softDeny`, and `hardDeny` natural-language rule lists are supported under `permissionGate.autoMode`.
+- Claude-aligned auto-mode tiers: data exfiltration across the trusted Environment boundary is the default hard deny; destructive local and host operations are soft gates requiring direct, exact user intent.
+- Transient footer verdict trace plus `/leash status` session counters and last-decision detail for auto-mode `allow`, `ask`, and `deny` outcomes.
+
+### Changed
++- `sudo` is now an explicit-intent auto-mode soft gate rather than a hard deny. An auto approval skips only generic dangerous-command confirmation; Leash's dedicated sudo password flow still runs.
+
 
 ## [1.2.3] - 2026-07-18
 ### Added

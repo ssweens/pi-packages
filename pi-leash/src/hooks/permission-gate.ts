@@ -20,6 +20,7 @@ import {
 } from "@mariozechner/pi-tui";
 import type { DangerousPattern, ResolvedConfig } from "../config";
 import { executeSubagent, resolveModel } from "../lib";
+import type { AutoModeAction } from "../lib/auto-mode-classifier";
 import { extractBashPathCandidates } from "../utils/bash-paths";
 import { emitBlocked, emitDangerous } from "../utils/events";
 import {
@@ -28,7 +29,8 @@ import {
 } from "../utils/matching";
 import { isWithinBoundary } from "../utils/path";
 import { walkCommands, wordToString } from "../utils/shell-utils";
-import { parse } from "../vendor/aliou-sh/index.js";
+import { parse } from "../vendor/aliou-sh/index";
+import type { AutoModeController } from "./auto-mode";
 import {
   BUILTIN_KEYWORD_PATTERNS,
   BUILTIN_MATCHERS,
@@ -386,139 +388,131 @@ async function promptForSudoPassword(
   errorMessage?: string,
   attemptsRemaining?: number,
 ): Promise<SudoPasswordPromptResult | null> {
-  const result = await ctx.ui.custom<SudoPasswordPromptResult | null | undefined>(
-    (tui: { terminal?: { rows?: number } }, theme, kb, done) => {
-      const container = new Container();
-      const yellowBorder = (s: string) => theme.fg("warning", s);
+  const result = await ctx.ui.custom<
+    SudoPasswordPromptResult | null | undefined
+  >((tui: { terminal?: { rows?: number } }, theme, kb, done) => {
+    const container = new Container();
+    const yellowBorder = (s: string) => theme.fg("warning", s);
 
-      let password = "";
-      let remember = false;
-      const cacheMinutes = Math.max(1, Math.round(cacheTtlMs / 60000));
+    let password = "";
+    let remember = false;
+    const cacheMinutes = Math.max(1, Math.round(cacheTtlMs / 60000));
 
-      container.addChild(new DynamicBorder(yellowBorder));
-      container.addChild(
-        new Text(
-          theme.fg("warning", theme.bold("Sudo Password Required")),
-          1,
-          0,
-        ),
-      );
+    container.addChild(new DynamicBorder(yellowBorder));
+    container.addChild(
+      new Text(theme.fg("warning", theme.bold("Sudo Password Required")), 1, 0),
+    );
 
-      // Show error from previous failed attempt
-      if (errorMessage) {
-        container.addChild(new Spacer(1));
-        container.addChild(
-          new Text(theme.fg("error", `✗ ${errorMessage}`), 1, 0),
-        );
-      }
-
-      // Show remaining attempts
-      if (attemptsRemaining !== undefined) {
-        container.addChild(new Spacer(1));
-        container.addChild(
-          new Text(
-            theme.fg(
-              "dim",
-              `${attemptsRemaining} attempt${attemptsRemaining === 1 ? "" : "s"} remaining`,
-            ),
-            1,
-            0,
-          ),
-        );
-      }
-
+    // Show error from previous failed attempt
+    if (errorMessage) {
       container.addChild(new Spacer(1));
       container.addChild(
-        new Text(theme.fg("text", "Enter sudo password to execute:"), 1, 0),
+        new Text(theme.fg("error", `✗ ${errorMessage}`), 1, 0),
       );
-      container.addChild(new Spacer(1));
-      container.addChild(
-        new DynamicBorder((s: string) => theme.fg("muted", s)),
-      );
-      container.addChild(new Text(theme.fg("text", command), 1, 0));
-      container.addChild(
-        new DynamicBorder((s: string) => theme.fg("muted", s)),
-      );
-      container.addChild(new Spacer(1));
-      container.addChild(new Text(theme.fg("text", "Password:"), 1, 0));
+    }
 
-      const passwordText = new Text("", 1, 0);
-      container.addChild(passwordText);
-
-      const rememberText = new Text("", 1, 0);
-      const renderRemember = () => {
-        const box = remember ? "[x]" : "[ ]";
-        const color = remember ? "accent" : "dim";
-        rememberText.setText(
-          theme.fg(
-            color,
-            `${box} Remember password for ${cacheMinutes} min (in-memory only)`,
-          ),
-        );
-      };
-      if (cacheEnabled) {
-        container.addChild(new Spacer(1));
-        renderRemember();
-        container.addChild(rememberText);
-      }
-
+    // Show remaining attempts
+    if (attemptsRemaining !== undefined) {
       container.addChild(new Spacer(1));
       container.addChild(
         new Text(
           theme.fg(
             "dim",
-            cacheEnabled
-              ? "enter: confirm • tab: toggle remember • esc: cancel"
-              : "enter: confirm • esc: cancel",
+            `${attemptsRemaining} attempt${attemptsRemaining === 1 ? "" : "s"} remaining`,
           ),
           1,
           0,
         ),
       );
-      container.addChild(new DynamicBorder(yellowBorder));
+    }
 
-      return {
-        render: (width: number) => {
-          const lines = container.render(width);
-          return clampDialogLines(
-            lines,
-            getDialogMaxRows(tui),
-            7,
-            width,
-            theme.fg("dim", "… command preview truncated to fit terminal …"),
-          );
-        },
-        invalidate: () => container.invalidate(),
-        handleInput: (data: string) => {
-          const confirm =
-            kb.matches(data, "selectConfirm" as any) || isEnterInput(data);
-          const cancel =
-            kb.matches(data, "selectCancel" as any) || matchesKey(data, Key.escape);
-          const backspace =
-            matchesKey(data, Key.backspace) || data === "\u007f";
-          const tab = matchesKey(data, Key.tab) || data === "\t";
+    container.addChild(new Spacer(1));
+    container.addChild(
+      new Text(theme.fg("text", "Enter sudo password to execute:"), 1, 0),
+    );
+    container.addChild(new Spacer(1));
+    container.addChild(new DynamicBorder((s: string) => theme.fg("muted", s)));
+    container.addChild(new Text(theme.fg("text", command), 1, 0));
+    container.addChild(new DynamicBorder((s: string) => theme.fg("muted", s)));
+    container.addChild(new Spacer(1));
+    container.addChild(new Text(theme.fg("text", "Password:"), 1, 0));
 
-          if (confirm) {
-            // Ignore empty submits. This prevents accidental empty-password attempts.
-            if (password.length === 0) return;
-            done({ password, remember: cacheEnabled && remember });
-          } else if (cancel) {
-            done(null);
-          } else if (tab && cacheEnabled) {
-            remember = !remember;
-            renderRemember();
-          } else if (backspace) {
-            password = password.slice(0, -1);
-            passwordText.setText(theme.fg("text", "•".repeat(password.length)));
-          } else if (data.length === 1 && data.charCodeAt(0) >= 32) {
-            // Printable character
-            password += data;
-            passwordText.setText(theme.fg("text", "•".repeat(password.length)));
-          }
-        },
-      };
-    },
-  );
+    const passwordText = new Text("", 1, 0);
+    container.addChild(passwordText);
+
+    const rememberText = new Text("", 1, 0);
+    const renderRemember = () => {
+      const box = remember ? "[x]" : "[ ]";
+      const color = remember ? "accent" : "dim";
+      rememberText.setText(
+        theme.fg(
+          color,
+          `${box} Remember password for ${cacheMinutes} min (in-memory only)`,
+        ),
+      );
+    };
+    if (cacheEnabled) {
+      container.addChild(new Spacer(1));
+      renderRemember();
+      container.addChild(rememberText);
+    }
+
+    container.addChild(new Spacer(1));
+    container.addChild(
+      new Text(
+        theme.fg(
+          "dim",
+          cacheEnabled
+            ? "enter: confirm • tab: toggle remember • esc: cancel"
+            : "enter: confirm • esc: cancel",
+        ),
+        1,
+        0,
+      ),
+    );
+    container.addChild(new DynamicBorder(yellowBorder));
+
+    return {
+      render: (width: number) => {
+        const lines = container.render(width);
+        return clampDialogLines(
+          lines,
+          getDialogMaxRows(tui),
+          7,
+          width,
+          theme.fg("dim", "… command preview truncated to fit terminal …"),
+        );
+      },
+      invalidate: () => container.invalidate(),
+      handleInput: (data: string) => {
+        const confirm =
+          kb.matches(data, "selectConfirm" as any) || isEnterInput(data);
+        const cancel =
+          kb.matches(data, "selectCancel" as any) ||
+          matchesKey(data, Key.escape);
+        const backspace = matchesKey(data, Key.backspace) || data === "\u007f";
+        const tab = matchesKey(data, Key.tab) || data === "\t";
+
+        if (confirm) {
+          // Ignore empty submits. This prevents accidental empty-password attempts.
+          if (password.length === 0) return;
+          done({ password, remember: cacheEnabled && remember });
+        } else if (cancel) {
+          done(null);
+        } else if (tab && cacheEnabled) {
+          remember = !remember;
+          renderRemember();
+        } else if (backspace) {
+          password = password.slice(0, -1);
+          passwordText.setText(theme.fg("text", "•".repeat(password.length)));
+        } else if (data.length === 1 && data.charCodeAt(0) >= 32) {
+          // Printable character
+          password += data;
+          passwordText.setText(theme.fg("text", "•".repeat(password.length)));
+        }
+      },
+    };
+  });
 
   if (result !== undefined) return result;
 
@@ -531,7 +525,10 @@ async function promptForSudoPassword(
     `Command: ${command}`,
   ].filter(Boolean);
 
-  const password = await ctx.ui.input(titleParts.join("\n"), "Enter sudo password");
+  const password = await ctx.ui.input(
+    titleParts.join("\n"),
+    "Enter sudo password",
+  );
   if (!password) return null;
 
   const remember = cacheEnabled
@@ -891,6 +888,7 @@ export async function isCwdScopedFileOperation(
 export function setupPermissionGateHook(
   pi: ExtensionAPI,
   config: ResolvedConfig,
+  autoMode?: AutoModeController,
 ) {
   if (!config.features.permissionGate) return;
 
@@ -960,21 +958,36 @@ export function setupPermissionGateHook(
     if (!isToolCallEventType("bash", event)) return;
 
     const command = event.input.command;
+    const autoActive = autoMode?.isEnabled() ?? false;
 
-    // Check allowed patterns first (bypass)
-    for (const pattern of allowedPatterns) {
-      if (pattern.test(command)) return;
-    }
-
-    // Check session-allowed commands (allowed for this session only)
-    if (sessionAllowedCommands.has(command)) {
-      return;
+    // Manual allow rules and prior manual grants retain their current behavior.
+    // Auto mode deliberately re-classifies every dangerous match instead of
+    // inheriting broad string/reason/cwd bypasses.
+    if (!autoActive) {
+      for (const pattern of allowedPatterns) {
+        if (pattern.test(command)) return;
+      }
+      if (sessionAllowedCommands.has(command)) return;
     }
 
     // Check auto-deny patterns
     for (const pattern of autoDenyPatterns) {
       if (pattern.test(command)) {
-        pi.sendMessage({ customType: "leash", content: "⛔ Blocked dangerous command (auto-deny).", display: true });
+        if (autoActive && autoMode) {
+          autoMode.recordVerdict(
+            {
+              decision: "deny",
+              reason: "Command matched an auto-deny policy.",
+              source: "safety",
+            },
+            ctx,
+          );
+        }
+        pi.sendMessage({
+          customType: "leash",
+          content: "⛔ Blocked dangerous command (auto-deny).",
+          display: true,
+        });
 
         const reason =
           "Command matched auto-deny pattern and was blocked automatically.";
@@ -1013,15 +1026,50 @@ export function setupPermissionGateHook(
       CWD_BYPASS_ELIGIBLE_DESCRIPTIONS.has(m.description),
     );
     const cwdScopedDangerous = await isCwdScopedFileOperation(command, ctx.cwd);
+    const sudoMode = config.permissionGate.sudoMode;
+    const sudoCommand = isSudoCommand(command);
+    let autoApprovedSudo = false;
 
-    // Check session-wide cwd-scoped file-operation allowance.
-    if (sessionAllowCwdFileOps && allCwdBypassEligible && cwdScopedDangerous) {
+    if (autoActive && autoMode) {
+      const action: AutoModeAction = {
+        toolName: event.toolName,
+        input: event.input as Record<string, unknown>,
+        command,
+        description,
+        pattern: rawPattern,
+      };
+      const verdict = await autoMode.classify(action, ctx);
+      autoMode.recordVerdict(verdict, ctx);
+      if (verdict.decision === "allow") {
+        if (sudoCommand && sudoMode.enabled) autoApprovedSudo = true;
+        else return;
+      }
+      if (verdict.decision === "deny") {
+        const reason = `Leash auto mode denied this action: ${verdict.reason}`;
+        emitBlocked(pi, {
+          feature: "permissionGate",
+          toolName: "bash",
+          input: event.input,
+          reason,
+        });
+        return { block: true, reason };
+      }
+      ctx.ui.notify(`Leash auto: ${verdict.reason}`, "warning");
+    }
+
+    // Manual-mode grants intentionally do not bypass the auto classifier.
+    if (
+      !autoActive &&
+      sessionAllowCwdFileOps &&
+      allCwdBypassEligible &&
+      cwdScopedDangerous
+    ) {
       return;
     }
 
     // A multi-reason command still prompts unless every reason was explicitly
     // trusted. A grant for "rm -rf", for example, never grants "sudo".
-    if (dangerousReasonTrust.allows(matches)) return;
+    if (!autoActive && dangerousReasonTrust.allows(matches)) return;
 
     // Emit dangerous event (presenter will play sound)
     emitDangerous(pi, { command, description, pattern: rawPattern });
@@ -1041,6 +1089,7 @@ export function setupPermissionGateHook(
 
       let explanation: CommandExplanation | null = null;
       if (
+        !autoApprovedSudo &&
         config.permissionGate.explainCommands &&
         config.permissionGate.explainModel
       ) {
@@ -1057,7 +1106,7 @@ export function setupPermissionGateHook(
       }
 
       const canGrantCwdFileOpsSession =
-        allCwdBypassEligible && cwdScopedDangerous;
+        !autoActive && allCwdBypassEligible && cwdScopedDangerous;
 
       type ConfirmResult =
         | "allow"
@@ -1077,6 +1126,15 @@ export function setupPermissionGateHook(
           kb,
           done,
         ) => {
+          if (autoApprovedSudo) {
+            done("allow");
+            return {
+              render: () => [],
+              invalidate() {},
+              handleInput() {},
+            };
+          }
+
           const container = new Container();
           const redBorder = (s: string) => theme.fg("error", s);
           let viewingFullCommand = false;
@@ -1144,12 +1202,12 @@ export function setupPermissionGateHook(
                 "dim",
                 [
                   "y/enter: allow",
-                  "a: allow for session",
+                  !autoActive ? "a: allow for session" : "",
                   canGrantCwdFileOpsSession
                     ? "c: allow cwd file ops this session"
                     : "",
-                  `w: allow ${description} for 5 min`,
-                  `s: allow ${description} for session`,
+                  !autoActive ? `w: allow ${description} for 5 min` : "",
+                  !autoActive ? `s: allow ${description} for session` : "",
                   "v: view full command",
                   "n/esc: deny",
                 ]
@@ -1231,7 +1289,10 @@ export function setupPermissionGateHook(
                 );
                 const maxRows = getDialogMaxRows(tui);
                 const viewportRows = Math.max(3, maxRows - 7);
-                const maxOffset = Math.max(0, wrappedCommand.length - viewportRows);
+                const maxOffset = Math.max(
+                  0,
+                  wrappedCommand.length - viewportRows,
+                );
 
                 if (
                   matchesKey(data, Key.escape) ||
@@ -1249,7 +1310,10 @@ export function setupPermissionGateHook(
                   return;
                 }
                 if (matchesKey(data, Key.down) || data === "j") {
-                  commandScrollOffset = Math.min(maxOffset, commandScrollOffset + 1);
+                  commandScrollOffset = Math.min(
+                    maxOffset,
+                    commandScrollOffset + 1,
+                  );
                   tui.requestRender();
                   return;
                 }
@@ -1277,16 +1341,16 @@ export function setupPermissionGateHook(
                 tui.requestRender();
               } else if (confirm || data === "y" || data === "Y") {
                 done("allow");
-              } else if (data === "a" || data === "A") {
+              } else if (!autoActive && (data === "a" || data === "A")) {
                 done("allow-session");
               } else if (
                 canGrantCwdFileOpsSession &&
                 (data === "c" || data === "C")
               ) {
                 done("allow-cwd-fileops-session");
-              } else if (data === "w" || data === "W") {
+              } else if (!autoActive && (data === "w" || data === "W")) {
                 done("allow-trust-window");
-              } else if (data === "s" || data === "S") {
+              } else if (!autoActive && (data === "s" || data === "S")) {
                 done("allow-trust-session");
               } else if (cancel || data === "n" || data === "N") {
                 done("deny");
@@ -1297,42 +1361,83 @@ export function setupPermissionGateHook(
       );
 
       if (result === undefined) {
-        const approvalOptions: Array<{ label: string; value: ConfirmResult }> = [
-          { label: "Allow once", value: "allow" },
-          { label: "Allow this exact command for the session", value: "allow-session" },
-          ...(canGrantCwdFileOpsSession
-            ? [{ label: "Allow cwd file operations for this session", value: "allow-cwd-fileops-session" as const }]
-            : []),
-          { label: `Allow ${description} for 5 min`, value: "allow-trust-window" },
-          { label: `Allow ${description} for this session`, value: "allow-trust-session" },
-          { label: "Deny", value: "deny" },
-        ];
+        const approvalOptions: Array<{ label: string; value: ConfirmResult }> =
+          [
+            { label: "Allow once", value: "allow" },
+            ...(!autoActive
+              ? [
+                  {
+                    label: "Allow this exact command for the session",
+                    value: "allow-session" as const,
+                  },
+                ]
+              : []),
+            ...(canGrantCwdFileOpsSession
+              ? [
+                  {
+                    label: "Allow cwd file operations for this session",
+                    value: "allow-cwd-fileops-session" as const,
+                  },
+                ]
+              : []),
+            ...(!autoActive
+              ? [
+                  {
+                    label: `Allow ${description} for 5 min`,
+                    value: "allow-trust-window" as const,
+                  },
+                  {
+                    label: `Allow ${description} for this session`,
+                    value: "allow-trust-session" as const,
+                  },
+                ]
+              : []),
+            { label: "Deny", value: "deny" },
+          ];
         const selected = await ctx.ui.select(
           `Dangerous Command Detected\nReason: ${description}\nSource: ${sourceLabel}\nTrigger: ${rawPattern}\nCommand: ${command}`,
           approvalOptions.map((option) => option.label),
         );
-        result = approvalOptions.find((option) => option.label === selected)?.value ?? "deny";
+        result =
+          approvalOptions.find((option) => option.label === selected)?.value ??
+          "deny";
       }
 
       if (result === "allow-session") {
         // Add command to session-allowed set (in-memory only)
         sessionAllowedCommands.add(command);
-        pi.sendMessage({ customType: "leash", content: "✓ Command allowed for this session.", display: true });
+        pi.sendMessage({
+          customType: "leash",
+          content: "✓ Command allowed for this session.",
+          display: true,
+        });
       }
 
       if (result === "allow-cwd-fileops-session") {
         sessionAllowCwdFileOps = true;
-        pi.sendMessage({ customType: "leash", content: "✓ CWD-scoped file operations allowed for this session.", display: true });
+        pi.sendMessage({
+          customType: "leash",
+          content: "✓ CWD-scoped file operations allowed for this session.",
+          display: true,
+        });
       }
 
       if (result === "allow-trust-window") {
         dangerousReasonTrust.grantForWindow(description);
-        pi.sendMessage({ customType: "leash", content: `✓ ${description} allowed for 5 minutes.`, display: true });
+        pi.sendMessage({
+          customType: "leash",
+          content: `✓ ${description} allowed for 5 minutes.`,
+          display: true,
+        });
       }
 
       if (result === "allow-trust-session") {
         dangerousReasonTrust.grantForSession(description);
-        pi.sendMessage({ customType: "leash", content: `✓ ${description} allowed for this session.`, display: true });
+        pi.sendMessage({
+          customType: "leash",
+          content: `✓ ${description} allowed for this session.`,
+          display: true,
+        });
       }
 
       if (result === "deny") {
@@ -1347,9 +1452,9 @@ export function setupPermissionGateHook(
         return { block: true, reason: "User denied dangerous command" };
       }
 
-      // Handle sudo mode: if enabled and command is sudo, prompt for password and execute
-      const sudoMode = config.permissionGate.sudoMode;
-      if (sudoMode.enabled && isSudoCommand(command)) {
+      // Sudo always retains Leash's password-entry flow. An auto `allow`
+      // skips only the generic dangerous-command approval above.
+      if (sudoMode.enabled && sudoCommand) {
         const maxAttempts = sudoMode.maxRetries;
         let attemptsUsed = 0;
         let errorMessage: string | undefined;
@@ -1435,7 +1540,11 @@ export function setupPermissionGateHook(
             }
 
             // All attempts exhausted
-            pi.sendMessage({ customType: "leash", content: `⛔ Sudo failed: incorrect password (${maxAttempts} attempt${maxAttempts === 1 ? "" : "s"} exhausted).`, display: true });
+            pi.sendMessage({
+              customType: "leash",
+              content: `⛔ Sudo failed: incorrect password (${maxAttempts} attempt${maxAttempts === 1 ? "" : "s"} exhausted).`,
+              display: true,
+            });
             sudoResults.set(event.toolCallId, sudoResult);
             event.input.command = "true";
             return;
@@ -1449,7 +1558,11 @@ export function setupPermissionGateHook(
       }
     } else {
       // No confirmation required - auto-allowed; write durable audit record
-      pi.sendMessage({ customType: "leash", content: `⚠ Dangerous command auto-allowed: ${description}.`, display: true });
+      pi.sendMessage({
+        customType: "leash",
+        content: `⚠ Dangerous command auto-allowed: ${description}.`,
+        display: true,
+      });
     }
 
     return;

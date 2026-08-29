@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ResolvedConfig } from "../config";
+import type { AutoModeController } from "./auto-mode";
 import {
   clampDialogLines,
   DangerousReasonTrust,
@@ -59,6 +60,15 @@ describe("reason-scoped trust through the Pi tool-call hook", () => {
       explainCommands: false,
       explainModel: null,
       explainTimeout: 5_000,
+      autoMode: {
+        enabled: false,
+        model: null,
+        timeout: 10_000,
+        environment: [],
+        allow: [],
+        softDeny: [],
+        hardDeny: [],
+      },
       sudoMode: {
         enabled: false,
         timeout: 30_000,
@@ -70,7 +80,19 @@ describe("reason-scoped trust through the Pi tool-call hook", () => {
     },
   };
 
-  function createHarness(selections: string[]) {
+  function createHarness(
+    selections: string[],
+    autoMode?: AutoModeController,
+    autoDenyPattern?: string,
+    sudoModeEnabled = false,
+  ) {
+    const hookConfig = structuredClone(config);
+    if (autoDenyPattern) {
+      hookConfig.permissionGate.autoDenyPatterns = [
+        { pattern: autoDenyPattern },
+      ];
+    }
+    hookConfig.permissionGate.sudoMode.enabled = sudoModeEnabled;
     const handlers = new Map<
       string,
       (event: unknown, ctx: unknown) => Promise<unknown>
@@ -106,6 +128,7 @@ describe("reason-scoped trust through the Pi tool-call hook", () => {
             done: (result: unknown) => void,
           ) => { render(width: number): string[] },
         ) => {
+          let completed: unknown;
           const component = factory(
             {
               terminal: { rows: 40, columns: 120 },
@@ -117,20 +140,23 @@ describe("reason-scoped trust through the Pi tool-call hook", () => {
               bold: (text) => text,
             },
             { matches: () => false },
-            () => {},
+            (result) => {
+              completed = result;
+            },
           );
           renderedDialogs.push(component.render(120));
-          return undefined;
+          return completed;
         },
         select: async (_title: string, options: string[]) => {
           selectOptions.push(options);
           return selections.shift();
         },
+        input: async () => undefined,
         notify() {},
       },
     };
 
-    setupPermissionGateHook(fakePi as never, config);
+    setupPermissionGateHook(fakePi as never, hookConfig, autoMode);
     const toolCall = handlers.get("tool_call");
     if (!toolCall)
       throw new Error("Permission gate did not register tool_call");
@@ -146,6 +172,59 @@ describe("reason-scoped trust through the Pi tool-call hook", () => {
       },
     };
   }
+
+  it("records an auto-deny policy as a safety verdict", async () => {
+    const verdicts: Array<{ decision: string; source: string }> = [];
+    const harness = createHarness(
+      [],
+      {
+        isEnabled: () => true,
+        classify: async () => {
+          throw new Error("auto-deny must run before classification");
+        },
+        recordVerdict: (verdict) => verdicts.push(verdict),
+      },
+      "rm -rf",
+    );
+
+    await expect(harness.dispatch("rm -rf ./scratch")).resolves.toEqual({
+      block: true,
+      reason:
+        "Command matched auto-deny pattern and was blocked automatically.",
+    });
+    expect(verdicts).toEqual([
+      {
+        decision: "deny",
+        reason: "Command matched an auto-deny policy.",
+        source: "safety",
+      },
+    ]);
+  });
+
+  it("auto-approves sudo through to the password flow without generic approval", async () => {
+    const verdicts: string[] = [];
+    const harness = createHarness(
+      [],
+      {
+        isEnabled: () => true,
+        classify: async () => ({
+          decision: "allow",
+          reason: "Direct user requested the bounded privileged operation.",
+          source: "classifier",
+        }),
+        recordVerdict: (verdict) => verdicts.push(verdict.decision),
+      },
+      undefined,
+      true,
+    );
+
+    await expect(harness.dispatch("sudo true")).resolves.toEqual({
+      block: true,
+      reason: "User cancelled sudo password prompt",
+    });
+    expect(verdicts).toEqual(["allow"]);
+    expect(harness.selectOptions).toHaveLength(0);
+  });
 
   it("bypasses only the granted reason and keeps additional reasons gated", async () => {
     const harness = createHarness([
@@ -182,6 +261,90 @@ describe("reason-scoped trust through the Pi tool-call hook", () => {
       reason: "User denied dangerous command",
     });
     expect(harness.selectOptions).toHaveLength(3);
+  });
+
+  it("sends a critical recursive deletion to the classifier instead of a static fence", async () => {
+    const seen: string[] = [];
+    const verdicts: Array<{ decision: string; source: string }> = [];
+    const harness = createHarness(["Deny"], {
+      isEnabled: () => true,
+      classify: async (action) => {
+        seen.push(action.command);
+        return {
+          decision: "ask",
+          reason: "Exact user intent is required for this deletion.",
+          source: "classifier",
+        };
+      },
+      recordVerdict: (verdict) => verdicts.push(verdict),
+    });
+
+    await expect(harness.dispatch("rm -rf /")).resolves.toEqual({
+      block: true,
+      reason: "User denied dangerous command",
+    });
+    expect(seen).toEqual(["rm -rf /"]);
+    expect(verdicts).toEqual([
+      {
+        decision: "ask",
+        reason: "Exact user intent is required for this deletion.",
+        source: "classifier",
+      },
+    ]);
+  });
+
+  it("lets the auto classifier allow, deny, or retain the one-time manual prompt", async () => {
+    const seen: string[] = [];
+    const decisions: string[] = [];
+    const allowHarness = createHarness([], {
+      isEnabled: () => true,
+      classify: async (action) => {
+        seen.push(action.command);
+        return {
+          decision: "allow",
+          reason: "Fresh scratch cleanup.",
+          source: "classifier",
+        };
+      },
+      recordVerdict: (verdict) => decisions.push(verdict.decision),
+    });
+    await expect(
+      allowHarness.dispatch("rm -rf ./scratch"),
+    ).resolves.toBeUndefined();
+    expect(seen).toEqual(["rm -rf ./scratch"]);
+    expect(allowHarness.selectOptions).toHaveLength(0);
+
+    const denyHarness = createHarness([], {
+      isEnabled: () => true,
+      classify: async () => ({
+        decision: "deny",
+        reason: "Target is pre-existing.",
+        source: "classifier",
+      }),
+      recordVerdict: (verdict) => decisions.push(verdict.decision),
+    });
+    await expect(denyHarness.dispatch("rm -rf ./old")).resolves.toEqual({
+      block: true,
+      reason: "Leash auto mode denied this action: Target is pre-existing.",
+    });
+
+    const askHarness = createHarness(["Deny"], {
+      isEnabled: () => true,
+      classify: async () => ({
+        decision: "ask",
+        reason: "Target provenance is incomplete.",
+        source: "classifier",
+      }),
+      recordVerdict: (verdict) => decisions.push(verdict.decision),
+    });
+    await expect(askHarness.dispatch("rm -rf ./unknown")).resolves.toEqual({
+      block: true,
+      reason: "User denied dangerous command",
+    });
+    expect(askHarness.selectOptions[0]).not.toContain(
+      "Allow recursive force delete for this session",
+    );
+    expect(decisions).toEqual(["allow", "deny", "ask"]);
   });
 });
 

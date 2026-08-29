@@ -20,6 +20,7 @@ pi install git:github.com/ssweens/pi-leash
 
 - **policies**: named file-protection rules with per-rule protection levels.
 - **permission-gate**: detects dangerous bash commands and asks for confirmation.
+- **auto mode** (opt-in): sends dangerous Bash actions through a dedicated, fail-closed classifier before deciding to allow, prompt, or deny.
 - **path-access** (opt-in): restricts tool access to the current working directory with allow/ask/block modes.
 - **optional command explainer**: can call a small LLM to explain a dangerous command inline in the confirmation dialog.
 - **sudo mode** (opt-in): securely handles sudo commands by prompting for passwords and executing with `sudo -S`.
@@ -107,6 +108,15 @@ Create this file to customize settings. All fields are optional — sensible def
     "explainCommands": false,
     "explainModel": null,
     "explainTimeout": 5000,
+    "autoMode": {
+      "enabled": false,
+      "model": null,
+      "timeout": 10000,
+      "environment": [],
+      "allow": [],
+      "softDeny": [],
+      "hardDeny": []
+    },
     "sudoMode": {
       "enabled": false,
       "timeout": 30000,
@@ -180,6 +190,37 @@ The approval prompt now shows:
 - **Trigger** (exact token/pattern that matched, e.g. `rm -rf`)
 
 For very long commands or explanations, the inline prompt clamps itself to a stable height so it stays within the terminal. The compact view may elide the middle of the preview, but the action choices remain visible and `v` opens a scrollable full-command view.
+
+### Auto mode (opt-in)
+
+Auto mode replaces only Pi Leash's dangerous-Bash confirmation path with a **separate classifier model**. It does not bypass Pi's own tool permissions, Leash policies, path-access checks, or `autoDenyPatterns`.
+
+Enable it per session with either:
+
+- `Ctrl+Alt+L` — toggle
+- `/leash auto` — enable
+- `/leash manual` — disable
+- `/leash toggle` or `/leash status`
+
+`/leash settings` opens Pi's built-in `/model` selector. Its search, filtering, scopes, keybindings, refresh behavior, and rendering are identical to `/model`. Changes apply to the active session immediately and persist in `~/.pi/agent/settings/pi-leash.json`:
+
+- `permissionGate.autoMode.enabled` — changes auto mode now and establishes the next session's initial state
+- `permissionGate.autoMode.model` — classifier `provider/model-id`; `null` follows Pi's active session model and remains the default until a classifier model is selected
+
+The classifier receives the proposed action, direct user requests, and prior agent Bash **source** from the current session. It never receives tool output as safety evidence. It must return `allow`, `ask`, or `deny`; unavailable/timed-out/invalid classifier responses fall through to the existing human approval dialog. `sudo` is a soft gate: an auto `allow` skips the generic dangerous-command prompt but still enters Leash's dedicated sudo password flow. Unclear sudo intent returns `ask`.
+
+Every gated action briefly shows `⏵⏵ leash allow|ask|deny [source] · reason` in the footer. The persistent auto indicator intentionally contains no model name. `/leash status` reports session counts and the last verdict, including verdicts restored after reload or resume.
+
+Like Claude Code, the default classifier hard-deny tier is data exfiltration across the trusted Environment boundary. Local destruction, recursive deletion, privileged host operations, and runtime-computed targets are soft gates: direct, exact user intent can clear them; otherwise the classifier returns `ask`. Only explicit `autoDenyPatterns` block before classification. The classifier does not guess runtime variable values. A visible `mktemp` → exact cleanup relationship is classifier evidence, not a fabricated path resolution.
+
+Classifier policy fields under `permissionGate.autoMode` are natural-language rule lists:
+
+- `environment`: trusted systems and project facts
+- `allow`: narrow exceptions to soft-deny rules
+- `softDeny`: destructive actions that need direct, exact user intent
+- `hardDeny`: unconditional boundaries
+
+`hardDeny` always wins. In auto mode, legacy command/reason/cwd session bypasses do not bypass the classifier; a classifier `ask` prompt offers only one-time allow or deny.
 
 ### Explain commands (opt-in)
 
