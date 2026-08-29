@@ -1,14 +1,15 @@
 /**
  * pi-atta — @@ session picker for pi
  *
- * Two-pane modal: session list + live preview.
- * Toggle between current workspace and all workspaces.
+ * Amp-style "Mention Thread" modal: filterable session list with
+ * highlighted selection, word-wrapped preview pane with scrollbar.
  */
 
 import type { ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
-import { Key, matchesKey, truncateToWidth, Input } from "@earendil-works/pi-tui";
-import { execSync, readFileSync } from "node:child_process";
+import { Key, matchesKey, Input, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { execSync } from "node:child_process";
+import { statSync, openSync, readSync, closeSync } from "node:fs";
 import { join } from "node:path";
 
 // ── Types ─────────────────────────────────────────────────────────
@@ -20,6 +21,11 @@ interface SessionInfo {
 	timestamp: string;
 	name?: string;
 	preview?: string;
+}
+
+interface PreviewMsg {
+	role: string;
+	text: string;
 }
 
 type PickerResult = SessionInfo | null;
@@ -103,55 +109,42 @@ function getSessions(): SessionInfo[] {
 	} catch { return []; }
 }
 
-/** Load session preview content — reads only first 100KB */
-function loadSessionPreview(session: SessionInfo, maxLines = 25): string[] {
+/** Load session messages — reads only first 100KB */
+function loadPreviewMsgs(session: SessionInfo, maxMsgs = 40): PreviewMsg[] {
+	const result: PreviewMsg[] = [];
 	try {
-		// Read only first 100KB to avoid loading huge session files
-		const { openSync, readSync, closeSync, statSync } = require("fs");
 		const size = statSync(session.path).size;
 		const readSize = Math.min(size, 100 * 1024);
 		const fd = openSync(session.path, "r");
 		const buf = Buffer.alloc(readSize);
 		readSync(fd, buf, 0, readSize, 0);
 		closeSync(fd);
-		const content = buf.toString("utf8");
-		const lines = content.split("\n").slice(0, 200);
-		const result: string[] = [];
-		let count = 0;
 
-		for (const line of lines) {
+		for (const line of buf.toString("utf8").split("\n")) {
 			if (!line.trim()) continue;
 			try {
 				const e = JSON.parse(line);
-				if (e.type === "message") {
-					const msg = e.message;
-					let text = "";
-					if (typeof msg.content === "string") text = msg.content;
-					else if (Array.isArray(msg.content)) {
-						for (const c of msg.content) {
-							if (c.type === "text") { text = c.text; break; }
-						}
+				if (e.type !== "message") continue;
+				const msg = e.message;
+				let text = "";
+				if (typeof msg.content === "string") text = msg.content;
+				else if (Array.isArray(msg.content)) {
+					for (const c of msg.content) {
+						if (c.type === "text") { text = c.text; break; }
 					}
-					if (text) {
-						const prefix = msg.role === "user" ? ">" : msg.role === "assistant" ? "<" : "-";
-						const truncated = text.length > 100 ? text.slice(0, 97) + "..." : text;
-						// Replace newlines with spaces for single-line display
-						const flat = truncated.replace(/\n/g, " ").replace(/\s+/g, " ");
-						result.push(`${prefix} ${flat}`);
-						count++;
-						if (count >= maxLines) break;
-					}
+				}
+				const flat = text.replace(/\s+/g, " ").trim();
+				if (flat) {
+					result.push({ role: msg.role, text: flat });
+					if (result.length >= maxMsgs) break;
 				}
 			} catch { /* skip */ }
 		}
-
-		return result.length > 0 ? result : ["(no messages)"];
-	} catch {
-		return ["(could not load)"];
-	}
+	} catch { /* ignore */ }
+	return result;
 }
 
-// ── Format helpers ────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────
 
 function vw(s: string): number {
 	return s.replace(/\x1b\[[0-9;]*m/g, "").length;
@@ -168,21 +161,34 @@ function trunc(s: string, w: number): string {
 	let width = 0;
 	for (const char of s) {
 		const cw = char.charCodeAt(0) > 255 ? 2 : 1;
-		if (width + cw > w - 3) break;
+		if (width + cw > w - 1) break;
 		result += char;
 		width += cw;
 	}
-	return result + "...";
+	return result + "…";
 }
 
-function formatTitle(s: SessionInfo): string {
-	let title = s.name || s.preview || "";
-	if (!title) {
-		const parts = s.cwd.split("/");
-		title = parts[parts.length - 1] || s.cwd.slice(0, 40);
-		if (title.startsWith("--")) title = title.replace(/^--/, "").replace(/--$/, "").replace(/-/g, "/");
-	}
-	return title;
+function relTime(timestamp: string): string {
+	const diffMs = Date.now() - new Date(timestamp).getTime();
+	const mins = Math.floor(diffMs / 60000);
+	if (mins < 1) return "now";
+	if (mins < 60) return `${mins}m ago`;
+	const hours = Math.floor(mins / 60);
+	if (hours < 24) return `${hours}h ago`;
+	const days = Math.floor(hours / 24);
+	if (days < 7) return `${days}d ago`;
+	const weeks = Math.floor(days / 7);
+	if (weeks < 5) return `${weeks}w ago`;
+	return new Date(timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+function sessionTitle(s: SessionInfo): string {
+	if (s.name) return s.name;
+	if (s.preview) return s.preview;
+	const parts = s.cwd.split("/");
+	let dir = parts[parts.length - 1] || s.cwd;
+	if (dir.startsWith("--")) dir = dir.replace(/^--/, "").replace(/--$/, "").replace(/-/g, "/");
+	return dir;
 }
 
 function matchesFilter(s: SessionInfo, q: string): boolean {
@@ -193,7 +199,8 @@ function matchesFilter(s: SessionInfo, q: string): boolean {
 
 // ── Modal Component ───────────────────────────────────────────────
 
-const ROWS = 16;
+const LIST_ROWS = 14;   // visible list rows
+const PREV_ROWS = LIST_ROWS + 2; // preview box inner height
 
 class SessionPickerModal implements Component {
 	private all: SessionInfo[] = [];
@@ -207,8 +214,13 @@ class SessionPickerModal implements Component {
 	private tui: TUI;
 	private onDone: (r: PickerResult) => void;
 	private showAll = false;
-	private previewLines: string[] = [];
+
+	private previewMsgs: PreviewMsg[] = [];
+	private previewScroll = 0;
 	private previewId: string | null = null;
+
+	/** Keys the overlay stole from the prompt while open */
+	leftover = "";
 
 	constructor(tui: TUI, theme: Theme, cwd: string, onDone: (r: PickerResult) => void) {
 		this.tui = tui;
@@ -220,19 +232,17 @@ class SessionPickerModal implements Component {
 	}
 
 	private startLoad() {
+		const apply = () => {
+			this.applyFilter();
+			this.loaded = true;
+			this.tui.requestRender();
+		};
 		if (cache.length > 0 && Date.now() - cacheTime < CACHE_TTL) {
 			this.all = cache;
-			this.applyFilter();
-			this.loaded = true;
-			this.tui.requestRender();
+			apply();
 			return;
 		}
-		setImmediate(() => {
-			this.all = getSessions();
-			this.applyFilter();
-			this.loaded = true;
-			this.tui.requestRender();
-		});
+		setImmediate(() => { this.all = getSessions(); apply(); });
 	}
 
 	private applyFilter() {
@@ -248,20 +258,40 @@ class SessionPickerModal implements Component {
 
 	private loadPreview() {
 		const s = this.filtered[this.sel];
-		if (!s) { this.previewLines = []; this.previewId = null; return; }
+		if (!s) { this.previewMsgs = []; this.previewRendered = []; this.previewId = null; this.previewScroll = 0; return; }
 		if (s.id === this.previewId) return;
 		this.previewId = s.id;
-		try {
-			this.previewLines = loadSessionPreview(s, ROWS);
-			if (this.previewLines.length === 0) this.previewLines = ['(empty session)'];
-		} catch (err: any) {
-			this.previewLines = [`Error: ${err?.message || String(err)}`];
+		this.previewScroll = 0;
+		this.previewMsgs = loadPreviewMsgs(s);
+	}
+
+	/** Wrap + color messages into renderable preview lines at actual pane width */
+	private buildPreviewLines(wrapW: number): string[] {
+		const t = this.theme;
+		const out: string[] = [];
+		for (const m of this.previewMsgs) {
+			if (m.role === "user") {
+				const bar = t.fg("success", "▎");
+				for (const wl of wrapTextWithAnsi(t.fg("success", m.text), Math.max(20, wrapW - 2))) {
+					out.push(`${bar} ${wl}`);
+				}
+			} else if (m.role === "assistant") {
+				for (const wl of wrapTextWithAnsi(m.text, Math.max(20, wrapW))) {
+					out.push(`  ${wl}`);
+				}
+			} else {
+				for (const wl of wrapTextWithAnsi(t.fg("dim", m.text), Math.max(20, wrapW))) {
+					out.push(`  ${wl}`);
+				}
+			}
+			out.push("");
 		}
+		return out;
 	}
 
 	private ensureVisible() {
 		if (this.sel < this.scroll) this.scroll = this.sel;
-		else if (this.sel >= this.scroll + ROWS) this.scroll = this.sel - ROWS + 1;
+		else if (this.sel >= this.scroll + LIST_ROWS) this.scroll = this.sel - LIST_ROWS + 1;
 	}
 
 	handleInput(data: string) {
@@ -270,9 +300,14 @@ class SessionPickerModal implements Component {
 		if (matchesKey(data, Key.tab)) { this.showAll = !this.showAll; this.applyFilter(); return; }
 		if (matchesKey(data, Key.up) && this.sel > 0) { this.sel--; this.ensureVisible(); this.loadPreview(); return; }
 		if (matchesKey(data, Key.down) && this.sel < this.filtered.length - 1) { this.sel++; this.ensureVisible(); this.loadPreview(); return; }
-		if (matchesKey(data, Key.pageUp)) { this.sel = Math.max(0, this.sel - ROWS); this.ensureVisible(); this.loadPreview(); return; }
-		if (matchesKey(data, Key.pageDown)) { this.sel = Math.min(this.filtered.length - 1, this.sel + ROWS); this.ensureVisible(); this.loadPreview(); return; }
+		if (matchesKey(data, Key.pageUp)) { this.previewScroll = Math.max(0, this.previewScroll - PREV_ROWS); return; }
+		if (matchesKey(data, Key.pageDown)) {
+			const maxScroll = Math.max(0, this.buildPreviewLines(60).length - PREV_ROWS);
+			this.previewScroll = Math.min(maxScroll, this.previewScroll + PREV_ROWS);
+			return;
+		}
 		this.filterInput.handleInput(data);
+		this.leftover = this.filterInput.getValue();
 		this.applyFilter();
 	}
 
@@ -280,77 +315,78 @@ class SessionPickerModal implements Component {
 
 	render(width: number): string[] {
 		const t = this.theme;
-		const W = Math.min(width - 2, 108);
-		const LW = 44; // list width
-		const PW = W - LW - 1; // preview width
+		const dim = (s: string) => t.fg("dim", s);
+		const W = Math.min(width - 2, 118);
+		const PW = Math.max(50, Math.floor(W * 0.58)); // preview box outer width
+		const LW = W - PW - 2;                          // left column inner width
+		const border = (s: string) => t.fg("border", s);
+
 		const lines: string[] = [];
 
-		// ── Top border ──────────────────────────────────────────
-		lines.push("┌" + "─".repeat(LW) + "┬" + "─".repeat(PW) + "┐");
+		// ── Top border with embedded title + count ──────────────
+		const title = ` ${t.fg("accent", t.bold("Session History"))} `;
+		const countStr = this.loaded ? dim(`(${this.filtered.length}) `) : "";
+		const topUsed = 2 + vw(title) + vw(countStr);
+		lines.push(border("╭─") + title + countStr + border("─".repeat(Math.max(0, W - topUsed)) + "╮"));
 
-		// ── Header ──────────────────────────────────────────────
-		const mode = this.showAll ? "All Workspaces" : "This Workspace";
-		lines.push("│" + pad(t.bold(" Session History"), LW) + "│" + pad(` ${t.fg("accent", mode)} `, PW) + "│");
-
-		// ── Search ──────────────────────────────────────────────
+		// ── Search row + preview box top ────────────────────────
 		const fv = this.filterInput.getValue();
-		const search = fv ? `Search: ${t.fg("accent", fv)}` : `Search: ${t.fg("dim", "...")}`;
-		lines.push("│ " + pad(search, LW - 1) + "│" + pad(" Preview", PW) + "│");
+		const search = ` ${t.fg("accent", ">")} ${fv ? t.fg("accent", fv) : dim("")}▋`;
+		lines.push(border("│") + pad(search, LW + 1) + " " + border("╭" + "─".repeat(PW - 2) + "╮"));
 
-		// ── Separator ───────────────────────────────────────────
-		lines.push("├" + "─".repeat(LW) + "┼" + "─".repeat(PW) + "┤");
+		// ── Preview header row ──────────────────────────────────
+		const prevHeader = dim("Session Preview");
+		const phPad = Math.max(0, Math.floor((PW - 2 - vw(prevHeader)) / 2));
+		const previewRow = (inner: string, borderChar = "│") =>
+			border("│") + pad(inner, PW - 2) + border(borderChar);
 
 		// ── Content rows ────────────────────────────────────────
-		for (let i = 0; i < ROWS; i++) {
-			const idx = this.scroll + i;
-			let left: string;
-			let right: string;
+		// First preview row is the centered header
+		lines.push(border("│") + pad("", LW + 1) + " " + previewRow(" ".repeat(phPad) + prevHeader));
 
-			// Left: session list
+		// Build wrapped preview lines at actual width
+		const rendered = this.buildPreviewLines(PW - 5);
+
+		// Scrollbar math
+		const totalP = rendered.length;
+		const thumbSize = totalP > PREV_ROWS ? Math.max(1, Math.round((PREV_ROWS * PREV_ROWS) / totalP)) : 0;
+		const thumbStart = totalP > PREV_ROWS ? Math.round((this.previewScroll / totalP) * PREV_ROWS) : -1;
+
+		for (let i = 0; i < LIST_ROWS; i++) {
+			// Left: list row
+			let left: string;
+			const idx = this.scroll + i;
 			if (!this.loaded) {
-				left = i === 0 ? " Loading..." : "";
-			} else if (idx >= this.filtered.length) {
-				left = "";
-			} else {
+				left = i === 0 ? ` ${dim("Loading…")}` : "";
+			} else if (idx < this.filtered.length) {
 				const s = this.filtered[idx];
 				const isSel = idx === this.sel;
-				const cursor = isSel ? t.fg("accent", "▸") : " ";
-				const title = trunc(formatTitle(s), LW - 8);
-				const date = s.timestamp.slice(0, 10);
+				const time = relTime(s.timestamp);
+				const titleW = LW - vw(time) - 3;
+				const titleTxt = trunc(sessionTitle(s), titleW);
 				if (isSel) {
-					left = `${cursor}${t.bold(title)}`;
+					left = t.bg("selectedBg", pad(` ${titleTxt}${" ".repeat(Math.max(1, titleW - vw(titleTxt)))}${dim(time)} `, LW + 1));
 				} else {
-					left = `${cursor} ${title}`;
+					left = pad(` ${titleTxt}${" ".repeat(Math.max(1, titleW - vw(titleTxt)))}${dim(time)} `, LW + 1);
 				}
-			}
-
-			// Right: preview
-			if (!this.loaded) {
-				right = i === 0 ? " Loading..." : "";
-			} else if (i < this.previewLines.length) {
-				const line = this.previewLines[i];
-				const isUser = line.startsWith(">");
-				const isAsst = line.startsWith("<");
-				const prefix = isUser ? t.fg("accent", ">") : isAsst ? t.fg("dim", "<") : "-";
-				const content = line.slice(2);
-				right = `${prefix} ${trunc(content, PW - 3)}`;
 			} else {
-				right = "";
+				left = pad("", LW + 1);
 			}
 
-			lines.push("│" + pad(left, LW) + "│" + pad(right, PW) + "│");
+			// Right: preview row
+			const inner = this.loaded ? (rendered[this.previewScroll + i] ?? "") : (i === 0 ? dim(" Loading…") : "");
+			const inThumb = thumbStart >= 0 && i >= thumbStart && i < thumbStart + thumbSize;
+			const bc = inThumb ? "┃" : "│";
+			lines.push(border("│") + left + " " + previewRow(inner, bc));
 		}
 
-		// ── Separator ───────────────────────────────────────────
-		lines.push("├" + "─".repeat(LW) + "┼" + "─".repeat(PW) + "┤");
+		// ── Preview box bottom ──────────────────────────────────
+		lines.push(border("│") + pad("", LW + 1) + " " + border("╰" + "─".repeat(PW - 2) + "╯"));
 
-		// ── Footer ──────────────────────────────────────────────
-		const count = this.loaded ? `${this.filtered.length} sessions` : "...";
-		const help = "↑↓ nav  Tab workspace  Enter select  Esc cancel";
-		lines.push("│" + pad(` ${t.fg("dim", count)}  ${t.fg("dim", help)}`, LW + PW + 1) + "│");
-
-		// ── Bottom border ───────────────────────────────────────
-		lines.push("└" + "─".repeat(LW) + "┴" + "─".repeat(PW) + "┘");
+		// ── Bottom border with key hints ────────────────────────
+		const hints = ` ${t.fg("accent", "Tab")}${dim(" all workspaces")} · ${t.fg("accent", "PgUp/PgDn")}${dim(" scroll")} · ${t.fg("accent", "Esc")}${dim(" close")} `;
+		const botDash = Math.max(0, W - vw(hints) - 1);
+		lines.push(border("╰" + "─".repeat(botDash) + hints + "╯"));
 
 		return lines;
 	}
@@ -362,18 +398,35 @@ export default function attaExtension(pi: ExtensionAPI): void {
 	let pickerActive = false;
 	let lastTui: any = null;
 
-	async function showPicker(ctx: ExtensionContext): Promise<PickerResult> {
+	async function showPicker(ctx: ExtensionContext): Promise<{ session: SessionInfo; leftover: string } | null> {
 		if (pickerActive) return null;
 		pickerActive = true;
 		try {
-			return await ctx.ui.custom<PickerResult | undefined>(
+			let modal: SessionPickerModal | null = null;
+			const session = await ctx.ui.custom<PickerResult | undefined>(
 				(tui, theme, _kb, done) => {
 					lastTui = tui;
-					return new SessionPickerModal(tui, theme, ctx.cwd, (r) => done(r));
+					modal = new SessionPickerModal(tui, theme, ctx.cwd, (r) => done(r));
+					return modal;
 				},
-				{ overlay: true, overlayOptions: { anchor: "center", width: 110, maxHeight: 24 } }
+				{ overlay: true, overlayOptions: { anchor: "center", width: 120, maxHeight: 22 } }
 			) ?? null;
+			if (!session) return null;
+			return { session, leftover: modal?.leftover ?? "" };
 		} finally { pickerActive = false; }
+	}
+
+	function insertRef(ctx: ExtensionContext, session: SessionInfo, leftover: string) {
+		const ref = `@session:${session.path}`;
+		let next = ctx.ui.getEditorText();
+		if (next.includes("@@")) next = next.replace("@@", ref);
+		else if (next.includes("@")) next = next.replace("@", ref);
+		else next = `${next}${ref}`;
+		// Re-append keystrokes the overlay stole into its filter box
+		const lo = leftover.trim();
+		if (lo && !next.includes(lo)) next = `${next} ${lo}`;
+		ctx.ui.setEditorText(next);
+		if (lastTui) lastTui.requestRender(true);
 	}
 
 	pi.on("session_start", async (_event, ctx) => {
@@ -389,16 +442,8 @@ export default function attaExtension(pi: ExtensionAPI): void {
 			const now = Date.now();
 			if (now - recentAt < 500) {
 				recentAt = 0;
-				// Remove trailing @ chars
-				const current = ctx.ui.getEditorText();
-				ctx.ui.setEditorText(current.replace(/@+$/, ""));
-
-				showPicker(ctx).then(session => {
-					if (session) {
-						const text = ctx.ui.getEditorText();
-						ctx.ui.setEditorText(text + `@session:${session.path} `);
-						if (lastTui) lastTui.requestRender(true);
-					}
+				showPicker(ctx).then(({ session, leftover }) => {
+					if (session) insertRef(ctx, session, leftover);
 				}).catch(() => {});
 				return;
 			}
@@ -410,12 +455,8 @@ export default function attaExtension(pi: ExtensionAPI): void {
 		description: "Open session picker",
 		handler: async (_args, ctx) => {
 			if (!ctx.hasUI) { ctx.ui.notify("Requires interactive mode", "error"); return; }
-			const session = await showPicker(ctx);
-			if (session) {
-				const current = ctx.ui.getEditorText();
-				ctx.ui.setEditorText(current + `@session:${session.path} `);
-				if (lastTui) lastTui.requestRender(true);
-			}
+			const result = await showPicker(ctx);
+			if (result) insertRef(ctx, result.session, "");
 		},
 	});
 }
