@@ -109,44 +109,58 @@ function getSessions(): SessionInfo[] {
 	} catch { return []; }
 }
 
-/** Load the most recent session messages — reads only the last 100KB */
-function loadPreviewMsgs(session: SessionInfo, maxMsgs = 40): PreviewMsg[] {
+/** Extract user/assistant text msgs from raw JSONL lines */
+function extractMsgs(lines: string[], maxMsgs: number): PreviewMsg[] {
 	const result: PreviewMsg[] = [];
+	for (const line of lines) {
+		if (!line.trim()) continue;
+		try {
+			const e = JSON.parse(line);
+			if (e.type !== "message") continue;
+			const msg = e.message;
+			// Only user/assistant text — no tool results, no reasoning
+			if (msg.role !== "user" && msg.role !== "assistant") continue;
+			let text = "";
+			if (typeof msg.content === "string") text = msg.content;
+			else if (Array.isArray(msg.content)) {
+				for (const c of msg.content) {
+					if (c.type === "text") { text = c.text; break; }
+				}
+			}
+			const flat = text.replace(/\s+/g, " ").trim();
+			if (flat) {
+				result.push({ role: msg.role, text: flat });
+				if (result.length >= maxMsgs) break;
+			}
+		} catch { /* skip */ }
+	}
+	return result;
+}
+
+/**
+ * Load the most recent session messages. Reads the tail of the file,
+ * growing the window until text messages are found (long sessions can
+ * have multi-MB single lines that swallow a small window).
+ */
+function loadPreviewMsgs(session: SessionInfo, maxMsgs = 40): PreviewMsg[] {
 	try {
 		const size = statSync(session.path).size;
-		const readSize = Math.min(size, 100 * 1024);
 		const fd = openSync(session.path, "r");
-		const buf = Buffer.alloc(readSize);
-		readSync(fd, buf, 0, readSize, size - readSize); // read the TAIL
-		closeSync(fd);
-
-		let lines = buf.toString("utf8").split("\n");
-		if (readSize < size) lines = lines.slice(1); // drop partial first line
-
-		for (const line of lines) {
-			if (!line.trim()) continue;
-			try {
-				const e = JSON.parse(line);
-				if (e.type !== "message") continue;
-				const msg = e.message;
-				// Only user/assistant text — no tool results, no reasoning
-				if (msg.role !== "user" && msg.role !== "assistant") continue;
-				let text = "";
-				if (typeof msg.content === "string") text = msg.content;
-				else if (Array.isArray(msg.content)) {
-					for (const c of msg.content) {
-						if (c.type === "text") { text = c.text; break; }
-					}
-				}
-				const flat = text.replace(/\s+/g, " ").trim();
-				if (flat) {
-					result.push({ role: msg.role, text: flat });
-					if (result.length >= maxMsgs) break;
-				}
-			} catch { /* skip */ }
+		try {
+			for (const win of [100 * 1024, 512 * 1024, 2 * 1024 * 1024, 8 * 1024 * 1024]) {
+				const readSize = Math.min(size, win);
+				const buf = Buffer.alloc(readSize);
+				readSync(fd, buf, 0, readSize, size - readSize); // read the TAIL
+				let lines = buf.toString("utf8").split("\n");
+				if (readSize < size) lines = lines.slice(1); // drop partial first line
+				const msgs = extractMsgs(lines, maxMsgs);
+				if (msgs.length >= 5 || readSize >= size) return msgs;
+			}
+			return [];
+		} finally {
+			closeSync(fd);
 		}
-	} catch { /* ignore */ }
-	return result;
+	} catch { return []; }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────
