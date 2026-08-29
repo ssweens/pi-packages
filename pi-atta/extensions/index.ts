@@ -126,6 +126,8 @@ function loadPreviewMsgs(session: SessionInfo, maxMsgs = 40): PreviewMsg[] {
 				const e = JSON.parse(line);
 				if (e.type !== "message") continue;
 				const msg = e.message;
+				// Only user/assistant text — no tool results, no reasoning
+				if (msg.role !== "user" && msg.role !== "assistant") continue;
 				let text = "";
 				if (typeof msg.content === "string") text = msg.content;
 				else if (Array.isArray(msg.content)) {
@@ -270,19 +272,15 @@ class SessionPickerModal implements Component {
 		const w = Math.max(20, wrapW);
 		for (const m of this.previewMsgs) {
 			if (m.role === "user") {
-				// Green left bar; continuations align under the bar text
+				// Inset 1 space, green left bar; continuations align under the bar text
 				const bar = t.fg("success", "▎");
-				for (const wl of wrapTextWithAnsi(t.fg("success", m.text), w - 2)) {
-					out.push(`${bar} ${wl}`);
-				}
-			} else if (m.role === "assistant") {
-				// Flush left, full width
-				for (const wl of wrapTextWithAnsi(m.text, w)) {
-					out.push(wl);
+				for (const wl of wrapTextWithAnsi(t.fg("success", m.text), w - 3)) {
+					out.push(` ${bar} ${wl}`);
 				}
 			} else {
-				for (const wl of wrapTextWithAnsi(t.fg("dim", m.text), w)) {
-					out.push(wl);
+				// Assistant: inset 1 space, full remaining width
+				for (const wl of wrapTextWithAnsi(m.text, w - 1)) {
+					out.push(` ${wl}`);
 				}
 			}
 			out.push("");
