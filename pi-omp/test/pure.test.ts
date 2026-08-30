@@ -101,7 +101,7 @@ describe("todo-render", () => {
 		expect(romanNumeral(20)).toBe("20");
 	});
 
-	test("renderTodoLines emits a meta header plus roman phase headers and status-styled tasks", () => {
+	test("renderTodoLines emits a status header plus flat task tree with status-styled tasks", () => {
 		let s = emptyState();
 		s = addTask(s, "Base", "Wire the router");
 		s = addTask(s, "Base", "Add tests");
@@ -110,28 +110,24 @@ describe("todo-render", () => {
 		s = blockTask(s, "Scaffold blockers", "waiting on API");
 		s = completeTask(s, "Wire the router");
 
-		const lines = renderTodoLines(s, stubTheme, 60);
+		const lines = renderTodoLines(s, stubTheme, 80);
 
-		// Header line carries counts.
+		// Framed status header in the top border: `╭─── ☑ Todo · N tasks ───╮`.
 		expect(lines[0]).toContain("Todo");
 		expect(lines[0]).toContain("3 tasks");
-		expect(lines[0]).toContain("2 open");
-		expect(lines[0]).toContain("1 done");
 
-		// Roman-numeraled phase header, bolded + accent.
-		expect(lines[1]).toBe("⟨accent›[I. Base]");
-
-		// Completed task (auto-promote moved "Add tests" to in_progress): checked glyph, success + strike.
-		expect(lines[2]).toContain(CHECKED);
-		expect(lines[2]).toContain("⟨success›~Wire the router~");
+		// Single-phase: no phase header — tasks start at lines[1].
+		// Completed task: checked glyph, success + strike.
+		expect(lines[1]).toContain(CHECKED);
+		expect(lines[1]).toContain("~Wire the router~");
 
 		// Auto-promoted in-progress task: accent.
-		expect(lines[3]).toContain(UNCHECKED);
-		expect(lines[3]).toContain("⟨accent›☐ Add tests");
+		expect(lines[2]).toContain(UNCHECKED);
+		expect(lines[2]).toContain("⟨accent›☐ Add tests");
 
 		// Blocked task: warning + blocker note.
-		expect(lines[4]).toContain("⟨warning›");
-		expect(lines[4]).toContain("(blocked: waiting on API)");
+		expect(lines[3]).toContain("⟨warning›");
+		expect(lines[3]).toContain("(blocked: waiting on API)");
 	});
 
 	test("renderTodoLines clips a long task label to width with an ellipsis", () => {
@@ -145,14 +141,16 @@ describe("todo-render", () => {
 		s = addTask(s, "Base", "this is an extremely long task description that must be truncated");
 		const lines = renderTodoLines(s, plainTheme, 20);
 		// Line must not exceed the width budget on visible parts (20).
-		const taskLine = lines[2];
+		// Single-phase: no phase header, task is at lines[1].
+		const taskLine = lines[1];
 		expect(lines.every((line) => visibleWidth(line) <= 20)).toBe(true);
 		expect(taskLine).toContain("…");
 	});
 
 	test("empty phases produce only the header", () => {
-		const lines = renderTodoLines(emptyState(), stubTheme, 40);
-		expect(lines).toHaveLength(1);
+		const lines = renderTodoLines(emptyState(), stubTheme, 60);
+		// Framed block with header in top border + bottom border (no body).
+		expect(lines).toHaveLength(2);
 		expect(lines[0]).toContain("0 tasks");
 	});
 
@@ -189,12 +187,14 @@ describe("todo-render", () => {
 
 		const lines = renderTodoWidgetLines(s, stubTheme, 80);
 
-		expect(lines[0]).toContain("Todos");
-		expect(lines[0]).toContain("1/2");
-		expect(lines[0]).toContain("9 remaining");
-		expect(lines[0]).toContain("1 blocked");
-		expect(lines[1]).toContain("I. Research");
-		expect(lines[2]).toContain("Research task 4");
+		// Leading blank line, then the omp-style header: "Todos · 1/2".
+		expect(lines[0]).toBe("");
+		expect(lines[1]).toContain("Todos");
+		expect(lines[1]).toContain("1/2");
+
+		// Tree-prefixed active phase header.
+		expect(lines[2]).toContain("I. Research");
+		expect(lines[3]).toContain("Research task 4");
 		expect(lines.some((line) => line.includes("Research task 1"))).toBe(false);
 		expect(lines.some((line) => line.includes("2 more tasks"))).toBe(true);
 		expect(lines.some((line) => line.includes("II. Verify"))).toBe(true);
@@ -207,7 +207,8 @@ describe("todo-render", () => {
 		s = completeTask(s, "Already complete");
 
 		const lines = renderTodoWidgetLines(s, stubTheme, 80);
-		expect(lines[1]).toContain("I. Blocked");
+		// Leading blank line shifts indices by 1.
+		expect(lines[2]).toContain("I. Blocked");
 		expect(lines.some((line) => line.includes("Wait for CI"))).toBe(true);
 	});
 
@@ -221,8 +222,10 @@ describe("todo-render", () => {
 		for (let i = 1; i <= 6; i++) s = addTask(s, "Research", `Task ${i}`);
 		for (let i = 1; i <= 6; i++) s = addTask(s, `Later ${i}`, `Follow-up ${i}`);
 
-		const lines = renderTodoWidgetLines(s, plainTheme, 4);
-		expect(lines.every((line) => visibleWidth(line) <= 4)).toBe(true);
+		// Width 16 accommodates the 4-char tree prefix + checkbox while still
+		// exercising content clipping for long task labels.
+		const lines = renderTodoWidgetLines(s, plainTheme, 16);
+		expect(lines.every((line) => visibleWidth(line) <= 16)).toBe(true);
 	});
 
 	test("widget has no rows after all work is complete", () => {

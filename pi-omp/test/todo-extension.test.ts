@@ -51,20 +51,22 @@ describe("todo extension lifecycle", () => {
 		);
 		expect(widgets.at(-1)?.key).toBe("pi-omp.todo");
 		expect(widgets.at(-1)?.options).toEqual({ placement: "aboveEditor" });
-		expect(widgets.at(-1)?.content?.(undefined, plainTheme).render(80)).toContain(
-			"  ☐ Keep the current task visible",
+		expect(widgets.at(-1)?.content?.(undefined, plainTheme).render(80).join("\n")).toContain(
+			"└─ ☐ Keep the current task visible",
 		);
 
 		const compact = todoTool
 			.renderResult(added, { expanded: false }, plainTheme, { isError: false })
 			.render(80)
 			.join("\n");
-		expect(compact.trimEnd()).toBe("1 task remaining · pinned above editor");
+		expect(compact).toContain("☑ Todo 1 task");
+		// Single-phase: no phase header, just the task tree.
+		expect(compact).toContain("└─ ☐ Keep the current task visible");
 		const expanded = todoTool
 			.renderResult(added, { expanded: true }, plainTheme, { isError: false })
 			.render(80)
 			.join("\n");
-		expect(expanded).toContain("Todo · 1 task · 1 open");
+		expect(expanded).toContain("☑ Todo 1 task");
 
 		await events.get("session_start")?.({}, ctx);
 		await events.get("session_tree")?.({}, ctx);
@@ -78,7 +80,9 @@ describe("todo extension lifecycle", () => {
 			},
 		];
 		await events.get("session_tree")?.({}, ctx);
-		expect(widgets.at(-1)?.content?.(undefined, plainTheme).render(80)).toContain("  ☐ Use sibling task");
+		expect(widgets.at(-1)?.content?.(undefined, plainTheme).render(80).join("\n")).toContain(
+			"└─ ☐ Use sibling task",
+		);
 		branchEntries = entries;
 
 		const completed = await todoTool.execute(
@@ -93,6 +97,7 @@ describe("todo extension lifecycle", () => {
 			.renderResult(completed, { expanded: false }, plainTheme, { isError: false })
 			.render(80)
 			.join("\n");
-		expect(completion.trimEnd()).toBe("All 1 task complete.");
+		expect(completion).toContain("☑ Todo 1 task");
+		expect(completion).toContain("☑ Keep the current task visible");
 	});
 });

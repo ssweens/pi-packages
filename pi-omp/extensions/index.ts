@@ -40,10 +40,18 @@ function wireTodoReminder(pi: ExtensionAPI, cfg: PiOmpConfig): void {
 
 	pi.on("agent_end", (event, ctx) => {
 		if (!cfg.todo.reminders || remindersSent >= cfg.todo.maxReminders) return;
+		// A deliberate abort (Escape) settles the turn — don't auto-restart it with a
+		// reminder. Mirrors omp's agent-session, which returns early on
+		// `stopReason === "aborted"` before its todo checkCompletion ever runs.
+		const lastAssistant = [...event.messages].reverse().find(
+			(m) => "role" in m && m.role === "assistant",
+		);
+		if (lastAssistant && "stopReason" in lastAssistant && lastAssistant.stopReason === "aborted") {
+			return;
+		}
 		// Final assistant message: if it's a question, wait — the model wants input.
-		const last = [...event.messages].reverse().find((m) => "role" in m && m.role === "assistant");
-		if (last && "content" in last) {
-			const pieces = (last.content as Array<{ type: string; text?: string }>).filter(
+		if (lastAssistant && "content" in lastAssistant) {
+			const pieces = (lastAssistant.content as Array<{ type: string; text?: string }>).filter(
 				(c) => c.type === "text" && c.text,
 			);
 			const text = pieces.map((c) => c.text ?? "").join(" ");

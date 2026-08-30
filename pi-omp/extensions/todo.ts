@@ -3,7 +3,13 @@ import * as fs from "node:fs/promises";
 import { Text } from "@mariozechner/pi-tui";
 import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
 import type { PiOmpConfig } from "../src/config";
-import { todoPanelComponent, todoWidgetComponent } from "../src/todo-render";
+import {
+	renderTodoCallHeader,
+	todoCollapsedComponent,
+	todoErrorComponent,
+	todoPanelComponent,
+	todoWidgetComponent,
+} from "../src/todo-render";
 import {
 	type TodoState,
 	addTask,
@@ -104,12 +110,6 @@ export function syncTodoWidget(ui: Pick<ExtensionCommandContext["ui"], "setWidge
 	});
 }
 
-function todoResultText(details: TodoToolDetails): string {
-	const total = details.state.phases.reduce((count, phase) => count + phase.tasks.length, 0);
-	if (total === 0) return "Task list cleared.";
-	if (details.open === 0) return `All ${total} task${total === 1 ? "" : "s"} complete.`;
-	return `${details.open} task${details.open === 1 ? "" : "s"} remaining · pinned above editor`;
-}
 
 export function installTodo(pi: ExtensionAPI, cfg: PiOmpConfig): void {
 	pi.registerTool({
@@ -119,6 +119,9 @@ export function installTodo(pi: ExtensionAPI, cfg: PiOmpConfig): void {
 			"Manage a phased todo list. Ops: init, add (content, phase), start (content), done (content), drop/rm (content), block/unblock (content, blocker), view. Tasks are addressed by their content string; one task is in_progress; completing auto-promotes the next open task.",
 		promptSnippet: "todo(op, content?, phase?, blocker?) — manage phased todos",
 		parameters: PARAMS,
+		// omp renders its own framed block (rounded border with header in the top
+		// border); self-framing keeps pi's default bg-colored Box shell off.
+		renderShell: "self",
 		executionMode: "sequential",
 		execute: async (_toolCallId, params: TodoParams, _signal, _onUpdate, ctx) => {
 			const state = applyOp(loadState(ctx.sessionManager), params);
@@ -130,21 +133,22 @@ export function installTodo(pi: ExtensionAPI, cfg: PiOmpConfig): void {
 				details: { op: params.op, open: countOpen(state), state },
 			};
 		},
-		// Compact header while the call streams in.
+		// omp-style streaming header: `⏳ Todo · add <content>` (plain text, no frame).
 		renderCall: (args: TodoParams, theme) => {
-			const op = args?.op ?? "view";
-			const detail = args?.content ?? (args?.phase ? `phase: ${args.phase}` : "");
-			return new Text(theme.fg("toolTitle", theme.bold("Todo")) + (detail ? theme.fg("dim", ` · ${op} ${detail}`) : ""), 0, 0);
+			return new Text(renderTodoCallHeader(args ?? {}, theme), 0, 0);
 		},
-		// Expanded results preserve inspectable history; the live task surface is the widget.
+		// Collapsed: framed block `☑ Todo · N tasks` + bounded nested tree.
+		// Expanded: same frame + full nested tree (all phases, all tasks).
 		renderResult: (result, options, theme, context) => {
 			const details = result?.details as TodoToolDetails | undefined;
 			const state = details?.state;
 			if (!details || !state || context?.isError) {
-				return new Text(theme.fg("error", theme.bold("Todo")) + theme.fg("dim", " · failed"), 0, 0);
+				const errorText =
+					result?.content?.find((c) => c.type === "text")?.text ?? "Todo operation failed";
+				return todoErrorComponent(errorText, theme);
 			}
 			if (options.expanded) return todoPanelComponent(state, theme);
-			return new Text(theme.fg(details.open === 0 ? "success" : "dim", todoResultText(details)), 0, 0);
+			return todoCollapsedComponent(state, theme);
 		},
 	});
 

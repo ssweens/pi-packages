@@ -29,7 +29,9 @@ describe("todo widget synchronization", () => {
 		expect(calls[0]?.key).toBe("pi-omp.todo");
 		expect(calls[0]?.options).toEqual({ placement: "aboveEditor" });
 		expect(calls[0]?.content).toBeTypeOf("function");
-		expect(calls[0]?.content?.(undefined, plainTheme).render(80)).toContain("  ☐ Trace the todo renderer");
+		expect(calls[0]?.content?.(undefined, plainTheme).render(80).join("\n")).toContain(
+			"└─ ☐ Trace the todo renderer",
+		);
 
 		syncTodoWidget(ui as never, emptyState());
 		expect(calls[1]).toEqual({ key: "pi-omp.todo", content: undefined, options: undefined });
