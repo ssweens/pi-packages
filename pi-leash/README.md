@@ -207,7 +207,7 @@ Enable it per session with either:
 - `permissionGate.autoMode.enabled` — changes auto mode now and establishes the next session's initial state
 - `permissionGate.autoMode.model` — classifier `provider/model-id`; `null` follows Pi's active session model and remains the default until a classifier model is selected
 
-The classifier receives the proposed action, direct user requests, and prior agent Bash **source** from the current session. It never receives tool output as safety evidence. It must return `allow`, `ask`, or `deny`; unavailable/timed-out/invalid classifier responses fall through to the existing human approval dialog. `sudo` is a soft gate: an auto `allow` skips the generic dangerous-command prompt but still enters Leash's dedicated sudo password flow. Unclear sudo intent returns `ask`.
+The classifier receives the proposed action, direct user requests, and prior agent Bash **source** from the current session. It never receives tool output as safety evidence. It must return `allow`, `ask`, or `deny`; unavailable, timed-out, provider-failed, or invalid classifier responses fall through to the existing human approval dialog. Timeout and provider/model setup failures report their specific, credential-redacted cause in the footer. `sudo` is a soft gate: an auto `allow` skips the generic dangerous-command prompt but still enters Leash's dedicated sudo password flow. Unclear sudo intent returns `ask`.
 
 While the classifier model is pending, the two `⏵` markers in the persistent `leash auto` footer indicator rotate theme colors; the label and footer width stay fixed. Every gated action then briefly shows `⏵⏵ leash allow|ask|deny [source] · reason`. The persistent indicator intentionally contains no model name. `/leash status` reports session counts and the last verdict, including verdicts restored after reload or resume.
 
@@ -221,6 +221,8 @@ Classifier policy fields under `permissionGate.autoMode` are natural-language ru
 - `hardDeny`: unconditional boundaries
 
 `hardDeny` always wins. In auto mode, legacy command/reason/cwd session bypasses do not bypass the classifier; a classifier `ask` prompt offers only one-time allow or deny.
+
+Leash records the last 20 interactive dangerous-command approvals or denials in the active session branch. They survive Pi session resume, but are not shared with a new session or another project. The classifier receives each decision’s command, danger category, outcome, and prior classifier reason as historical evidence only; it must not treat it as a standing approval or extend it to a broader target.
 
 ### Explain commands (opt-in)
 

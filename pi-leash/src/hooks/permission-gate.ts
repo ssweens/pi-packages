@@ -1029,6 +1029,7 @@ export function setupPermissionGateHook(
     const sudoMode = config.permissionGate.sudoMode;
     const sudoCommand = isSudoCommand(command);
     let autoApprovedSudo = false;
+    let classifierReason: string | undefined;
 
     if (autoActive && autoMode) {
       const action: AutoModeAction = {
@@ -1040,6 +1041,7 @@ export function setupPermissionGateHook(
       };
       const verdict = await autoMode.classify(action, ctx);
       autoMode.recordVerdict(verdict, ctx);
+      classifierReason = verdict.reason;
       if (verdict.decision === "allow") {
         if (sudoCommand && sudoMode.enabled) autoApprovedSudo = true;
         else return;
@@ -1439,6 +1441,17 @@ export function setupPermissionGateHook(
           display: true,
         });
       }
+
+      autoMode?.recordUserDecision?.(
+        {
+          command,
+          description,
+          pattern: rawPattern,
+          decision: result === "deny" ? "deny" : "allow",
+          ...(classifierReason ? { classifierReason } : {}),
+        },
+        ctx,
+      );
 
       if (result === "deny") {
         emitBlocked(pi, {

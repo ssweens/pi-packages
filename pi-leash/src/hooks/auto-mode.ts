@@ -6,7 +6,9 @@ import {
 import { Key, matchesKey, truncateToWidth } from "@mariozechner/pi-tui";
 import { type ResolvedConfig, updateAutoModeConfig } from "../config";
 import {
+  AUTO_MODE_USER_DECISION_ENTRY_TYPE,
   type AutoModeAction,
+  type AutoModeUserDecision,
   type AutoModeVerdict,
   classifyAutoModeAction,
   getAutoModeModelLabel,
@@ -37,6 +39,10 @@ export interface AutoModeController {
     ctx: ExtensionContext,
   ): Promise<AutoModeVerdict>;
   recordVerdict(verdict: AutoModeVerdict, ctx: ExtensionContext): void;
+  recordUserDecision?(
+    decision: Omit<AutoModeUserDecision, "timestamp">,
+    ctx: ExtensionContext,
+  ): void;
 }
 
 function createAutoModeAudit(): AutoModeAudit {
@@ -295,6 +301,16 @@ export function setupAutoMode(
     showVerdictStatus(recorded, ctx);
   };
 
+  const recordUserDecision = (
+    decision: Omit<AutoModeUserDecision, "timestamp">,
+    _ctx: ExtensionContext,
+  ) => {
+    pi.appendEntry(AUTO_MODE_USER_DECISION_ENTRY_TYPE, {
+      ...decision,
+      timestamp: Date.now(),
+    });
+  };
+
   const renderAutoStatus = (ctx: ExtensionContext) => {
     if (!enabled) {
       ctx.ui.setStatus("leash-auto", undefined);
@@ -475,5 +491,6 @@ export function setupAutoMode(
       }
     },
     recordVerdict,
+    recordUserDecision,
   };
 }

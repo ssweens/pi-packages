@@ -10,9 +10,11 @@ All notable changes to this project will be documented in this file.
 - Claude-aligned auto-mode tiers: data exfiltration across the trusted Environment boundary is the default hard deny; destructive local and host operations are soft gates requiring direct, exact user intent.
 - Transient footer verdict trace plus `/leash status` session counters and last-decision detail for auto-mode `allow`, `ask`, and `deny` outcomes.
 - Animated, color-rotating auto footer marker while the classifier model is pending; it returns to the static indicator immediately after a verdict.
+- Bounded session-and-resume history of the last 20 interactive dangerous-command approvals and denials, supplied to the classifier only as non-authoritative evidence for equivalent actions.
 
 ### Changed
 - `sudo` is now an explicit-intent auto-mode soft gate rather than a hard deny. An auto approval skips only generic dangerous-command confirmation; Leash's dedicated sudo password flow still runs.
+- Auto-mode fallback now reports the specific timeout, model setup, or credential-redacted provider failure instead of the generic “could not complete safely”.
 
 
 ## [1.2.3] - 2026-07-18

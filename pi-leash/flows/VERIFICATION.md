@@ -12,6 +12,6 @@
 ## Evidence
 
 - `pnpm typecheck` passed.
-- `pnpm test` passed: 8 files, 191 tests. The new controller test verifies the initial busy frame, the next color frame, and restoration of the static marker after the classifier resolves.
+- `pnpm test` passed: 8 files, 193 tests. The controller test verifies the initial busy frame, the next color frame, and restoration of the static marker after the classifier resolves. Classifier tests cover sanitized provider errors and configured-timeout reporting.
 - `pnpm exec biome check src/hooks/auto-mode.ts src/hooks/auto-mode.test.ts` passed.
 - `pi --no-extensions --extension ./src/index.ts --print '/leash status'` exited successfully, exercising extension load and command registration.

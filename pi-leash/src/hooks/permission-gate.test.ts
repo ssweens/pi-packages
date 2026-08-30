@@ -293,6 +293,31 @@ describe("reason-scoped trust through the Pi tool-call hook", () => {
     ]);
   });
 
+  it("records an interactive approval as bounded classifier context", async () => {
+    const userDecisions: unknown[] = [];
+    const harness = createHarness(["Allow once"], {
+      isEnabled: () => true,
+      classify: async () => ({
+        decision: "ask",
+        reason: "The target's provenance is incomplete.",
+        source: "classifier",
+      }),
+      recordVerdict() {},
+      recordUserDecision: (decision) => userDecisions.push(decision),
+    });
+
+    await expect(harness.dispatch("rm -rf ./scratch")).resolves.toBeUndefined();
+    expect(userDecisions).toEqual([
+      {
+        command: "rm -rf ./scratch",
+        description: "recursive force delete",
+        pattern: "rm -rf",
+        decision: "allow",
+        classifierReason: "The target's provenance is incomplete.",
+      },
+    ]);
+  });
+
   it("lets the auto classifier allow, deny, or retain the one-time manual prompt", async () => {
     const seen: string[] = [];
     const decisions: string[] = [];
