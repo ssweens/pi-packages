@@ -15,11 +15,11 @@ Set your GCP project and credentials. Vertex AI models (Gemini, Claude, Llama, D
 
 ## Features
 
-- **50 models** across 4 categories:
+- **52 models** across 4 categories:
   - **Gemini** (11): 3.8 Flash, 3.7 Flash, 3.6 Flash, 3.5 Flash, 3.5 Flash-Lite, 3.1 Pro, 3.1 Flash-Lite, 3 Flash, 2.5 Pro, 2.5 Flash, 2.5 Flash-Lite
   - **Claude** (14): Opus 5, Sonnet 5, Fable 5, Opus 4.8, Opus 4.7, Opus 4.6, Sonnet 4.6, Opus/Sonnet/Haiku 4.5, Opus 4.1, Opus 4, Sonnet 4, 3.5 Sonnet v2
   - **Llama** (3): 4 Maverick, 4 Scout, 3.3 70B
-  - **Other MaaS** (22): Grok 4.3, Grok 4.20, Grok 4.1 Fast, Gemma, Mistral, DeepSeek, Qwen, OpenAI GPT-OSS, Kimi, MiniMax, GLM
+  - **Other MaaS** (24): Grok 4.6, Grok 4.3, Grok 4.20, Grok 4.1 Fast, Gemma, Mistral, DeepSeek, Qwen, OpenAI GPT-OSS, Kimi, MiniMax, GLM 5.2, GLM
 
 - **Unified streaming**: Single provider, multiple model families
 - **Full tool calling support**: All models with multi-turn tool use and proper tool result handling
@@ -87,7 +87,9 @@ pi --provider vertex --model gemini-2.5-pro --version
 ```bash
 # Use any supported model
 pi --provider vertex --model claude-opus-4-8
+pi --provider vertex --model grok-4.6
 pi --provider vertex --model grok-4.3
+pi --provider vertex --model glm-5.2
 pi --provider vertex --model gemini-3.8-flash
 pi --provider vertex --model gemini-2.5-pro
 pi --provider vertex --model llama-4-maverick
@@ -188,8 +190,10 @@ Claude 5 models (`claude-opus-5`, `claude-sonnet-5`) require provider data shari
 | gpt-oss-20b | 131K | openai | $0.07/$0.25 | global |
 | kimi-k2-thinking | 262K | moonshotai | $0.60/$2.50 | global |
 | minimax-m2 | 196K | minimaxai | $0.30/$1.20 | global |
+| glm-5.2 | 1M | zai-org | $1.40/$4.40 | global |
 | glm-5 | 200K | zai-org | $1.00/$3.20 | global |
 | glm-4.7 | 200K | zai-org | $0.60/$2.20 | global |
+| grok-4.6 | 524K | xai | $2.00/$6.00 | global |
 | grok-4.3 | 1M | xai | $1.25/$2.50 | global |
 | grok-4.20-reasoning | 1M | xai | $1.25/$2.50 | global |
 | grok-4.1-fast-reasoning | 2M | xai | $0.20/$0.50 | global |

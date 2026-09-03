@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.2] - 2026-09-03
+### Added
+- **GLM 5.2** (`glm-5.2`) — 1M context, 64,000 max output, thinking, tools, and global Vertex endpoint. Pricing is $1.40/$4.40 per 1M input/output tokens with $0.26/1M cached input tokens.
+- **Grok 4.6** (`grok-4.6`) — Preview model with 524K context, image input, reasoning, tools, and global Vertex endpoint. Pricing is $2.00/$6.00 per 1M input/output tokens with $0.50/1M cached input tokens.
+
 ## [1.2.1] - 2026-09-03
 ### Added
 - **Gemini 3.8 Flash** (`gemini-3.8-flash`) — GA on 2026-09-02. 1M context, 65,536 max output, reasoning via low/medium/high thinking levels, tools, and global Vertex endpoint. Introductory pricing is $0.75/$3.75 per 1M input/output tokens with $0.075/1M cached input tokens through 2026-12-31.

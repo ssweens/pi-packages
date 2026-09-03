@@ -10,6 +10,25 @@ import type { VertexModelConfig } from "../types.js";
 export const MAAS_MODELS: VertexModelConfig[] = [
   // --- xAI Grok ---
   {
+    id: "grok-4.6",
+    name: "Grok 4.6",
+    apiId: "grok-4.6",
+    publisher: "xai",
+    endpointType: "maas",
+    contextWindow: 524288,
+    maxTokens: 32000,
+    input: ["text", "image"],
+    reasoning: true,
+    tools: true,
+    cost: {
+      input: 2.00,
+      output: 6.00,
+      cacheRead: 0.50,
+      cacheWrite: 0,
+    },
+    region: "global",
+  },
+  {
     id: "grok-4.3",
     name: "Grok 4.3",
     apiId: "grok-4.3",
@@ -464,6 +483,25 @@ export const MAAS_MODELS: VertexModelConfig[] = [
   },
 
   // --- GLM (Zhipu AI) ---
+  {
+    id: "glm-5.2",
+    name: "GLM 5.2",
+    apiId: "zai-org/glm-5.2-maas",
+    publisher: "zai-org",
+    endpointType: "maas",
+    contextWindow: 1000000,
+    maxTokens: 64000,
+    input: ["text"],
+    reasoning: true,
+    tools: true,
+    cost: {
+      input: 1.40,
+      output: 4.40,
+      cacheRead: 0.26,
+      cacheWrite: 0,
+    },
+    region: "global",
+  },
   {
     id: "glm-5",
     name: "GLM 5",

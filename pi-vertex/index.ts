@@ -22,7 +22,9 @@
  *
  * Usage:
  *   pi --provider vertex --model claude-opus-4-8
+ *   pi --provider vertex --model grok-4.6
  *   pi --provider vertex --model grok-4.3
+ *   pi --provider vertex --model glm-5.2
  *   pi --provider vertex --model gemini-3.8-flash
  *   pi --provider vertex --model gemini-2.5-pro
  *   pi --provider vertex --model llama-4-maverick
