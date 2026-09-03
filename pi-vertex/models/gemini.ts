@@ -3,12 +3,33 @@
  * Source: https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models
  * Pricing: https://cloud.google.com/vertex-ai/generative-ai/pricing
  * All prices per 1M tokens (standard tier, <= 200K input tokens)
- * Verified against the Vertex AI model catalog on 2026-08-14.
+ * Verified against the Vertex AI model catalog on 2026-09-03.
  */
 
 import type { VertexModelConfig } from "../types.js";
 
 export const GEMINI_MODELS: VertexModelConfig[] = [
+  // --- Gemini 3.8 (GA, 2026-09-02) ---
+  {
+    id: "gemini-3.8-flash",
+    name: "Gemini 3.8 Flash",
+    apiId: "gemini-3.8-flash",
+    publisher: "google",
+    endpointType: "gemini",
+    contextWindow: 1048576,
+    maxTokens: 65536,
+    input: ["text", "image"],
+    reasoning: true,
+    tools: true,
+    cost: {
+      input: 0.75,
+      output: 3.75,
+      cacheRead: 0.075,
+      cacheWrite: 0,
+    },
+    region: "global",
+  },
+
   // --- Gemini 3.7 (GA, 2026-08-13) ---
   {
     id: "gemini-3.7-flash",

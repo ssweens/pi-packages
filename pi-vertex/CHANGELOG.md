@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.1] - 2026-09-03
+### Added
+- **Gemini 3.8 Flash** (`gemini-3.8-flash`) — GA on 2026-09-02. 1M context, 65,536 max output, reasoning via low/medium/high thinking levels, tools, and global Vertex endpoint. Introductory pricing is $0.75/$3.75 per 1M input/output tokens with $0.075/1M cached input tokens through 2026-12-31.
+
+### Fixed
+- Gemini 3.8 Flash `minimal` reasoning requests now floor to the supported `low` thinking level.
+
 ## [1.2.0] - 2026-08-14
 ### Added
 - **Gemini 3.7 Flash** (`gemini-3.7-flash`) — GA on 2026-08-13. Google's current workhorse Flash model for coding and agents. 1M context, 65,536 max output, reasoning via thinking levels, tools. $0.75/$3.75 per 1M tokens, $0.075/1M cache read — cheaper *and* newer than 3.5/3.6 Flash.

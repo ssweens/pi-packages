@@ -34,8 +34,8 @@ function isGemini3ProModel(modelId: string): boolean {
   return /gemini-3(?:\.\d+)?-pro/.test(modelId.toLowerCase());
 }
 
-function isGemini3FlashModel(modelId: string): boolean {
-  return /gemini-3(?:\.\d+)?-flash/.test(modelId.toLowerCase());
+function isGemini38FlashModel(modelId: string): boolean {
+  return /gemini-3\.8-flash/.test(modelId.toLowerCase());
 }
 
 function isGemini25ProModel(modelId: string): boolean {
@@ -43,8 +43,8 @@ function isGemini25ProModel(modelId: string): boolean {
 }
 
 function getGemini3ThinkingLevel(effort: string, modelId: string): ThinkingLevel {
-  if (isGemini3ProModel(modelId)) {
-    // Pro only supports LOW/MEDIUM/HIGH — floor minimal/low to LOW
+  if (isGemini3ProModel(modelId) || (isGemini38FlashModel(modelId) && effort === "minimal")) {
+    // Gemini 3 Pro and Gemini 3.8 Flash do not support MINIMAL — floor to LOW
     if (effort === "minimal" || effort === "low") return ThinkingLevel.LOW;
     if (effort === "medium") return ThinkingLevel.MEDIUM;
     return ThinkingLevel.HIGH;
