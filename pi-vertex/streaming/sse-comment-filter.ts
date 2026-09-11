@@ -1,31 +1,41 @@
 /**
- * Fetch wrapper that strips SSE comment lines (e.g. ": keepalive") from
- * Vertex AI streaming responses.
+ * Fetch wrapper that strips keepalive noise from Vertex AI streaming responses.
  *
- * Vertex AI injects `: keepalive` comment lines into streamGenerateContent
- * SSE streams on slow responses (long thinking, large context). The
- * @google/genai SDK's stream parser does not handle SSE comments and fails
- * with errors like:
+ * On slow streams (long prefill, hidden reasoning, large context) Vertex AI
+ * injects keepalive lines that downstream SDK parsers choke on:
  *
- *   Error: Unexpected token ':', ": keepalive" is not valid JSON
- *   Error: Incomplete JSON segment at the end
+ *   1. `: keepalive`         — SSE comment (Gemini streamGenerateContent).
+ *      Spec-ignorable, but @google/genai's hand-rolled parser doesn't skip
+ *      comments: "Unexpected token ':'..." / "Incomplete JSON segment at the
+ *      end" / silently dropped data events.
  *
- * SSE comment lines are ignorable per spec, so dropping them is always safe.
- * Scoped strictly to Vertex streamGenerateContent URLs.
+ *   2. `data: : keepalive`   — a *data* event whose payload is a pseudo-comment
+ *      (MaaS /endpoints/openapi chat completions, observed with e.g. Grok).
+ *      Not a comment at all, so even spec-correct SSE parsers (openai SDK)
+ *      hand `: keepalive` to JSON.parse:
+ *      "Unexpected token ':', \": keepalive\" is not valid JSON"
+ *
+ * Both are safe to drop: a valid JSON payload can never start with ':'.
+ * Scoped to Vertex AI (aiplatform.googleapis.com) streaming URLs only.
  */
 
 let installed = false;
 
-/** Returns true for lines that are SSE comments (start with ':'). */
-function isSseComment(line: string): boolean {
-  return line.startsWith(":");
+/** True for SSE comments and for data events carrying a pseudo-comment payload. */
+function isKeepaliveLine(line: string): boolean {
+  if (line.startsWith(":")) return true; // SSE comment
+  if (line.startsWith("data:")) {
+    const payload = line.substring(5).trimStart();
+    return payload.startsWith(":"); // e.g. "data: : keepalive"
+  }
+  return false;
 }
 
 /**
- * TransformStream that removes SSE comment lines from a byte stream while
+ * TransformStream that removes keepalive lines from a byte stream while
  * preserving all other bytes (including event-delimiting blank lines).
  */
-function createSseCommentStripper(): TransformStream<Uint8Array, Uint8Array> {
+function createKeepaliveStripper(): TransformStream<Uint8Array, Uint8Array> {
   const decoder = new TextDecoder("utf-8");
   const encoder = new TextEncoder();
   let pending = "";
@@ -38,15 +48,15 @@ function createSseCommentStripper(): TransformStream<Uint8Array, Uint8Array> {
       const nl = pending.indexOf("\n", start);
       if (nl === -1) break;
       const line = pending.substring(start, nl + 1);
-      // Strip \r\n / \n terminated comment lines; keep everything else.
+      // Strip \r\n / \n terminated keepalive lines; keep everything else.
       const content = line.endsWith("\r\n") ? line.slice(0, -2) : line.slice(0, -1);
-      if (!isSseComment(content)) output += line;
+      if (!isKeepaliveLine(content)) output += line;
       start = nl + 1;
     }
     pending = pending.substring(start);
     if (isFlush && pending.length > 0) {
-      // Trailing data without a newline: drop only if it's a comment.
-      if (!isSseComment(pending)) output += pending;
+      // Trailing data without a newline: drop only if it's a keepalive.
+      if (!isKeepaliveLine(pending)) output += pending;
       pending = "";
     }
     return output;
@@ -70,9 +80,19 @@ function requestUrl(input: RequestInfo | URL): string {
   return input.url;
 }
 
+/** Vertex AI streaming endpoints: Gemini SSE, MaaS chat completions, Anthropic raw predict. */
+function isVertexStreamingUrl(url: string): boolean {
+  if (!url.includes("aiplatform.googleapis.com")) return false;
+  return (
+    url.includes("streamGenerateContent") ||
+    url.includes("/endpoints/openapi/") ||
+    url.includes("streamRawPredict")
+  );
+}
+
 /**
- * Install a global fetch wrapper (once) that pipes Vertex streamGenerateContent
- * response bodies through the SSE comment stripper. All other requests pass
+ * Install a global fetch wrapper (once) that pipes Vertex AI streaming
+ * response bodies through the keepalive stripper. All other requests pass
  * through untouched.
  */
 export function installSseCommentFilter(): void {
@@ -82,11 +102,10 @@ export function installSseCommentFilter(): void {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const response = await originalFetch(input, init);
-    const url = requestUrl(input);
-    if (!url.includes("streamGenerateContent") || !response.body) {
+    if (!isVertexStreamingUrl(requestUrl(input)) || !response.body) {
       return response;
     }
-    return new Response(response.body.pipeThrough(createSseCommentStripper()), {
+    return new Response(response.body.pipeThrough(createKeepaliveStripper()), {
       headers: response.headers,
       status: response.status,
       statusText: response.statusText,
