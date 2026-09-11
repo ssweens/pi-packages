@@ -13,6 +13,7 @@ import type { VertexModelConfig, Context, StreamOptions, AssistantMessage } from
 import { getAuthConfig, resolveLocation } from "../auth.js";
 import { sanitizeText, convertToGeminiMessages, convertToolsForGemini, retainThoughtSignature, calculateCost } from "../utils.js";
 import { createAssistantMessageEventStream, type AssistantMessageEventStream } from "@mariozechner/pi-ai";
+import { installSseCommentFilter } from "./sse-comment-filter.js";
 
 // Module-level counter for generating unique tool call IDs (matches pi-mono pattern)
 let toolCallCounter = 0;
@@ -90,6 +91,10 @@ export function streamGemini(
     };
 
     try {
+      // Vertex injects ": keepalive" SSE comments on slow streams; the genai SDK
+      // can't parse them. Strip them at the fetch layer (installed once).
+      installSseCommentFilter();
+
       // Priority: config file > env var > model region > default
       const location = resolveLocation(model.region);
       const auth = getAuthConfig(location);
