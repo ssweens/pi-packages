@@ -120,7 +120,12 @@ Create this file to customize settings. All fields are optional — sensible def
     "sudoMode": {
       "enabled": false,
       "timeout": 30000,
-      "preserveEnv": false
+      "preserveEnv": false,
+      "cacheTtlOptions": [
+        { "label": "5 min", "ttlMs": 300000 },
+        { "label": "8 hours", "ttlMs": 28800000 },
+        { "label": "Session", "ttlMs": 9007199254740991 }
+      ]
     }
   }
 }

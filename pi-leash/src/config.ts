@@ -81,10 +81,14 @@ export interface PolicyRule {
   enabled?: boolean;
 }
 
-/**
- * User-facing guardrails configuration.
- * All fields are optional - defaults are applied.
- */
+/** A cache TTL option for the sudo password dialog. */
+export interface CacheTtlOption {
+  /** Display label shown in the selector (e.g. "5 min", "8 hours", "Session"). */
+  label: string;
+  /** Duration in milliseconds. Use Number.MAX_SAFE_INTEGER for session-scoped. */
+  ttlMs: number;
+}
+
 export interface AutoModeConfig {
   /** Auto-mode setting. Changes via /leash settings apply immediately; new sessions initialize from it. */
   enabled?: boolean;
@@ -157,15 +161,20 @@ export interface GuardrailsConfig {
       /** Preserve environment with sudo -E. Default: false */
       preserveEnv?: boolean;
       /**
-       * Show a "Remember password for N minutes" toggle in the sudo password
-       * dialog. When the user opts in, the password is cached in-memory only
-       * (never written to disk) for `cacheTtl` milliseconds so subsequent
-       * sudo prompts skip the password step. The approval dialog still runs
-       * every time. Default: true.
+       * Show a "Remember password" selector in the sudo password dialog with
+       * configurable duration options. When the user opts in, the password is
+       * cached in-memory only (never written to disk) for the selected duration
+       * so subsequent sudo prompts skip the password step. The approval dialog
+       * still runs every time. Default: true.
        */
       cacheEnabled?: boolean;
-      /** Cache TTL in milliseconds. Default: 300000 (5 minutes). */
-      cacheTtl?: number;
+      /**
+       * Cache duration options shown in the selector. Defaults to:
+       * [{ label: "5 min", ttlMs: 300000 }, { label: "8 hours", ttlMs: 28800000 }, { label: "Session", ttlMs: <MAX_SAFE_INTEGER> }]
+       * Set to an empty array to hide the selector (equivalent to cacheEnabled: false).
+       * A single number is also accepted for backward compatibility (wraps as [{ label: "N min", ttlMs: <number> }]).
+       */
+      cacheTtlOptions?: (CacheTtlOption | number)[];
       /**
        * Maximum number of password attempts before giving up.
        * Mirrors real sudo behavior. Default: 3.
@@ -207,7 +216,7 @@ export interface ResolvedConfig {
       timeout: number;
       preserveEnv: boolean;
       cacheEnabled: boolean;
-      cacheTtl: number;
+      cacheTtlOptions: CacheTtlOption[];
       maxRetries: number;
     };
   };
@@ -291,7 +300,21 @@ function mergeConfig(userConfig: GuardrailsConfig): ResolvedConfig {
       timeout: pg.sudoMode?.timeout ?? 30000,
       preserveEnv: pg.sudoMode?.preserveEnv ?? false,
       cacheEnabled: pg.sudoMode?.cacheEnabled ?? true,
-      cacheTtl: pg.sudoMode?.cacheTtl ?? 300000,
+      cacheTtlOptions:
+        pg.sudoMode?.cacheTtlOptions !== undefined
+          ? pg.sudoMode.cacheTtlOptions.map((opt) =>
+              typeof opt === "number"
+                ? {
+                    label: `${Math.max(1, Math.round(opt / 60000))} min`,
+                    ttlMs: opt,
+                  }
+                : opt,
+            )
+          : [
+              { label: "5 min", ttlMs: 300_000 },
+              { label: "8 hours", ttlMs: 28_800_000 },
+              { label: "Session", ttlMs: Number.MAX_SAFE_INTEGER },
+            ],
       maxRetries: pg.sudoMode?.maxRetries ?? 3,
     },
   };

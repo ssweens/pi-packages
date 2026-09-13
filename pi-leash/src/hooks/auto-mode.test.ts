@@ -52,7 +52,7 @@ const config: ResolvedConfig = {
       timeout: 30000,
       preserveEnv: false,
       cacheEnabled: false,
-      cacheTtl: 300000,
+      cacheTtlOptions: [],
       maxRetries: 3,
     },
   },

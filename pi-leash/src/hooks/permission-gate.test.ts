@@ -74,7 +74,11 @@ describe("reason-scoped trust through the Pi tool-call hook", () => {
         timeout: 30_000,
         preserveEnv: false,
         cacheEnabled: false,
-        cacheTtl: 300_000,
+        cacheTtlOptions: [
+          { label: "5 min", ttlMs: 300_000 },
+          { label: "8 hours", ttlMs: 28_800_000 },
+          { label: "Session", ttlMs: Number.MAX_SAFE_INTEGER },
+        ],
         maxRetries: 3,
       },
     },

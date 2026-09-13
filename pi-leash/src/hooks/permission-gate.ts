@@ -18,7 +18,11 @@ import {
   visibleWidth,
   wrapTextWithAnsi,
 } from "@mariozechner/pi-tui";
-import type { DangerousPattern, ResolvedConfig } from "../config";
+import type {
+  CacheTtlOption,
+  DangerousPattern,
+  ResolvedConfig,
+} from "../config";
 import { executeSubagent, resolveModel } from "../lib";
 import type { AutoModeAction } from "../lib/auto-mode-classifier";
 import { extractBashPathCandidates } from "../utils/bash-paths";
@@ -133,8 +137,8 @@ interface SudoExecutionResult {
 
 interface SudoPasswordPromptResult {
   password: string;
-  /** User opted in to caching the password for the configured TTL. */
-  remember: boolean;
+  /** TTL in ms for password caching. 0 = don't cache. */
+  rememberTtlMs: number;
 }
 
 /**
@@ -165,6 +169,22 @@ function clearPasswordCache(): void {
 
 function setPasswordCache(password: string, ttl: number): void {
   clearPasswordCache();
+
+  // Session-scoped: no timer — cleared only on process exit or manual clear.
+  const isSession = ttl >= Number.MAX_SAFE_INTEGER / 2;
+  if (isSession) {
+    const sessionTimer = setTimeout(() => {}, Number.MAX_SAFE_INTEGER);
+    if (typeof (sessionTimer as { unref?: () => void }).unref === "function") {
+      (sessionTimer as { unref: () => void }).unref();
+    }
+    passwordCache = {
+      password,
+      expiresAt: Number.MAX_SAFE_INTEGER,
+      timer: sessionTimer,
+    };
+    return;
+  }
+
   const timer = setTimeout(() => clearPasswordCache(), ttl);
   // Don't keep the event loop alive solely for password expiry.
   if (typeof (timer as { unref?: () => void }).unref === "function") {
@@ -373,21 +393,27 @@ async function executeSudoCommand(
 }
 
 /**
- * Prompt for sudo password with masked input.
+ * Prompt for sudo password with masked input and a cache-duration selector.
  *
- * When `cacheEnabled` is true, a `[ ] Remember for N min` checkbox is rendered
- * below the password input. The user toggles it with Tab. If checked at
- * submit time, `result.remember === true` and the caller should cache the
- * password for the configured TTL.
+ * When `cacheEnabled` is true and `cacheTtlOptions` has entries, a radio
+ * selector is rendered below the password input. The user navigates with
+ * Up/Down arrows and presses Enter to confirm the selected duration.
+ * A duration of 0 means "don't cache".
  */
 async function promptForSudoPassword(
   ctx: ExtensionContext,
   command: string,
   cacheEnabled: boolean,
-  cacheTtlMs: number,
+  cacheTtlOptions: CacheTtlOption[],
   errorMessage?: string,
   attemptsRemaining?: number,
 ): Promise<SudoPasswordPromptResult | null> {
+  // Build the effective options list: index 0 = don't cache, then each configured option.
+  const options: CacheTtlOption[] = [
+    { label: "Don't remember", ttlMs: 0 },
+    ...cacheTtlOptions,
+  ];
+
   const result = await ctx.ui.custom<
     SudoPasswordPromptResult | null | undefined
   >((tui: { terminal?: { rows?: number } }, theme, kb, done) => {
@@ -395,9 +421,7 @@ async function promptForSudoPassword(
     const yellowBorder = (s: string) => theme.fg("warning", s);
 
     let password = "";
-    let remember = false;
-    const cacheMinutes = Math.max(1, Math.round(cacheTtlMs / 60000));
-
+    let selectorIndex = 0; // starts on "Don't remember"
     container.addChild(new DynamicBorder(yellowBorder));
     container.addChild(
       new Text(theme.fg("warning", theme.bold("Sudo Password Required")), 1, 0),
@@ -440,21 +464,21 @@ async function promptForSudoPassword(
     const passwordText = new Text("", 1, 0);
     container.addChild(passwordText);
 
-    const rememberText = new Text("", 1, 0);
-    const renderRemember = () => {
-      const box = remember ? "[x]" : "[ ]";
-      const color = remember ? "accent" : "dim";
-      rememberText.setText(
-        theme.fg(
-          color,
-          `${box} Remember password for ${cacheMinutes} min (in-memory only)`,
-        ),
-      );
+    // Cache-duration selector
+    const selectorText = new Text("", 1, 0);
+    const renderSelector = () => {
+      const parts = options.map((opt, i) => {
+        const sel = i === selectorIndex;
+        return sel
+          ? theme.fg("accent", `> ${opt.label} <`)
+          : `  ${opt.label}  `;
+      });
+      selectorText.setText(theme.fg("dim", "Remember: ") + parts.join(" "));
     };
-    if (cacheEnabled) {
+    if (cacheEnabled && options.length > 1) {
       container.addChild(new Spacer(1));
-      renderRemember();
-      container.addChild(rememberText);
+      renderSelector();
+      container.addChild(selectorText);
     }
 
     container.addChild(new Spacer(1));
@@ -462,8 +486,8 @@ async function promptForSudoPassword(
       new Text(
         theme.fg(
           "dim",
-          cacheEnabled
-            ? "enter: confirm • tab: toggle remember • esc: cancel"
+          cacheEnabled && options.length > 1
+            ? "enter: confirm • ↑↓: cache duration • esc: cancel"
             : "enter: confirm • esc: cancel",
         ),
         1,
@@ -491,22 +515,25 @@ async function promptForSudoPassword(
           kb.matches(data, "selectCancel" as any) ||
           matchesKey(data, Key.escape);
         const backspace = matchesKey(data, Key.backspace) || data === "\u007f";
-        const tab = matchesKey(data, Key.tab) || data === "\t";
+        const up = matchesKey(data, Key.up) || data === "\u001b[A";
+        const down = matchesKey(data, Key.down) || data === "\u001b[B";
 
         if (confirm) {
-          // Ignore empty submits. This prevents accidental empty-password attempts.
           if (password.length === 0) return;
-          done({ password, remember: cacheEnabled && remember });
+          const selected = options[selectorIndex];
+          done({ password, rememberTtlMs: selected.ttlMs });
         } else if (cancel) {
           done(null);
-        } else if (tab && cacheEnabled) {
-          remember = !remember;
-          renderRemember();
+        } else if (up && cacheEnabled && options.length > 1) {
+          selectorIndex = (selectorIndex - 1 + options.length) % options.length;
+          renderSelector();
+        } else if (down && cacheEnabled && options.length > 1) {
+          selectorIndex = (selectorIndex + 1) % options.length;
+          renderSelector();
         } else if (backspace) {
           password = password.slice(0, -1);
           passwordText.setText(theme.fg("text", "•".repeat(password.length)));
         } else if (data.length === 1 && data.charCodeAt(0) >= 32) {
-          // Printable character
           password += data;
           passwordText.setText(theme.fg("text", "•".repeat(password.length)));
         }
@@ -516,6 +543,7 @@ async function promptForSudoPassword(
 
   if (result !== undefined) return result;
 
+  // Fallback: plain input + confirm
   const titleParts = [
     "Sudo Password Required",
     errorMessage ? `Previous attempt failed: ${errorMessage}` : undefined,
@@ -531,14 +559,17 @@ async function promptForSudoPassword(
   );
   if (!password) return null;
 
-  const remember = cacheEnabled
-    ? await ctx.ui.confirm(
-        "Remember sudo password?",
-        `Keep this password in memory for ${Math.max(1, Math.round(cacheTtlMs / 60000))} min?`,
-      )
-    : false;
+  let rememberTtlMs = 0;
+  if (cacheEnabled && options.length > 1) {
+    const labels = options.map((o) => o.label);
+    const choice = await ctx.ui.select("Remember sudo password?", labels);
+    const match = options.find((o) => o.label === choice);
+    if (match) {
+      rememberTtlMs = match.ttlMs;
+    }
+  }
 
-  return { password, remember };
+  return { password, rememberTtlMs };
 }
 
 interface CommandExplanation {
@@ -1488,7 +1519,7 @@ export function setupPermissionGateHook(
               ctx,
               command,
               sudoMode.cacheEnabled,
-              sudoMode.cacheTtl,
+              sudoMode.cacheTtlOptions,
               errorMessage,
               // Only show remaining attempts after the first failure
               errorMessage ? attemptsRemaining : undefined,
@@ -1509,8 +1540,8 @@ export function setupPermissionGateHook(
             }
 
             password = promptResult.password;
-            if (promptResult.remember && sudoMode.cacheEnabled) {
-              setPasswordCache(password, sudoMode.cacheTtl);
+            if (promptResult.rememberTtlMs > 0 && sudoMode.cacheEnabled) {
+              setPasswordCache(password, promptResult.rememberTtlMs);
             }
           }
 
