@@ -1,5 +1,9 @@
 export { executeSubagent, filterThinkingTags } from "./executor";
-export { resolveModel } from "./model-resolver";
+export {
+  getModelRuntime,
+  type ModelRuntimeLike,
+  resolveModel,
+} from "./model-resolver";
 export {
   createExecutionTimer,
   markExecutionEnd,

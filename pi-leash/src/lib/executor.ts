@@ -14,6 +14,7 @@ import {
   SessionManager,
   SettingsManager,
 } from "@mariozechner/pi-coding-agent";
+import { getModelRuntime } from "./model-resolver";
 import {
   createExecutionTimer,
   markExecutionEnd,
@@ -82,14 +83,25 @@ export async function executeSubagent(
   });
   await resourceLoader.reload();
 
+  // Pi >= 0.8x wires sessions with `modelRuntime`; older Pi takes
+  // `modelRegistry`. Pass whichever this host exposes so the subagent reuses the
+  // session's providers/auth instead of silently falling back to a freshly
+  // constructed runtime.
+  const runtime = getModelRuntime(ctx);
+  const modelWiring = (
+    runtime
+      ? { modelRuntime: runtime }
+      : { modelRegistry: ctx.modelRegistry }
+  ) as Parameters<typeof createAgentSession>[0];
+
   const { session } = await createAgentSession({
     model: config.model,
     tools: config.tools ?? [],
     customTools: config.customTools ?? [],
     sessionManager: SessionManager.inMemory(),
     thinkingLevel: config.thinkingLevel ?? "low",
-    modelRegistry: ctx.modelRegistry,
     resourceLoader,
+    ...modelWiring,
   });
 
   let accumulated = "";

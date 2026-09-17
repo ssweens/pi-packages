@@ -16,6 +16,11 @@ All notable changes to this project will be documented in this file.
 - `sudo` is now an explicit-intent auto-mode soft gate rather than a hard deny. An auto approval skips only generic dangerous-command confirmation; Leash's dedicated sudo password flow still runs.
 - Auto-mode fallback now reports the specific timeout, model setup, or credential-redacted provider failure instead of the generic “could not complete safely”.
 
+### Fixed
+- `/leash settings` no longer fails with `this.modelRuntime.getAvailableSnapshot is not a function` on Pi 0.8x. Pi's model selector dropped its `settingsManager` constructor argument and now takes `ModelRuntime` in that position; the classifier picker detects which layout the host uses instead of assuming the older one.
+- Subagent sessions (auto-mode classifier, command explainer) now pass Pi 0.8x's `modelRuntime` when available instead of the removed `modelRegistry` option, so they reuse the host session's providers and credentials rather than a freshly constructed runtime.
+- `SubagentConfig.tools` is typed as built-in tool *names* (`string[]`), matching Pi's SDK allowlist; tool instances belong in `customTools`.
+
 
 ## [1.2.3] - 2026-07-18
 ### Added

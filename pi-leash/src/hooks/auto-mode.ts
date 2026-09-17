@@ -5,6 +5,7 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import { Key, matchesKey, truncateToWidth } from "@mariozechner/pi-tui";
 import { type ResolvedConfig, updateAutoModeConfig } from "../config";
+import { getModelRuntime } from "../lib/model-resolver";
 import {
   AUTO_MODE_USER_DECISION_ENTRY_TYPE,
   type AutoModeAction,
@@ -109,35 +110,58 @@ function configuredClassifierModel(
 /**
  * Pi exports its own `/model` selector but does not expose an extension UI
  * method for opening it. Reuse that exported component rather than maintain a
- * near-copy: current Pi exposes its model runtime through the registry facade;
- * older Pi versions pass the registry directly to the same component.
+ * near-copy. Its constructor signature changed across Pi versions:
+ *
+ * - Pi >= 0.8x: `(tui, model, modelRuntime, scopedModels, onSelect, onCancel)`
+ *   — the runtime lives behind `modelRegistry.runtime`, and persisting the
+ *   picked model as Pi's default is a separate optional callback we never pass.
+ * - Older Pi: `(tui, model, settingsManager, modelRegistry, scopedModels,
+ *   onSelect, onCancel)` — selecting persists through `settingsManager`, so an
+ *   inert stub keeps the pick scoped to Leash's own config.
+ *
+ * Detect by capability (`getAvailableSnapshot` on the runtime facade) instead of
+ * by version string, so either layout works without a hard Pi dependency.
  */
 async function pickClassifierModel(
   ctx: ExtensionContext,
   current: string | null,
 ): Promise<string | undefined> {
-  const registryWithRuntime = ctx.modelRegistry as typeof ctx.modelRegistry & {
-    runtime?: unknown;
-  };
-  const modelSource = registryWithRuntime.runtime ?? ctx.modelRegistry;
-  const scopedModels = (
-    ctx as ExtensionContext & { scopedModels?: readonly unknown[] }
-  ).scopedModels;
+  const runtime = getModelRuntime(ctx);
+  const scopedModels =
+    (ctx as ExtensionContext & { scopedModels?: readonly unknown[] })
+      .scopedModels ?? [];
 
   return ctx.ui.custom<string | undefined>(
     (tui, _theme, _keybindings, done) => {
-      const selector = new ModelSelectorComponent(
-        tui,
-        configuredClassifierModel(ctx, current),
-        // The native selector persists Pi's active model by default. Selecting a
-        // classifier model must only update Leash's config, so keep that callback
-        // intentionally inert and persist after `done` below.
-        { setDefaultModelAndProvider() {} } as never,
-        modelSource as never,
-        (scopedModels ?? []) as never,
-        (model) => done(`${model.provider}/${model.id}`),
-        () => done(undefined),
-      );
+      const SelectorCtor = ModelSelectorComponent as unknown as new (
+        ...args: readonly unknown[]
+      ) => ModelSelectorComponent;
+      const currentModel = configuredClassifierModel(ctx, current);
+      const onSelect = (model: { provider: string; id: string }) =>
+        done(`${model.provider}/${model.id}`);
+      const onCancel = () => done(undefined);
+
+      const selector = runtime
+        ? new SelectorCtor(
+            tui,
+            currentModel,
+            runtime,
+            scopedModels,
+            onSelect,
+            onCancel,
+          )
+        : new SelectorCtor(
+            tui,
+            currentModel,
+            // The legacy selector persists Pi's active model by default.
+            // Selecting a classifier model must only update Leash's config, so
+            // keep that callback intentionally inert and persist after `done`.
+            { setDefaultModelAndProvider() {} },
+            ctx.modelRegistry,
+            scopedModels,
+            onSelect,
+            onCancel,
+          );
       selector.focused = true;
       return selector;
     },
