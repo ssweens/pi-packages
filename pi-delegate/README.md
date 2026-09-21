@@ -36,10 +36,11 @@ Both tools render their own frame (`renderShell: "self"`), following oh-my-pi's 
 
 ## Watching children
 
-Two surfaces, both fact-only (no summaries, no model calls):
+Three surfaces, each with one job and its own shape — nothing is shown twice:
 
-- **Rail** — pinned above the editor while any child runs, gone when none do. One OMP-style row per run: spinner, id, task first line, `⟨fork N⟩`, elapsed, tool count, cost, and a hook line with the current tool call (turns warning-colored past 5 s). Off the scroll region, so it cannot scroll away.
-- **Inspector** — `ctrl+j`. One running child opens straight into its live tail; several open a list (running, then the last five finished). Detail view tails the child's own message list: the brief as `▸`, tool calls as `→`, assistant text as `▎`, refreshed every 250 ms. Keys follow Claude Code's agent view: `↑↓` move/scroll · `enter`/`space` open · `s` steer (types one line, sends to the child, which keeps its context — finished children resume) · `c` cancel · `o` puts `pi --session <path>` in your editor for the full transcript in another pane · `q`/`esc` back/close. The child keeps running when you close.
+- **Frame** (transcript) is the *record*. While a child runs it is one static dim line: `⋮ id: brief ⟨ctx⟩ · dispatched · model`. No spinner, no progress. When the child finishes it becomes the result frame (status line, output, changed files; expanded: task, markdown, session path).
+- **Rail** (pinned above the editor) is the *only live view*. Present while any child runs, gone when none do. One OMP-style row per run — spinner, id, brief, `⟨fork N⟩`, elapsed, tool count, cost — and a hook line with the current tool call (warning-colored past 5 s). Off the scroll region, so it cannot scroll away.
+- **Inspector** (`ctrl+j`) is *depth*. Opens straight into one child's transcript tail: the brief `▸`, tool calls `→`, assistant text `▎`, refreshed every 250 ms. One stats line (context, elapsed, tools, cost, model, changed files). `←→`/`tab` switch child (header shows `2/3`); `↑↓` scroll; `s` steer (one line; finished children resume in their own session); `c` cancel; `o` puts `pi --session <path>` in your editor; `q`/`esc` close. Closing never stops the child.
 
 ## Run log
 

@@ -14,7 +14,7 @@ import {
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { type ActivityItem, Inspector, type LiveSource, railComponent } from "./inspector.js";
-import { borderFor, callLines, empty, frame, framed, resultLines, type RunView } from "./render.js";
+import { borderFor, callLines, dispatchLine, empty, frame, framed, resultLines, type RunView } from "./render.js";
 import { loadRoles, type Role } from "./roles.js";
 
 const AGENT_DIR = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
@@ -769,11 +769,10 @@ export default function (pi: ExtensionAPI) {
 			const body = opts.expanded || all.length <= 12 ? all : all.slice(0, 12).concat(theme.fg("dim", `… ${all.length - 12} more lines (ctrl+o)`));
 			return framed((width) => frame(header, body, result.isError ? "error" : "border", theme, width));
 		}
-		if (v.status === "running") {
-			ctx.state.frame = (ctx.state.frame ?? 0) + 1;
-			if (!ctx.state.tick) ctx.state.tick = setTimeout(() => { ctx.state.tick = undefined; ctx.invalidate?.(); }, 120);
-		}
-		return framed((width) => frame(header, resultLines(v, opts.expanded, theme, width - 4, ctx.state?.frame ?? 0), borderFor(v), theme, width));
+		// Running: a static dispatch record. Live progress is the rail's job; the rail's tick re-renders this
+		// frame too, so it flips to the full result on completion without its own timer.
+		if (v.status === "running") return framed((width) => frame(header, [dispatchLine(v, theme, width - 4)], "borderMuted", theme, width));
+		return framed((width) => frame(header, resultLines(v, opts.expanded, theme, width - 4, 0), borderFor(v), theme, width));
 	};
 
 	pi.registerTool({

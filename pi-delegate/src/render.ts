@@ -127,10 +127,7 @@ function dimLines(text: string, max: number, theme: Theme, width: number): strin
 export function resultLines(v: RunView, expanded: boolean, theme: Theme, width: number, frame: number): string[] {
 	const lines: string[] = [statusLine(v, theme, frame)];
 	if (expanded && v.task.trim()) lines.push(...section("Task", dimLines(v.task, EXPANDED_TASK_LINES, theme, width), theme));
-	if (v.status === "running") {
-		const recent = v.toolCalls.slice(-(expanded ? 12 : 3));
-		if (recent.length) lines.push(...section("Progress", recent.map((t) => theme.fg("muted", "→ ") + formatToolCall(t.name, t.args, theme)), theme));
-	} else if (v.output.trim()) {
+	if (v.status !== "running" && v.output.trim()) {
 		if (expanded) {
 			const md = new Markdown(v.output.trim(), 0, 0, getMarkdownTheme()).render(Math.max(20, width - 2));
 			lines.push(...section("Output", md, theme));
@@ -144,6 +141,16 @@ export function resultLines(v: RunView, expanded: boolean, theme: Theme, width: 
 	if (v.modelNote) lines.push(theme.fg("warning", truncateToWidth(v.modelNote, Math.max(10, width - 2), "…")));
 	if (expanded && v.sessionFile) lines.push(theme.fg("dim", `Session: ${v.sessionFile.replace(process.env.HOME ?? "", "~")}`));
 	return lines;
+}
+
+/** Running frame: one static line. The rail owns live progress; this is the transcript's record that a child was dispatched. */
+export function dispatchLine(v: RunView, theme: Theme, width: number): string {
+	const model = `${v.model}${v.thinking ? `:${v.thinking}` : ""}`;
+	const tail = `${ctxBadge(v, theme)}${DOT}${theme.fg("dim", `dispatched · ${model}`)}`;
+	const head = `${theme.fg("dim", "⋮")} ${theme.fg("muted", theme.bold(v.id))}`;
+	const room = width - visibleWidth(head) - visibleWidth(tail) - 3;
+	const brief = firstLine(v.task);
+	return brief && room >= 12 ? `${head}${theme.fg("dim", ":")} ${theme.fg("dim", truncateToWidth(brief, room, "…"))}${tail}` : `${head}${tail}`;
 }
 
 /** Call preview rows (before any result exists). */
