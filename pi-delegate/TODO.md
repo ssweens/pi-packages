@@ -64,6 +64,6 @@ Guardrail: rework (steers per run) must not rise as review falls.
 
 ## Related
 
-- Skill: `~/.agents/skills/delegation/SKILL.md` — when to delegate, review triggers, model research and proposal procedure.
+- Skill: ships in the package (`skills/delegation/SKILL.md`) — when to delegate, review triggers, model research and proposal procedure. Install via `pi install npm:@ssweens/pi-delegate | git:… | ./dir`; extensions, skill, and roles all travel together. No copies in `~/.agents`.
 - Method that produced this design: `friction-audit` skill (`~/src/playbook/skills/friction-audit/`).
 - Retired: `~/.agents/agents/_retired-stage0/` (dead Claude-format roles, sol-advisor trio), `~/.pi/agent/_retired-stage0/` (missions, pi-strings state). `run-history.jsonl` kept as the re-audit baseline.

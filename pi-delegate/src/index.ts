@@ -703,7 +703,7 @@ export default function (pi: ExtensionAPI) {
 		renderResult: resultRenderer("delegate"),
 		label: "Delegate",
 		description:
-			"Run a role on a task in its own session; returns its final report, changed files, tokens, cost, and a runId. " +
+			"Run a role on a task in its own session; returns its final report, changed files, tokens, cost, and a runId. Load the delegation skill for when to delegate, review triggers, and the model-proposal procedure. " +
 			"Delegate only for context isolation, parallelism, or a model-tier switch — if the brief would be longer than the expected diff, do the work yourself. " +
 			"Brief = objective, ownership, interfaces/constraints, verification, return shape. " +
 			'context "fork" (default) hands the child your conversation so far; "fresh" is for adversarial review. ' +
@@ -797,7 +797,7 @@ export default function (pi: ExtensionAPI) {
 		renderResult: resultRenderer("delegate_ctl"),
 		label: "Delegate control",
 		description:
-			"models: every offering across all enabled providers, verbatim from the registry (provider/id, reasoning, context, $/M), plus live OpenRouter pricing, tiered rates, expirations and Artificial Analysis indices, your cached ratings, approved defaults and drift \u2014 call before the first delegate of a session. " +
+			"See the delegation skill for the full procedure. models: every offering across all enabled providers, verbatim from the registry (provider/id, reasoning, context, $/M), plus live OpenRouter pricing, tiered rates, expirations and Artificial Analysis indices, your cached ratings, approved defaults and drift \u2014 call before the first delegate of a session. " +
 			"rate: store quality ratings you researched, per exact offering (provider/id), so choices are grounded; stale after 14 days. approve: record a role's default model after the user agreed in conversation. " +
 			"roles: list roles. status: one run or all. result: full report. steer: correct a running or finished child (keeps its context). cancel: abort.",
 		parameters: Type.Object({

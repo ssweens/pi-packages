@@ -6,9 +6,17 @@
   "main": "src/index.ts",
   "license": "MIT",
   "pi": {
-    "extensions": ["./src/index.ts"]
+    "extensions": [
+      "./src/index.ts"
+    ],
+    "skills": [
+      "./skills"
+    ]
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"
-  }
+  },
+  "keywords": [
+    "pi-package"
+  ]
 }

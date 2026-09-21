@@ -1,5 +1,7 @@
 # pi-delegate
 
+Install: `pi install npm:@ssweens/pi-delegate`, `pi install git:<repo>`, or `pi install ./pi-delegate`. The two tools, the `delegation` skill, and the default roles all ship in the package — nothing is copied to `~/.agents`.
+
 Minimal delegation for pi. Two tools, role files, fork context, steer, honest run log. Replaces pi-subagents (125 schema params, 14.8k lines, 11 tools in context) and pi-strings for the delegation you actually do.
 
 ## Tools
