@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { appendFileSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -19,13 +19,14 @@ import { loadRoles, type Role } from "./roles.js";
 const AGENT_DIR = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
 const LOG_FILE = join(AGENT_DIR, "delegate-runs.jsonl");
 const DEFAULTS_FILE = join(AGENT_DIR, "delegate-models.json");
+/** Child transcripts live with the work: <cwd>/.agents/pi/subsessions. */
+const SUBSESSION_DIR = join(".agents", "pi", "subsessions");
 const RATINGS_FILE = join(AGENT_DIR, "delegate-ratings.json");
 const STALE_DAYS = 30;
 const RATINGS_STALE_DAYS = 14;
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 const OPENROUTER_TTL_MS = 10 * 60 * 1000;
 const OPENROUTER_TIMEOUT_MS = 8000;
-const CHILD_SESSION_DIR = join(AGENT_DIR, "sessions", "delegate");
 const BUILTIN_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
 const WRITE_TOOLS = new Set(["bash", "edit", "write"]);
 const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
@@ -599,14 +600,23 @@ export default function (pi: ExtensionAPI) {
 		} as any);
 		await loader.reload();
 
-		mkdirSync(CHILD_SESSION_DIR, { recursive: true });
+		const subsessionDir = join(run.cwd, SUBSESSION_DIR);
+		mkdirSync(subsessionDir, { recursive: true });
+		// Self-ignoring: transcripts stay out of git status and out of any `git add -A` a child runs.
+		// Scoped to this directory so a repo can still track .agents/ for agent definitions.
+		try {
+			const ignore = join(subsessionDir, ".gitignore");
+			if (!existsSync(ignore)) writeFileSync(ignore, "*\n");
+		} catch {
+			/* never fail a run over housekeeping */
+		}
 		const { session } = await createAgentSession({
 			cwd: run.cwd,
 			model,
 			thinkingLevel: thinking as any,
 			tools,
 			resourceLoader: loader,
-			sessionManager: SessionManager.create(run.cwd, CHILD_SESSION_DIR),
+			sessionManager: SessionManager.create(run.cwd, subsessionDir),
 			modelRuntime: await getRuntime(),
 		} as any);
 		run.session = session;

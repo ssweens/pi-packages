@@ -21,7 +21,7 @@ Two tools, ~1.3k lines. In `settings.packages`; `pi-subagents` and `pi-strings` 
 - `delegate_ctl({ action: models|rate|approve|roles|status|result|steer|cancel, ... })`.
 - Roles: `scout` (fresh, read-only, low), `worker` (fork, all built-ins, medium), `reviewer` (fresh, read-only, high). All inherit the parent model unless a role file or call names one.
 - Discovery, lowest → highest priority: package `roles/` → `~/.pi/agent/agents/` → `~/.agents/agents/` (skips `_*`/`.*`) → `<cwd>/.pi/agents/` when trusted.
-- State: `~/.pi/agent/delegate-runs.jsonl` (plaintext task, tokens, cost, duration, changed files), `delegate-models.json` (approved defaults + catalog snapshot), `delegate-ratings.json` (agent-researched ratings, stale after 14 days), child transcripts under `~/.pi/agent/sessions/delegate/`.
+- State: `~/.pi/agent/delegate-runs.jsonl` (plaintext task, tokens, cost, duration, changed files), `delegate-models.json` (approved defaults + catalog snapshot), `delegate-ratings.json` (agent-researched ratings, stale after 14 days), child transcripts in `<cwd>/.agents/pi/subsessions/` — with the work, not under `~/.pi`.
 
 ## Verified
 
