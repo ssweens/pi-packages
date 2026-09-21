@@ -29,9 +29,10 @@ Two tools, ~1.3k lines. In `settings.packages`; `pi-subagents` and `pi-strings` 
 - [x] `steer` on a finished child continues the same session (no new child, no new review); cumulative turns/tokens on one run id.
 - [x] Background launch (the default) → `sendMessage(followUp, triggerTurn)` wake; `LAUNCHED` → `WOKEN` verified in RPC and in a real TUI.
 - [x] Changed files from a git status/mtime delta per run segment, so `bash >>` edits are caught, not just `edit`/`write`.
-- [x] One writer per cwd — a second writing role in a live writer's tree is refused.
+- [x] One writer per cwd — a second `edit`/`write`-capable role in a live writer's tree is refused. `bash` does not count: read-only roles use it for grep/git diff/tests, and counting it collided two scouts (caught by the inspector test).
 - [x] `models`: 967 offerings across 26 providers verbatim; live OpenRouter facts by exact id (current-window price vs registry, long-context tiers, UTC peak/off-peak windows with the active one marked, expiration, Artificial Analysis indices), per-provider endpoints for filtered candidates (discount, quantization, status, uptime, provider-specific off-peak). Spec: <https://openrouter.ai/docs/guides/overview/models#pricing-object>. Overrides with unrecognized condition fields are skipped and counted, per that spec.
 - [x] `approve` persists a default; subsequent calls resolve it silently.
+- [x] Rail widget (running children, pinned above editor) and `ctrl+j` inspector overlay (list → live tail; steer/cancel/open-session from inside). OMP row grammar, Claude Code key contract, no generated summaries. Verified in a real TUI: rail appears/vanishes with run state, inspector tails live, steer from inspector resumed a finished child.
 - [x] omp-style framed rendering (after `oh-my-pi/packages/coding-agent/src/task/render.ts`): rounded frame, status line, collapsed 3-line output, expanded Task + markdown + session path, live spinner and progress while running, call preview collapses on result. Verified in a real TUI via tmux, not just JSON mode.
 
 ## Fleet notes

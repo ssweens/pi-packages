@@ -13,6 +13,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
+import { type ActivityItem, Inspector, type LiveSource, railComponent } from "./inspector.js";
 import { borderFor, callLines, empty, frame, framed, resultLines, type RunView } from "./render.js";
 import { loadRoles, type Role } from "./roles.js";
 
@@ -28,7 +29,9 @@ const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 const OPENROUTER_TTL_MS = 10 * 60 * 1000;
 const OPENROUTER_TIMEOUT_MS = 8000;
 const BUILTIN_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
-const WRITE_TOOLS = new Set(["bash", "edit", "write"]);
+// Only tools whose contract is to mutate files. bash is not one: read-only roles use it for grep/git diff/tests,
+// and treating it as a writer made two scouts in one cwd collide. Keeping bash out is a decision, not a guess.
+const WRITE_TOOLS = new Set(["edit", "write"]);
 const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
 const MAX_RETAINED_SESSIONS = 8;
 const OUTPUT_CAP = 40_000;
@@ -63,7 +66,7 @@ interface Run {
 	output: string;
 	error?: string;
 	lastTool?: string;
-	toolCalls: { name: string; args: Record<string, unknown> }[];
+	toolCalls: { name: string; args: Record<string, unknown>; at: number }[];
 	contextWindow?: number;
 	session?: any;
 	startIdx: number;
@@ -573,6 +576,81 @@ function finish(run: Run, status: Status, error?: string) {
 	retire(run);
 }
 
+async function cancelRun(run: Run) {
+	if (run.status !== "running") return;
+	run.status = "cancelled";
+	await run.session?.abort();
+}
+
+/** Continue a finished child in its own session with a correction. Same code path for the tool and the inspector. */
+async function steerFinished(run: Run, message: string, signal?: AbortSignal) {
+	run.status = "running";
+	run.endedAt = undefined;
+	run.error = undefined;
+	run.dirtyBefore = snapshotDirty(run.cwd);
+	run.timer = setTimeout(() => {
+		run.status = "timeout";
+		run.session.abort().catch(() => {});
+	}, DEFAULT_TIMEOUT_MS);
+	signal?.addEventListener(
+		"abort",
+		() => {
+			if (run.status === "running") {
+				run.status = "cancelled";
+				run.session.abort().catch(() => {});
+			}
+		},
+		{ once: true },
+	);
+	try {
+		await run.session.prompt(message);
+		finish(run, run.status === "running" ? "complete" : run.status);
+	} catch (e: any) {
+		finish(run, run.status === "running" ? "error" : run.status, String(e?.message ?? e));
+	}
+}
+
+/** Ordered tool calls + assistant/user text from the child's live message list, after the forked prefix. */
+function activityOf(run: Run): ActivityItem[] {
+	const out: ActivityItem[] = [];
+	const msgs: any[] = run.session?.messages ?? [];
+	for (let i = run.startIdx; i < msgs.length; i++) {
+		const m = msgs[i];
+		if (m?.role === "user") {
+			const t = Array.isArray(m.content) ? m.content.filter((b: any) => b?.type === "text").map((b: any) => b.text).join("") : String(m.content ?? "");
+			if (t.trim()) out.push({ kind: "user", text: t });
+		} else if (m?.role === "assistant") {
+			for (const b of m.content ?? []) {
+				if (b?.type === "text" && b.text?.trim()) out.push({ kind: "text", text: b.text });
+				if (b?.type === "toolCall") out.push({ kind: "tool", name: b.name, args: (b.arguments ?? {}) as Record<string, unknown> });
+			}
+		}
+	}
+	// Session not retained (retired) — fall back to the tool calls we captured.
+	if (!out.length && run.toolCalls.length) return run.toolCalls.map((t) => ({ kind: "tool" as const, ...t }));
+	return out;
+}
+
+const liveSource: LiveSource = {
+	running: () => [...runs.values()].filter((r) => r.status === "running").map(view),
+	all: () => [...runs.values()].map(view),
+	activity: (id) => {
+		const r = runs.get(id);
+		return r ? activityOf(r) : [];
+	},
+	steer: async (id, message) => {
+		const r = runs.get(id);
+		if (!r) throw new Error(`unknown run ${id}`);
+		if (!r.session) throw new Error(`${id}: session not retained`);
+		if (r.status === "running") await r.session.steer(message);
+		else void steerFinished(r, message);
+	},
+	cancel: async (id) => {
+		const r = runs.get(id);
+		if (r) await cancelRun(r);
+	},
+};
+
 export default function (pi: ExtensionAPI) {
 	let runtime: ModelRuntime | undefined;
 	const getRuntime = async () => (runtime ??= await ModelRuntime.create());
@@ -634,7 +712,7 @@ export default function (pi: ExtensionAPI) {
 		session.subscribe((ev: any) => {
 			if (ev.type === "tool_execution_start") {
 				run.lastTool = ev.toolName;
-				if (run.toolCalls.length < MAX_TOOL_CALLS) run.toolCalls.push({ name: ev.toolName, args: (ev.args ?? {}) as Record<string, unknown> });
+				if (run.toolCalls.length < MAX_TOOL_CALLS) run.toolCalls.push({ name: ev.toolName, args: (ev.args ?? {}) as Record<string, unknown>, at: Date.now() });
 				onUpdate?.({ content: [{ type: "text", text: `${run.id}: ${ev.toolName}` }], details: view(run) });
 			}
 		});
@@ -914,8 +992,7 @@ export default function (pi: ExtensionAPI) {
 					return { content: [{ type: "text", text: resultText(run) }], details: view(run) };
 				case "cancel":
 					if (run.status !== "running") return { content: [{ type: "text", text: `${run.id} already ${run.status}` }] };
-					run.status = "cancelled";
-					await run.session?.abort();
+					await cancelRun(run);
 					return { content: [{ type: "text", text: `${run.id} cancelled` }] };
 				case "steer": {
 					if (!p.message) return { content: [{ type: "text", text: "steer requires message" }], isError: true };
@@ -924,28 +1001,7 @@ export default function (pi: ExtensionAPI) {
 						await run.session.steer(p.message);
 						return { content: [{ type: "text", text: `${run.id}: steer queued` }] };
 					}
-					run.status = "running";
-					run.endedAt = undefined;
-					run.error = undefined;
-					run.dirtyBefore = snapshotDirty(run.cwd);
-					const timeoutMs = DEFAULT_TIMEOUT_MS;
-					run.timer = setTimeout(() => {
-						run.status = "timeout";
-						run.session.abort().catch(() => {});
-					}, timeoutMs);
-					const onAbort = () => {
-						if (run.status === "running") {
-							run.status = "cancelled";
-							run.session.abort().catch(() => {});
-						}
-					};
-					signal?.addEventListener("abort", onAbort, { once: true });
-					try {
-						await run.session.prompt(p.message);
-						finish(run, run.status === "running" ? "complete" : run.status);
-					} catch (e: any) {
-						finish(run, run.status === "running" ? "error" : run.status, String(e?.message ?? e));
-					}
+					await steerFinished(run, p.message, signal);
 					return { content: [{ type: "text", text: resultText(run) }], details: view(run), isError: run.status !== "complete" };
 				}
 			}
@@ -959,6 +1015,26 @@ export default function (pi: ExtensionAPI) {
 		const header = `${theme.fg("accent", "◆")} ${theme.fg("toolTitle", theme.bold("delegate"))}${theme.fg("muted", `: ${v.role}`)} ${theme.fg("dim", "finished")}`;
 		// The tool frame above is live and already shows the full result; the wake is a one-line notice unless expanded.
 		return framed((width) => frame(header, expanded ? resultLines(v, true, theme, width - 4, 0) : resultLines(v, false, theme, width - 4, 0).slice(0, 1), borderFor(v), theme, width));
+	});
+
+	const SHORTCUT = "ctrl+j";
+	pi.on("session_start", (_ev, ctx) => {
+		if (!ctx.hasUI) return;
+		ctx.ui.setWidget("delegate-rail", (tui, theme) => railComponent(liveSource, theme, () => tui.requestRender(), SHORTCUT));
+	});
+	pi.registerShortcut(SHORTCUT, {
+		description: "Inspect running delegate children",
+		handler: async (ctx) => {
+			if (!ctx.hasUI) return;
+			if (!runs.size) {
+				ctx.ui.notify("delegate: no runs this session", "info");
+				return;
+			}
+			await ctx.ui.custom<undefined>(
+				(tui, theme, _kb, done) => new Inspector(liveSource, theme, () => tui.requestRender(), done, (path) => ctx.ui.setEditorText(`pi --session ${path}`)),
+				{ overlay: true, overlayOptions: { width: "90%", maxHeight: "80%", anchor: "center" } },
+			);
+		},
 	});
 
 	pi.on("session_shutdown", async () => {

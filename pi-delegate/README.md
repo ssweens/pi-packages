@@ -30,9 +30,16 @@ Models live on OpenRouter but absent from the registry are listed separately (us
 
 A `delegate` call resolves its model as `model:` param → approved default for the role → role file → your current model, and runs. There is no dialog: proposing a non-default model is a conversation — the agent states offering, price, tradeoff, rating, asks, and launches on your answer. `delegate_ctl action=approve role= model= message=` records a default in `~/.pi/agent/delegate-models.json`; the skill forbids calling it without your explicit yes in the conversation. The file also snapshots the catalog so `models` can report drift and new offerings since approval.
 
-## Rendering
+## Rendering (transcript frames)
 
 Both tools render their own frame (`renderShell: "self"`), following oh-my-pi's task renderer: rounded border with `◆ delegate: <role>` in the top bar; a status line `✓ <id>: <task first line> ⟨fork N⟩ [done] · N ⚙ · N turns · ctx%/window · $cost · model · duration`; collapsed `Output` shows three dim lines, expanded (ctrl+o) shows `Task`, the report as rendered markdown, and the child session path; `Changed:`, dropped tools, and errors follow. While a child runs the frame shows a spinner and its recent tool calls, and keeps updating from live run state — background launches flip to `[done]` in place; the wake message is a one-line frame that expands to the full result. The call preview collapses once a result exists.
+
+## Watching children
+
+Two surfaces, both fact-only (no summaries, no model calls):
+
+- **Rail** — pinned above the editor while any child runs, gone when none do. One OMP-style row per run: spinner, id, task first line, `⟨fork N⟩`, elapsed, tool count, cost, and a hook line with the current tool call (turns warning-colored past 5 s). Off the scroll region, so it cannot scroll away.
+- **Inspector** — `ctrl+j`. One running child opens straight into its live tail; several open a list (running, then the last five finished). Detail view tails the child's own message list: the brief as `▸`, tool calls as `→`, assistant text as `▎`, refreshed every 250 ms. Keys follow Claude Code's agent view: `↑↓` move/scroll · `enter`/`space` open · `s` steer (types one line, sends to the child, which keeps its context — finished children resume) · `c` cancel · `o` puts `pi --session <path>` in your editor for the full transcript in another pane · `q`/`esc` back/close. The child keeps running when you close.
 
 ## Run log
 

@@ -33,7 +33,7 @@ export interface RunView {
 	durationMs: number;
 	changedFiles: string[];
 	droppedTools: string[];
-	toolCalls: { name: string; args: Record<string, unknown> }[];
+	toolCalls: { name: string; args: Record<string, unknown>; at?: number }[];
 	lastTool?: string;
 	error?: string;
 	modelNote?: string;
