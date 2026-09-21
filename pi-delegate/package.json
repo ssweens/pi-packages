@@ -1,0 +1,14 @@
+{
+  "name": "@ssweens/pi-delegate",
+  "version": "0.1.0",
+  "description": "Minimal delegation for pi: two tools, role files, fork context, steer, honest run log.",
+  "type": "module",
+  "main": "src/index.ts",
+  "license": "MIT",
+  "pi": {
+    "extensions": ["./src/index.ts"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  }
+}
