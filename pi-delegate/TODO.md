@@ -4,7 +4,7 @@ Keep this current. It is the handoff between sessions: what exists, what is prov
 
 ## Why this package exists
 
-Replaces `pi-subagents` (125 schema params, ~14.8k lines, 11 delegation tools in every turn's context) and `pi-strings` for the delegation actually done here. Audit evidence from 856 runs in `~/.pi/agent/run-history.jsonl`: `worker` failed 34%, `code-explorer`/`code-architect` 100% (Claude-format tool names, no mapping), 1.26 review runs per implementation run, median 22 min child wall-clock per session, 183 missions with a median of 1 run each. Delegation happened in ~11% of sessions; the schema was paid in 100%.
+Covers the delegation `pi-subagents` (125 schema params, ~14.8k lines, 11 delegation tools per turn) and `pi-strings` were doing, and **coexists with both** — distinct tool names, settings keys, session dirs, logs; verified side-by-side with pi-subagents loaded, no errors. Removing the old stack is a per-machine choice; nothing in this package requires it. Audit evidence from 856 runs in `~/.pi/agent/run-history.jsonl`: `worker` failed 34%, `code-explorer`/`code-architect` 100% (Claude-format tool names, no mapping), 1.26 review runs per implementation run, median 22 min child wall-clock per session, 183 missions with a median of 1 run each. Delegation happened in ~11% of sessions; the schema was paid in 100%.
 
 Design rules that must hold:
 
@@ -33,6 +33,13 @@ Two tools, ~1.3k lines. In `settings.packages`; `pi-subagents` and `pi-strings` 
 - [x] `models`: 967 offerings across 26 providers verbatim; live OpenRouter facts by exact id (current-window price vs registry, long-context tiers, UTC peak/off-peak windows with the active one marked, expiration, Artificial Analysis indices), per-provider endpoints for filtered candidates (discount, quantization, status, uptime, provider-specific off-peak). Spec: <https://openrouter.ai/docs/guides/overview/models#pricing-object>. Overrides with unrecognized condition fields are skipped and counted, per that spec.
 - [x] `approve` persists a default; subsequent calls resolve it silently.
 - [x] omp-style framed rendering (after `oh-my-pi/packages/coding-agent/src/task/render.ts`): rounded frame, status line, collapsed 3-line output, expanded Task + markdown + session path, live spinner and progress while running, call preview collapses on result. Verified in a real TUI via tmux, not just JSON mode.
+
+## Fleet notes
+
+- Machines still on pi-subagents: a newer pi-subagents rejects the removed `fallbackModels` field in `settings.subagents.agentOverrides.*`. Fix on the affected machine:
+  `python3 -c "import json;p='$HOME/.pi/agent/settings.json'.replace('$HOME',__import__('os').path.expanduser('~'));d=json.load(open(p));[ov.pop('fallbackModels',None) for ov in d.get('subagents',{}).get('agentOverrides',{}).values()];json.dump(d,open(p,'w'),indent=2)"`
+  Reproduced and verified here: error appears with the field, gone without it, both stacks then load together.
+- Nothing under `~/.agents` or `~/.pi/agent` syncs between machines (no symlinks/git/syncthing found). This repo and playbook are the only shared vehicles; keep machine-local migration steps out of them.
 
 ## Open
 
