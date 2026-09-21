@@ -419,23 +419,25 @@ function liveStr(m: any, live: LiveOR | undefined): string {
 }
 
 function liveStatus(live: LiveOR | undefined): string {
-	if (!live) return "OPENROUTER LIVE: not fetched";
+	if (!live) return "OPENROUTER: not fetched";
 	const age = Math.round((Date.now() - live.at) / 1000);
 	const aaCount = [...live.byId.values()].filter((l) => l.benchmarks?.artificial_analysis).length;
-	if (live.error) return `OPENROUTER LIVE: fetch failed (${live.error})${live.byId.size ? `; showing data from ${age}s ago` : "; registry prices only"}`;
-	return `OPENROUTER LIVE: ${live.byId.size} models, fetched ${age}s ago (${new Date().toISOString().slice(11, 16)}Z). Top-level prices are what applies right now; overrides list every long-context tier and peak/off-peak window (\u2190now marks the active one). Artificial Analysis indices on ${aaCount}. Per-provider endpoints (discounts, quantization, status, uptime, provider-specific off-peak) are fetched for filtered candidates.`;
+	if (live.error) return `OPENROUTER: fetch failed (${live.error})${live.byId.size ? `, data from ${age}s ago` : ""}`;
+	return `OPENROUTER: ${live.byId.size} live, ${aaCount} with AA, fetched ${age}s ago (${new Date().toISOString().slice(11, 16)}Z)`;
 }
 
 function ratingStr(r: Ratings, name: string): string {
 	const e = r.entries[name];
-	return e ? `  rated ${e.score} (${e.source})${e.note ? ` ${e.note}` : ""}` : "";
+	if (!e) return "";
+	const note = e.note ? ` ${e.note.length > 60 ? `${e.note.slice(0, 60)}\u2026` : e.note}` : "";
+	return `  rated ${e.score} (${e.source.length > 40 ? `${e.source.slice(0, 40)}\u2026` : e.source})${note}`;
 }
 
 function ratingsStatus(r: Ratings): string {
 	const n = Object.keys(r.entries).length;
-	if (!n) return "YOUR RATINGS: none \u2014 add with action=rate when you have evidence beyond the live indices (observed runs here, other evals, serving quality of a specific offering).";
+	if (!n) return "RATINGS: none";
 	const age = ageDays(r.updatedAt);
-	return `YOUR RATINGS: ${n} offerings, updated ${age}d ago${age > RATINGS_STALE_DAYS ? " \u2014 STALE, re-verify before relying on them" : ""}`;
+	return `RATINGS: ${n}, ${age}d old${age > RATINGS_STALE_DAYS ? " (stale)" : ""}`;
 }
 
 function costStr(m: any): string {
@@ -477,11 +479,11 @@ function defaultsReport(ctx: ExtensionContext): string {
 	if (d.catalogAtApproval.length) {
 		const snap = new Set(d.catalogAtApproval);
 		const added = avail.map(modelKey).filter((k) => !snap.has(k));
-		if (added.length) drift.push(`new since approval (${added.length}): ${added.slice(0, 30).join(", ")}${added.length > 30 ? ", \u2026" : ""}`);
+		if (added.length) drift.push(`${added.length} new since approval${added.length <= 8 ? `: ${added.join(", ")}` : " (message=<substring> to list)"}`);
 	}
-	if (!lines.length) return "DEFAULTS: none approved yet. Propose per role in conversation; after the user agrees, delegate with model: and record with action=approve if they want it kept.";
+	if (!lines.length) return "DEFAULTS: none";
 	let out = `DEFAULTS (approved by user)\n${lines.join("\n")}`;
-	if (drift.length) out += `\nDRIFT \u2014 propose an update to the user before delegating:\n  ${drift.join("\n  ")}`;
+	if (drift.length) out += `\nDRIFT:\n  ${drift.join("\n  ")}`;
 	return out;
 }
 
@@ -923,15 +925,15 @@ export default function (pi: ExtensionAPI) {
 				if (f) {
 					offers = all.filter((m) => modelKey(m).toLowerCase().includes(f));
 					scope = `matching "${p.message}"`;
-					order = "your rating, then AA intelligence index, then name";
+					order = "";
 					const orIds = offers.filter((m) => m.provider === "openrouter" && live.byId.has(m.id)).map((m) => m.id);
 					const EP_CAP = 12;
 					await Promise.all(orIds.slice(0, EP_CAP).map(fetchEndpoints));
 					if (orIds.length > EP_CAP) scope += ` (endpoints fetched for the first ${EP_CAP} OpenRouter matches; narrow the filter for the rest)`;
 				} else {
 					offers = all.filter((m) => ratings.entries[modelKey(m)] || aaOf(m)?.intelligence_index != null);
-					scope = `with a rating (yours or Artificial Analysis via OpenRouter); ${all.length - offers.length} unrated offerings not shown \u2014 message=<substring> to see any offering, and every provider's offering of a candidate`;
-					order = "your rating, then AA intelligence index (coding and agentic shown alongside)";
+					scope = `rated; ${all.length - offers.length} unrated hidden (message=<substring>)`;
+					order = "";
 				}
 				const score = (m: any) => {
 					const mine = ratings.entries[modelKey(m)]?.score;
@@ -952,7 +954,7 @@ export default function (pi: ExtensionAPI) {
 				const provs = new Map<string, number>();
 				for (const m of all) provs.set(m.provider, (provs.get(m.provider) ?? 0) + 1);
 				const provLine = [...provs.entries()].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v}`).join(", ");
-				const more = offers.length > CAP ? `\n  \u2026${offers.length - CAP} more; narrow with message=` : "";
+				const more = offers.length > CAP ? `\n  \u2026${offers.length - CAP} more` : "";
 				// live on OpenRouter but absent from the registry: usable only after adding to models.json
 				const registryOR = new Set(all.filter((m) => m.provider === "openrouter").map((m) => m.id));
 				const liveOnly = [...live.byId.keys()].filter((id) => !registryOR.has(id) && (!f || id.toLowerCase().includes(f)));
@@ -961,12 +963,12 @@ export default function (pi: ExtensionAPI) {
 					: f
 						? `\n\nON OPENROUTER BUT NOT IN YOUR REGISTRY (${liveOnly.length}) \u2014 add to ~/.pi/agent/models.json to make usable:\n${liveOnly.slice(0, 20).map((id) => `  ${id}  ${livePriceStr(live.byId.get(id))}${aaStr(live.byId.get(id))}`).join("\n")}${liveOnly.length > 20 ? "\n  \u2026" : ""}`
 						: `\n\nON OPENROUTER BUT NOT IN YOUR REGISTRY: ${liveOnly.length} models; message=<substring> lists matches.`;
-				const head = `CATALOG ${all.length} offerings across ${provs.size} enabled providers, listed as the registry reports them. The same weights on different providers are different offerings \u2014 subscription (flat-rate), metered API, local, free tier differ in marginal cost, speed, quantization, and limits; weigh each. Prices are the registry's per-M-token figures; $0 means the registry reports no marginal cost, not that it is free of limits. AA indices attach only to OpenRouter offerings by exact id; whether another provider's offering is the same weights is your judgment to state in reason:.`;
+				const head = `CATALOG: ${all.length} offerings, ${provs.size} providers`;
 				const body = offers.length
-					? `\n\nOFFERINGS ${offers.length} ${scope}. Order: ${order}. * = your current. Pass model: exactly as listed.\n${lines.join("\n")}${more}`
+					? `\n\nOFFERINGS ${offers.length} ${scope}${order}. * = current.\n${lines.join("\n")}${more}`
 					: f
 						? `\n\nno registry offering matches "${p.message}"`
-						: "\n\nNo ratings available (OpenRouter fetch failed and nothing cached): research which models currently lead for this role's work, then message=<name> to see every offering of each candidate, judge the serving tradeoffs, and action=rate the offerings you would actually use.";
+						: "\n\nno rated offerings; message=<substring> to search, action=rate to add";
 				return { content: [{ type: "text", text: `${defaultsReport(ctx)}\n${ratingsStatus(ratings)}\n${liveStatus(live)}\n\n${head}${body}${liveOnlyStr}\n\nproviders: ${provLine}` }] };
 			}
 			if (p.action === "roles") {
