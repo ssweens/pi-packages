@@ -26,7 +26,20 @@ Run `reviewer` only when at least one holds: interface or public API change · s
 Bounded fix → `delegate_ctl steer` on the same run. The child keeps its context; no new child, no new review. A tier switch mid-task is the same call with `model:`, which moves that child to another offering from its next segment on. Steering queues a correction or resumes a finished child in the background and returns immediately. Continue independent work; use `wait` when you need the resumed result. New review only for a `rethink`-class change (decomposition or scope moved). Never re-send an unchanged brief.
 
 ## Launching
-Children run in the background by default. Keep the returned run id and do independent work. When dependent work needs the result, call `delegate_ctl` with `action: "wait"` and that `runId`; do not poll status, sleep, or relaunch the child. If you yield without joining, completion wakes you automatically.
+Children run in the background by default. Keep the returned run id and do independent work. When dependent work needs the result, call `delegate_ctl` with `action: "wait"` and that `runId`; do not poll status in a loop, sleep, or relaunch the child. If you yield without joining, completion wakes you automatically.
+
+## While a child runs
+You are woken **once**, when the child finishes. There are no mid-run progress pings, by design: an interrupt per tool call would cost a parent turn for information you did not ask for. The human already sees live progress in the pinned Agents frame.
+
+So waiting is never your job:
+
+- Other work available → do it. Completion wakes you.
+- Nothing can proceed without the result → `wait`. It blocks without polling and costs nothing while it waits.
+- Someone asks how it is going, or you need to decide whether to let it continue → one `status` read. It reports the current tool, tool calls so far, elapsed time and remaining budget. One read is not a poll loop; repeating it on a timer is.
+
+Never promise to sit idle and report back later, and never tell the user that progress is unavailable. If a child's remaining budget cannot cover the work, `steer` it with more time or `cancel` and relaunch with a larger `timeoutMs` — do not wait out a run you expect to be killed.
+
+Size `timeoutMs` to the actual work before launching: the default is 15 minutes, and a build, suite, or training run measured in hours is otherwise aborted mid-flight. A timeout leaves its work in place, unrolled back; read the child's report before continuing.
 
 `wait` returns immediately for a finished run. Cancelling it only detaches the waiter; use `cancel` to stop the child. An attached waiter receives the report instead of a redundant completion wake-up. Check the returned terminal status before acting on the report.
 

@@ -95,6 +95,7 @@ interface Run {
 	session?: any;
 	ready?: Promise<void>;
 	startIdx: number;
+	segmentStartedAt: number;
 	forkedMessages?: number;
 	writer: boolean;
 	dirtyBefore?: Map<string, number>;
@@ -757,7 +758,19 @@ async function closeOwner(owner: Owner) {
 }
 
 /** Reserve a segment before awaiting setup: concurrent steers cannot create duplicate sessions. */
-function beginResume(run: Run, restart: boolean, replacement?: { model: string; thinking: string; contextWindow?: number }) {
+function armTimeout(run: Run) {
+	if (run.timer) clearTimeout(run.timer);
+	const spent = Date.now() - run.segmentStartedAt;
+	if (spent >= run.timeoutMs) throw new Error(`${run.id} has already run ${Math.round(spent / 60000)} min of this segment; a ${Math.round(run.timeoutMs / 60000)} min budget is already spent. Pass a larger timeoutMs.`);
+	run.timer = setTimeout(() => {
+		run.status = "timeout";
+		// A timeout aborts real work mid-flight. Say what the budget was and how to give more.
+		run.error = `Stopped after its ${Math.round(run.timeoutMs / 60000)} min budget (timeoutMs, default ${DEFAULT_TIMEOUT_MS / 60000} min). Its work up to that point stands and is not rolled back; inspect it, then steer this child with a larger timeoutMs or relaunch with one.`;
+		void run.session.abort();
+	}, run.timeoutMs - spent);
+}
+
+function beginResume(run: Run, restart: boolean, replacement?: { model?: string; thinking?: string; contextWindow?: number; timeoutMs?: number }) {
 	if (!run.completion.settled) throw new Error(`${run.id} is still stopping; wait for completion before resuming.`);
 	if (run.stopped && !restart) throw new Error(`${run.id} was explicitly stopped. Restart only at the user's request (steer with restart: true).`);
 	if (run.writer) {
@@ -850,13 +863,22 @@ export default function (pi: ExtensionAPI) {
 		}
 		for (const run of ownedRuns(owner)) if (run.completion.settled) publish(run.completion);
 	}
-	async function steer(run: Run, message: string, restart = false, replacement?: { model: string; thinking: string; contextWindow?: number }) {
+	async function steer(run: Run, message: string, restart = false, replacement?: { model?: string; thinking?: string; contextWindow?: number; timeoutMs?: number }) {
 		requireOwner();
 		if (run.status === "running") {
 			await run.ready;
 			if (run.status === "running") {
 				// A live turn is already bound to its model. Never swap it underneath running work.
-				if (replacement) throw new Error(`${run.id} is running on ${run.model}; a different offering applies to its next segment. Wait for it or cancel it, then steer with model.`);
+				if (replacement?.model) throw new Error(`${run.id} is running on ${run.model}; a different offering applies to its next segment. Wait for it or cancel it, then steer with model.`);
+				if (replacement?.timeoutMs !== undefined) {
+					// More time is the one change a live segment can take: re-arm its own budget.
+					const previous = run.timeoutMs;
+					run.timeoutMs = replacement.timeoutMs;
+					try { armTimeout(run); }
+					catch (error) { run.timeoutMs = previous; armTimeout(run); throw error; }
+					saveRun(run);
+					changed();
+				}
 				await run.session.steer(message); return;
 			}
 		}
@@ -945,7 +967,8 @@ export default function (pi: ExtensionAPI) {
 			await run.ready;
 			if (run.status === "running") {
 				run.dirtyBefore = snapshotDirty(run.cwd);
-				run.timer = setTimeout(() => { run.status = "timeout"; void run.session.abort(); }, run.timeoutMs);
+				run.segmentStartedAt = Date.now();
+				armTimeout(run);
 				await run.session.prompt(task, { preflightResult: (accepted: boolean) => {
 					// Pi abort() cannot cancel prompt preflight while its agent is still idle.
 					// Recheck at the SDK's dispatch boundary, before it starts the agent loop.
@@ -986,14 +1009,14 @@ export default function (pi: ExtensionAPI) {
 			"Delegate only for context isolation, parallelism, or a model-tier switch — if the brief would be longer than the expected diff, do the work yourself. " +
 			"Start the brief with a short task title on its own line, then objective, ownership, interfaces/constraints, verification, return shape. " +
 			'context "fork" (default) hands the child your conversation so far; "fresh" is for adversarial review. ' +
-			"Runs in the background by default \u2014 the call returns a run id at once and you are woken when the child finishes. When later work depends on it, use delegate_ctl wait with that runId rather than polling or relaunching. sync:true joins at launch when explicitly needed. Children have built-in tools only. Model: run delegate_ctl models first; a role's approved default is used when model: is omitted. Proposing a model that is not the approved default is a conversation with the user, not a tool step: state the offering, price, rating and tradeoff, get their answer, then call delegate; if they want it kept, delegate_ctl action=approve. Use delegate_ctl to list roles, wait, check status, steer, or cancel.",
+			"Runs in the background by default \u2014 the call returns a run id at once and you are woken once, when the child finishes. There are no progress pings by design; waiting is not your work. Do other work, or use delegate_ctl wait with that runId to block without polling when nothing else can proceed, or delegate_ctl status for a single progress read when someone asks. sync:true joins at launch when explicitly needed. Children have built-in tools only. Model: run delegate_ctl models first; a role's approved default is used when model: is omitted. Proposing a model that is not the approved default is a conversation with the user, not a tool step: state the offering, price, rating and tradeoff, get their answer, then call delegate; if they want it kept, delegate_ctl action=approve. Use delegate_ctl to list roles, wait, check status, steer, or cancel.",
 		parameters: Type.Object({
 			role: Type.String({ description: "role name (delegate_ctl action=roles lists them)" }),
 			task: Type.String({ description: "the brief" }),
 			model: Type.Optional(Type.String({ description: "override: provider/id[:thinking]" })),
 			context: Type.Optional(StringEnum(["fork", "fresh"] as const)),
 			cwd: Type.Optional(Type.String()),
-			timeoutMs: Type.Optional(Type.Number()),
+			timeoutMs: Type.Optional(Type.Number({ description: `abort the child after this many ms; default ${DEFAULT_TIMEOUT_MS / 60000} min. Size it to the work: a build, suite, or training run that takes hours needs hours here, or it is killed mid-flight` })),
 			sync: Type.Optional(Type.Boolean({ description: "block until the child finishes. Default false: the call returns at once and you are woken with the result" })),
 			reason: Type.Optional(Type.String({ description: "one line: why this model for this role; recorded in the run log" })),
 		}),
@@ -1053,7 +1076,7 @@ export default function (pi: ExtensionAPI) {
 				cwd,
 				task: p.task,
 				status: "running",
-				startedAt: Date.now(),
+				startedAt: Date.now(), segmentStartedAt: Date.now(),
 				turns: 0,
 				tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 				cost: 0,
@@ -1096,13 +1119,14 @@ export default function (pi: ExtensionAPI) {
 		description:
 			"See the delegation skill for the full procedure. models: every offering across all enabled providers, verbatim from the registry (provider/id, reasoning, context, $/M), plus live OpenRouter pricing, tiered rates, expirations and Artificial Analysis indices, your cached ratings, approved defaults and drift \u2014 call before the first delegate of a session. " +
 			"rate: store quality ratings you researched, per exact offering (provider/id), so choices are grounded; stale after 14 days. approve: record a role's default model after the user agreed in conversation. " +
-			"roles: list roles. status: one run or all. result: current report without waiting. wait: join an existing runId without polling; returns its final report, immediately if finished. Cancelling wait only detaches; the child keeps running. An attached waiter receives completion instead of a separate wake-up. steer: queue a correction or resume a finished child in the background, keeping its context; returns immediately. Use wait to join the resumed work. Saved children are restored on parent reopen without running; steer revives them with their original configuration unless you pass model:, which moves that child to another offering from the next segment on \u2014 propose it in conversation first, including when the saved offering is exhausted or gone. Explicitly stopped children require restart:true and the user's request. cancel: stop the child and prevent automatic revival.",
+			"roles: list roles. status: one run or all \u2014 a nonblocking progress read: status, current tool, tool calls so far, elapsed, remaining time budget. result: current report without waiting. wait: join an existing runId without polling; returns its final report, immediately if finished. Cancelling wait only detaches; the child keeps running. An attached waiter receives completion instead of a separate wake-up. steer: queue a correction or resume a finished child in the background, keeping its context; returns immediately. Use wait to join the resumed work. Saved children are restored on parent reopen without running; steer revives them with their original configuration unless you pass model:, which moves that child to another offering from the next segment on \u2014 propose it in conversation first, including when the saved offering is exhausted or gone. Explicitly stopped children require restart:true and the user's request. cancel: stop the child and prevent automatic revival.",
 		parameters: Type.Object({
 			action: StringEnum(["models", "rate", "approve", "roles", "status", "result", "wait", "steer", "cancel"] as const),
 			role: Type.Optional(Type.String({ description: "approve: role name" })),
 			model: Type.Optional(Type.String({ description: "approve: provider/id[:thinking] the user agreed to. steer: run the next segment on this offering instead of the child's saved one; the user chooses it, you never substitute silently" })),
 			runId: Type.Optional(Type.String()),
 			restart: Type.Optional(Type.Boolean({ description: "steer only: restart an explicitly stopped child, only when the user requested it" })),
+			timeoutMs: Type.Optional(Type.Number({ description: "steer: give the child this time budget instead of its saved one \u2014 re-armed at once on a running child, applied to the next segment of an inactive one" })),
 			message: Type.Optional(Type.String({ description: "steer: the correction. models: substring filter. approve: one-line reason the user agreed to" })),
 			ratings: Type.Optional(
 				Type.Array(
@@ -1210,7 +1234,7 @@ export default function (pi: ExtensionAPI) {
 					return await run.completion.wait(signal);
 				case "status":
 					if (run.session && run.status === "running") harvest(run);
-					return { content: [{ type: "text", text: `${summary(run)}${run.status === "running" && run.lastTool ? `\nlast tool: ${run.lastTool}` : ""}` }], details: view(run) };
+					return { content: [{ type: "text", text: `${summary(run)}${run.status === "running" ? `\nnow: ${run.activeTools.values().next().value?.name ?? (run.lastTool ? `thinking after ${run.lastTool}` : "thinking")} \u00b7 ${run.toolCalls.length} tool call${run.toolCalls.length === 1 ? "" : "s"} so far \u00b7 ${Math.round((run.timeoutMs - (Date.now() - run.startedAt)) / 60000)} min of its budget left` : ""}` }], details: view(run) };
 				case "result":
 					return run.completion.settled ? finalResult(run) : { content: [{ type: "text", text: resultText(run) }], details: view(run) };
 				case "cancel":
@@ -1219,17 +1243,19 @@ export default function (pi: ExtensionAPI) {
 				case "steer": {
 					if (!p.message) throw new Error("steer requires message");
 					const running = run.status === "running";
-					let replacement: { model: string; thinking: string; contextWindow?: number } | undefined;
+					let replacement: { model?: string; thinking?: string; contextWindow?: number; timeoutMs?: number } | undefined;
 					if (p.model) {
 						const { model, thinking } = resolveModel(p.model, ctx);
 						if (!model) throw new Error(`model not found: ${p.model}`);
 						// Keep the saved reasoning level unless this spec names one.
 						replacement = { model: modelKey(model), thinking: thinking ?? run.thinking, contextWindow: model.contextWindow };
 					}
+					if (p.timeoutMs !== undefined) replacement = { ...replacement, timeoutMs: p.timeoutMs };
 					const previous = `${run.model}${run.thinking ? `:${run.thinking}` : ""}`;
 					await steer(run, p.message, p.restart, replacement);
-					const moved = replacement ? ` Model changed from ${previous} to ${run.model}${run.thinking ? `:${run.thinking}` : ""} for this and later segments; its earlier work keeps the model it ran on.` : "";
-					return { content: [{ type: "text", text: `${run.id}: ${running ? "steer queued" : "resumed in the background"}.${moved} Completion will wake you; use wait to join.` }], details: view(run) };
+					const moved = replacement?.model ? ` Model changed from ${previous} to ${run.model}${run.thinking ? `:${run.thinking}` : ""} for this and later segments; its earlier work keeps the model it ran on.` : "";
+					const retimed = replacement?.timeoutMs !== undefined ? ` Budget now ${Math.round(run.timeoutMs / 60000)} min for this and later segments.` : "";
+					return { content: [{ type: "text", text: `${run.id}: ${running ? "steer queued" : "resumed in the background"}.${moved}${retimed} Completion will wake you; use wait to join.` }], details: view(run) };
 				}
 			}
 			return { content: [{ type: "text", text: "unreachable" }], isError: true, details: undefined };

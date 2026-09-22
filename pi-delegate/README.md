@@ -40,6 +40,18 @@ Models live on OpenRouter but absent from the registry are listed separately (us
 - A finished child resumed with `steer` gets a new completion; earlier returned results do not change. A child still stopping cannot resume until its execution settles.
 - Run IDs belong to their parent session. Reloading or reopening that same parent restores access to its children. `wait` joins a live child or returns its saved result; it never restarts work.
 
+## While a child runs
+
+The parent is woken **once**, when a child finishes. There are deliberately no mid-run progress pings: an interrupt per tool call would spend a parent turn on information nobody asked for, and the human already watches live progress in the pinned Agents frame. Waiting is not the parent's work — it does other work, or `wait`s (blocking without polling), or takes a single `status` read:
+
+```
+running · worker-791ede7d · role worker · model … · 3 turns in 41s · tokens in 6, out 1.5k
+session: …
+now: bash · 12 tool calls so far · 47 min of its budget left
+```
+
+`timeoutMs` is that budget, 15 minutes by default, and it belongs to the current run segment. A child that needs hours must be launched with hours, or it is aborted mid-flight; a timeout says so, names the budget, and leaves the work in place — nothing is rolled back. `{"action":"steer","runId":"<id>","message":"…","timeoutMs":3600000}` re-arms a running child's budget immediately and persists it for later segments; a budget already spent is refused rather than applied as an instant kill.
+
 A missing automatic continuation is a delivery problem to investigate, not a reason to make all launches synchronous. Check the parent transcript and Pi's `send_message` extension errors to distinguish child completion, notification delivery, and parent continuation.
 
 ## Reload and recovery

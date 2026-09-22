@@ -23,6 +23,18 @@ Two tools. In `settings.packages`; `pi-subagents` and `pi-strings` removed, `set
 - Discovery, lowest → highest priority: package `roles/` → `~/.pi/agent/agents/` → `~/.agents/agents/` (skips `_*`/`.*`) → `<cwd>/.pi/agents/` when trusted.
 - State: `~/.pi/agent/delegate-runs.jsonl` (plaintext task, tokens, cost, duration, changed files), `delegate-models.json` (approved defaults + catalog snapshot), `delegate-ratings.json` (agent-researched ratings, stale after 14 days), child transcripts in `<cwd>/.agents/pi/subsessions/` — with the work, not under `~/.pi`.
 
+## Long-running children (uncommitted)
+
+Field report: a model told its user "pi-delegate only wakes me on final completion, not mid-run progress pings like the old tool did. I'll report the outcome once it finishes (up to ~8.5–9 hours)" — planning to idle for nine hours, on a child whose default budget would have killed it after fifteen minutes.
+
+Single wake-up stays: an interrupt per tool call spends a parent turn on unrequested information, and the human already has the live frame. What was missing is the stated path and an honest budget.
+
+- `status` is now a real progress read: `now: bash · 12 tool calls so far · 47 min of its budget left`, instead of an optional `last tool:` line.
+- The skill says waiting is never the parent's job — do other work, `wait` when nothing else can proceed, take one `status` read when asked; a loop is still forbidden, one read is not.
+- `timeoutMs` carries its default in the schema description, and a timeout explains itself: the budget it hit, that work is not rolled back, and how to give more.
+- `steer` accepts `timeoutMs`: re-armed immediately on a running child, persisted for later segments. A budget already spent is refused rather than applied as an instant kill. The budget is per segment (`segmentStartedAt`), so revival gets a full one.
+- Checks: 27 pass, including a real child carried past its original budget and a refused too-small one.
+
 ## Making the tooling legible to models (uncommitted)
 
 Field reports, all from one incident: a forked child re-delegated its own brief, its `delegate` call failed because children have no delegation tools, it diagnosed that as an unloaded extension and asked for a reload, and ~$1.76 bought zero repo changes. The parent then could not tell the child's report from its own message in the returned text.

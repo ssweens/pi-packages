@@ -4,6 +4,7 @@ import { rmSync, readFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { setTimeout as sleep } from "node:timers/promises";
 import { deferred, provider, sandbox, harness } from "./fixture.ts";
 
 test("real SDK delegation lifecycle (loopback provider, no credentials)", { timeout: 60000 }, async (t) => {
@@ -105,6 +106,14 @@ test("real SDK delegation lifecycle (loopback provider, no credentials)", { time
 			const result = await h.launch("Quoted report", { sync: true });
 			const [summary, report] = result.content[0].text.split(/^----- \S+ reported, verbatim -----$/m);
 			assert.match(summary, /^complete \u00b7 scout-[\w-]+ \u00b7 role scout \u00b7 model fixture\/fixture:off \u00b7 context fresh \u00b7 1 turn in \d+s \u00b7 tokens in \d/);
+			// Progress is a read the parent can take at any time, not something it must wait for.
+			const gate = deferred(), arrived = api.script("Progress read", { text: "WORKING", gate });
+			const { details: { id } } = await h.launch("Progress read", { timeoutMs: 600000 });
+			await arrived;
+			const status = await h.ctl("status", id);
+			assert.match(status.content[0].text, /^running \u00b7 /);
+			assert.match(status.content[0].text, /\nnow: thinking \u00b7 0 tool calls so far \u00b7 10 min of its budget left$/);
+			const wait = h.ctl("wait", id); gate.resolve(); await wait;
 			assert.match(summary, new RegExp(`\nsession: ${result.details.sessionFile}`));
 			assert.doesNotMatch(summary, /CHILD-WORDS/);
 			assert.doesNotMatch(summary, /error:|changed:|could not have/);
@@ -177,10 +186,31 @@ test("real SDK delegation lifecycle (loopback provider, no credentials)", { time
 			assert.equal((await wait).details.status, "cancelled");
 			assert.equal(api.requests.length, count);
 		});
+		await t.test("a running child's time budget can be extended, and a spent one is refused", async () => {
+			const gate = deferred(), arrived = api.script("Budget work", { text: "WORKING", gate });
+			api.script("Keep going", { text: "FINISHED-WITH-MORE-TIME" });
+			const { details: { id } } = await h.launch("Budget work", { timeoutMs: 1500 });
+			await arrived;
+			const extended = await h.ctl("steer", id, { message: "Keep going", timeoutMs: 60000 });
+			assert.match(extended.content[0].text, /Budget now 1 min for this and later segments/);
+			assert.equal(JSON.parse(readFileSync(state().runs.get(id).recordPath, "utf8")).timeoutMs, 60000);
+			await assert.rejects(h.ctl("steer", id, { message: "Too little", timeoutMs: 1 }), /budget is already spent/);
+			assert.equal(state().runs.get(id).timeoutMs, 60000, "a refused budget leaves the working one armed");
+			const wait = h.ctl("wait", id);
+			// Past the original 1.5s budget: without the extension this child would already be dead.
+			await sleep(1800);
+			assert.equal(state().runs.get(id).status, "running");
+			gate.resolve();
+			const done = await wait;
+			assert.equal(done.details.status, "complete", done.content[0].text);
+			assert.equal(done.details.output, "FINISHED-WITH-MORE-TIME");
+		});
 		await t.test("timeout and provider failure preserve terminal status", async () => {
 			api.script("Timeout work", { text: "Waiting", gate: deferred() });
 			const timeout = await h.launch("Timeout work", { timeoutMs: 200, sync: true });
 			assert.equal(timeout.details.status, "timeout");
+			assert.match(timeout.details.error, /Stopped after its 0 min budget \(timeoutMs, default 15 min\)\. Its work up to that point stands/);
+			assert.match(timeout.details.error, /steer this child with a larger timeoutMs/);
 			api.script("Provider failure", { error: 400 });
 			const failure = await h.launch("Provider failure", { sync: true });
 			assert.equal(failure.details.status, "error");
