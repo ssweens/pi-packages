@@ -46,7 +46,9 @@ Field reports, all from one incident: a forked child re-delegated its own brief,
 - **A named provider is never substituted.** `resolveModel` resolved `provider/id` to the same id on a different provider when the named one was missing — a silent route change across cost and limits. It now resolves the named provider only; bare ids still search.
 - **Providers are mirrored per child session**, not once per process, so an extension that registers after the first child (account switch, reload) still reaches children; dropping one stops serving children that must reopen.
 - Checks: 26 pass. Scoped mutation on `resolveModel` + `stripDelegation`: 71 mutants, 51 killed, 1 timeout, 19 survived (survivors are error wording and redundant guards).
-- **Open:** confirm a real extension-provided offering (`glm-5.2` via vertex) runs in a child on the machine that reported it blocked. The local proof uses registered fixture providers, native and config, including one registered late.
+- Confirmed on a real extension provider: `pi.registerProvider("vertex", …)` from pi-vertex is the only registered provider here, and a child launched on `vertex/glm-5.2` returned `complete` with its exact expected answer — 3 turns, $0.002, `openai-codex`-free. The report "extension providers are disabled in children" is fixed, not worked around.
+  - That child took **10 minutes of wall clock for a one-line reply**; a first attempt on a 3 min budget timed out mid-stream holding partial output (`VERTEX-`). So vertex/glm-5.2 is unusably slow for interactive children here and needs a budget in the tens of minutes; the default 15 min would have barely covered it. The new timeout message named the budget and said the partial work stood, which is exactly how that first run read.
+  - Harness used (kept out of the package, it imports absolute machine paths): `/tmp/pi-delegate-vertex-check/check.ts`, run from the package directory so `@earendil-works/*` resolves.
 
 ## Current uncommitted work: portable QC and native child detail
 
