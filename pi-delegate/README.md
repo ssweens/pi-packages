@@ -73,7 +73,7 @@ One OMP-style **Agents** frame above the parent editor shows only running or sto
 - **Esc** returns to the parent editor without stopping the child. Parent and child drafts are separate; returning preserves the parent draft and list selection.
 - **`/agents`** opens an on-demand list of finished children, including failures, cancellations, and interrupted runs. Select a row with **↑↓**, then **Enter** to inspect it; **Esc** closes the list. History remains available while other children run. Removing a row from the pinned frame does not delete its session or prevent revival.
 
-The child view includes assistant text as it streams, tool arguments, tool results, and user messages. It does not launch a second writer against the child's session file. Opening a saved child reads its transcript without reviving it; sending a message revives it.
+The child transcript uses Pi's own assistant/user message, built-in tool, and editor components—not a second text/JSON renderer. It opens at the newest output and follows streaming text and tool output. **PgUp** pauses following; **Ctrl+End** or paging back to the bottom resumes it. Tools start collapsed; Pi's **Ctrl+O** action expands/collapses them, and its thinking-toggle binding controls reasoning display. Markdown, code highlighting, errors, and tool results use the active Pi theme. Fullscreen mode also supports Pi's native click-to-expand tool results and mouse-wheel scrolling; regular mode leaves mouse handling to the terminal emulator. It does not launch a second writer against the child's session file. Opening a saved child reads its transcript without reviving it; sending a message revives it.
 
 ## Transcript records
 
@@ -85,7 +85,29 @@ Async launches have no duplicate status card or dispatch frame in the conversati
 
 ## Verification
 
-Run `npm test` with Node.js 22.18 or newer. The tests cover stored results, multiple waiters, cancellation, failure statuses, independent resumed completions, atomic snapshots, self-ignored storage, and exclusive ownership leases. They require no model calls or credentials.
+From this package directory, use Node.js 22.19 or newer:
+
+```sh
+npm install
+npm run check
+```
+
+`check` runs package-local strict TypeScript and `node:test` through `tsx`. No global SDK paths, model accounts, or credentials. Lifecycle tests use the actual Pi SDK and extension against a scripted loopback HTTP provider; only model responses are fixtures. They exercise runtime-only provider inheritance, live reload, fork persistence, wait/cancel/async revival, cancellation during SDK preflight, provider failures/timeouts, automatic idle/busy-parent wake-up, reload-gap delivery, ownership contention, cold inspection, and SIGKILL receipt recovery. Direct tool calls seed parent receipts at the return boundary; automatic notifications use Pi's real delivery path. Crash checks wait for the real 10-second ownership lease to expire.
+
+Run the additional check when its boundary changes:
+
+| Change | Check |
+|---|---|
+| Manifest, resources, dependencies, install layout | `npm run check:install` |
+| Rendering, navigation, input, streaming, focus | `npm run smoke:tui` (requires tmux; regular and fullscreen Pi) |
+| Completion, cancellation, delivery, persistence—or their assertions | Scoped mutation of the affected production behavior, after its baseline passes |
+| Docs only | Check examples/resource paths; no terminal or model run required |
+
+`check:install` packs the candidate, installs dependencies in an isolated extracted directory, runs the real `pi install`, and checks both tools, packaged roles, and the delegation skill. Pi links local directories without installing dependencies: run `npm install` in a local checkout first. npm/Git installs manage dependencies themselves. To check a published npm or Git source explicitly: `npm run check:install -- npm:@ssweens/pi-delegate@<version>` or `npm run check:install -- git:<repo>@<ref>`; that checks the named source, not uncommitted local changes.
+
+`smoke:tui` runs actual Pi and actual built-in tools with the loopback provider in a private tmux server. It checks native tool disclosure, streaming/follow vs paused scrolling, narrow resize, separate drafts, history, same-ID revival, and finished-frame removal. It prints the temporary evidence directory containing text/ANSI terminal captures, traces, and sessions; it stops only its own tmux server. Parent model wake-up is disabled in this UI fixture and verified separately by lifecycle tests.
+
+For independent review, give the reviewer these runnable commands and the affected contract. They execute the relevant checks rather than accepting an implementer's pass banner. Scope mutation to changed semantics and changed assertions; report survivors/timeouts/uncovered sites separately. No arbitrary score threshold, new role pipeline, or mandatory UI/install run on every edit.
 
 ## Not included, on purpose
 

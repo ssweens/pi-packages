@@ -10,6 +10,7 @@ export interface RunView {
 	settled: boolean;
 	role: string;
 	model: string;
+	cwd: string;
 	thinking: string;
 	context: "fork" | "fresh";
 	forkedMessages?: number;

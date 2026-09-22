@@ -6,7 +6,11 @@
   "main": "src/index.ts",
   "license": "MIT",
   "scripts": {
-    "test": "node --experimental-strip-types --test test/*.test.ts"
+    "check": "npm run typecheck && npm test",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test test/*.test.ts",
+    "check:install": "tsx test/install-smoke.ts",
+    "smoke:tui": "tsx test/terminal-smoke.ts"
   },
   "pi": {
     "extensions": [
@@ -20,12 +24,22 @@
     "proper-lockfile": "^4.1.2"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": ">=0.86.1"
+    "@earendil-works/pi-coding-agent": ">=0.86.1",
+    "@earendil-works/pi-ai": ">=0.86.1",
+    "@earendil-works/pi-tui": ">=0.86.1",
+    "typebox": "^1.3.27"
   },
   "keywords": [
     "pi-package"
   ],
   "devDependencies": {
-    "@types/proper-lockfile": "^4.1.4"
+    "@types/proper-lockfile": "4.1.4",
+    "@types/node": "22.19.19",
+    "@earendil-works/pi-coding-agent": "0.86.1",
+    "@earendil-works/pi-ai": "0.86.1",
+    "@earendil-works/pi-tui": "0.86.1",
+    "typebox": "1.3.27",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3"
   }
 }

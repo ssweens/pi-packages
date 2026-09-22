@@ -1,22 +1,16 @@
 /** Live work stays pinned; history is on demand. Both open the same child conversation. */
-import type { Theme } from "@earendil-works/pi-coding-agent";
-import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
-import { type Component, Editor, type Focusable, Markdown, matchesKey, SelectList, type TUI, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { CustomEditor, getSelectListTheme, keyHint, type KeybindingsManager, type SettingsManager, type Theme } from "@earendil-works/pi-coding-agent";
+import { type Component, type Focusable, matchesKey, SelectList, type TUI, type TuiMouseEvent, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { ChildTranscript, type ChildActivity } from "./transcript.js";
 import { elapsed, formatToolCall, frame, runTitle, type RunView } from "./render.js";
 
 export interface LiveSource {
 	all(): RunView[];
-	activity(id: string): ActivityItem[];
+	activity(id: string): ChildActivity;
 	subscribe(listener: () => void): () => void;
 	steer(id: string, message: string): Promise<void>;
 	cancel(id: string): Promise<void>;
 }
-
-export type ActivityItem =
-	| { kind: "tool"; name: string; args: Record<string, unknown> }
-	| { kind: "result"; text: string; isError: boolean }
-	| { kind: "text"; text: string }
-	| { kind: "user"; text: string };
 
 const TICK_MS = 250;
 const LIST_ROWS = 4;
@@ -180,9 +174,12 @@ export class AgentHistory implements Component {
 
 /** Full-viewport detail. The parent's editor instance, draft, and cursor are never replaced. */
 export class ChildView implements Component, Focusable {
-	private editor: Editor;
+	private editor: CustomEditor;
+	private transcript: ChildTranscript;
+	private revision = -1;
 	private top: number | undefined;
 	private pageRows = 1;
+	private viewport = { head: 0, start: 0, editor: 0, editorRows: 0 };
 	private notice = "";
 	private sending = false;
 	private cache?: { revision: number; width: number; lines: string[] };
@@ -192,14 +189,12 @@ export class ChildView implements Component, Focusable {
 	get focused() { return this.editor.focused; }
 	set focused(value: boolean) { this.editor.focused = value; }
 
-	constructor(private id: string, private src: LiveSource, private theme: Theme, private tui: TUI, private done: () => void, draft: string, private saveDraft: (text: string) => void) {
-		this.editor = new Editor(tui, {
-			borderColor: (s) => theme.fg("borderMuted", s),
-			selectList: {
-				selectedPrefix: (s) => theme.fg("accent", s), selectedText: (s) => theme.fg("accent", s),
-				description: (s) => theme.fg("muted", s), scrollInfo: (s) => theme.fg("dim", s), noMatch: (s) => theme.fg("dim", s),
-			},
-		});
+	constructor(private id: string, private src: LiveSource, private theme: Theme, private tui: TUI, private keybindings: KeybindingsManager, settings: SettingsManager, private done: () => void, draft: string, private saveDraft: (text: string) => void) {
+		this.transcript = new ChildTranscript(tui, this.current()!.cwd, settings);
+		this.editor = new CustomEditor(tui, {
+			borderColor: theme.getThinkingBorderColor((this.current()!.thinking ?? "off") as Parameters<Theme["getThinkingBorderColor"]>[0]),
+			selectList: getSelectListTheme(),
+		}, keybindings, { paddingX: settings.getEditorPaddingX(), autocompleteMaxVisible: settings.getAutocompleteMaxVisible() });
 		this.editor.setText(draft);
 		this.editor.onSubmit = (text) => { void this.send(text); };
 		this.unsubscribe = src.subscribe(() => tui.requestRender());
@@ -231,10 +226,14 @@ export class ChildView implements Component, Focusable {
 
 	handleInput(data: string) {
 		if (matchesKey(data, "escape")) { this.done(); return; }
-		if (matchesKey(data, "pageUp")) this.top = Math.max(0, (this.top ?? Math.max(0, (this.cache?.lines.length ?? 0) - this.pageRows)) - this.pageRows);
+		if (this.keybindings.matches(data, "app.tools.expand")) { this.transcript.toggleTools(); this.cache = undefined; }
+		else if (this.keybindings.matches(data, "app.thinking.toggle")) { this.transcript.toggleThinking(); this.cache = undefined; }
+		else if (matchesKey(data, "pageUp")) this.top = Math.max(0, (this.top ?? Math.max(0, (this.cache?.lines.length ?? 0) - this.pageRows)) - this.pageRows);
 		else if (matchesKey(data, "pageDown")) {
-			const next = (this.top ?? 0) + this.pageRows;
-			this.top = next >= (this.cache?.lines.length ?? 0) - this.pageRows ? undefined : next;
+			if (this.top !== undefined) {
+				const next = this.top + this.pageRows;
+				this.top = next >= (this.cache?.lines.length ?? 0) - this.pageRows ? undefined : next;
+			}
 		} else if (matchesKey(data, "ctrl+end")) this.top = undefined;
 		else if (matchesKey(data, "ctrl+x")) {
 			if (this.current()?.status === "running") {
@@ -245,22 +244,32 @@ export class ChildView implements Component, Focusable {
 		this.tui.requestRender();
 	}
 
-	private activityLines(v: RunView, width: number): string[] {
-		if (this.cache?.revision === v.revision && this.cache.width === width) return this.cache.lines;
-		const lines: string[] = [];
-		for (const item of this.src.activity(this.id)) {
-			if (item.kind === "tool") {
-				lines.push(this.theme.fg("accent", `→ ${item.name}`));
-				lines.push(...wrapTextWithAnsi(this.theme.fg("muted", JSON.stringify(item.args, null, 2)), width));
-			} else if (item.kind === "text") {
-				lines.push(...new Markdown(item.text, 0, 0, getMarkdownTheme()).render(width));
-			} else {
-				const color = item.kind === "user" ? "userMessageText" : item.isError ? "error" : "toolOutput";
-				const text = item.kind === "user" ? `▸ ${item.text}` : item.text;
-				lines.push(...wrapTextWithAnsi(this.theme.fg(color, text), width));
-			}
-			lines.push("");
+	handleMouse(event: TuiMouseEvent) {
+		if (event.type === "wheel") {
+			const max = Math.max(0, (this.cache?.lines.length ?? 0) - this.pageRows);
+			const next = Math.max(0, Math.min(max, (this.top ?? max) + (event.wheelDelta ?? 0)));
+			this.top = next === max ? undefined : next;
+			this.tui.requestRender();
+			return { handled: true };
 		}
+		const { head, start, editor, editorRows } = this.viewport;
+		if (event.y >= head && event.y < head + this.pageRows) {
+			const result = this.transcript.handleMouse({ ...event, y: event.y - head + start, height: this.cache?.lines.length ?? 0 });
+			if (result?.handled) { this.tui.requestRender(); return { handled: true }; }
+		} else if (event.y >= editor && event.y < editor + editorRows) {
+			return this.editor.handleMouse({ ...event, y: event.y - editor, height: editorRows });
+		}
+		return undefined;
+	}
+
+	private activityLines(v: RunView, width: number): string[] {
+		// Native tool renderers can invalidate themselves (elapsed time, image conversion)
+		// without a child event. Let their own caches own rendering, not the run revision.
+		if (this.revision !== v.revision) {
+			this.transcript.update(this.src.activity(this.id));
+			this.revision = v.revision ?? 0;
+		}
+		const lines = this.transcript.render(width);
 		this.cache = { revision: v.revision ?? 0, width, lines };
 		return lines;
 	}
@@ -276,21 +285,23 @@ export class ChildView implements Component, Focusable {
 		const editor = this.editor.render(width);
 		const footer = [
 			...(this.notice ? [this.theme.fg("dim", this.notice)] : []),
-			this.theme.fg("dim", "Esc parent · PgUp/PgDn scroll · Ctrl+X stop · Ctrl+End latest"),
-			this.theme.fg("accent", `${v.stopped ? "Restart" : "Message"} ${v.role} · ${runTitle(v)}`),
 			...editor,
+			this.theme.fg("dim", `Esc parent · ${v.stopped ? "Enter restart" : v.settled ? "Enter resume" : "Enter steer"} · ${keyHint("app.tools.expand", "tools")} · Ctrl+X stop`),
+			this.theme.fg("dim", `PgUp/PgDn scroll · Ctrl+End latest${this.top === undefined ? " · following" : " · scroll paused"}`),
 		];
 		this.pageRows = Math.max(1, height - head.length - footer.length);
-		const lines = this.activityLines(v, Math.max(1, width - 2));
+		const lines = this.activityLines(v, width);
 		const start = this.top === undefined ? Math.max(0, lines.length - this.pageRows) : Math.min(this.top, Math.max(0, lines.length - this.pageRows));
-		const visible = lines.slice(start, start + this.pageRows).map((l) => ` ${l}`);
+		this.viewport = { head: head.length, start, editor: head.length + this.pageRows + (this.notice ? 1 : 0), editorRows: editor.length };
+		const visible = lines.slice(start, start + this.pageRows);
 		while (visible.length < this.pageRows) visible.push("");
 		// Every cell is covered: neither the parent transcript nor its agents frame shows through.
 		return [...head, ...visible, ...footer].slice(-height).map((l) => pad(l, width));
 	}
 
-	invalidate() { this.cache = undefined; this.editor.invalidate(); }
+	invalidate() { this.cache = undefined; this.transcript.invalidate(); this.editor.invalidate(); }
 	dispose() {
+		this.transcript.dispose();
 		this.saveDraft(this.editor.getExpandedText());
 		clearInterval(this.timer);
 		this.unsubscribe();

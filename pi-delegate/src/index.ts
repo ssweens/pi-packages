@@ -12,11 +12,13 @@ import {
 	DefaultResourceLoader,
 	ModelRuntime,
 	SessionManager,
+	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { type ActivityItem, AgentHistory, AgentsPanel, ChildView, type LiveSource } from "./inspector.js";
+import { AgentHistory, AgentsPanel, ChildView, type LiveSource } from "./inspector.js";
+import type { ActiveTool, ChildActivity } from "./transcript.js";
 import { empty, framed, resultLines, type RunView } from "./render.js";
 import { loadRoles } from "./roles.js";
 import { RunCompletion } from "./completion.js";
@@ -83,10 +85,10 @@ interface Run {
 	error?: string;
 	lastTool?: string;
 	toolCalls: { name: string; args: Record<string, unknown>; at: number }[];
-	activeTools: Map<string, { name: string; args: Record<string, unknown> }>;
+	activeTools: Map<string, ActiveTool>;
 	revision: number;
 	streamingMessage?: any;
-	activityCache?: { revision: number; items: ActivityItem[] };
+	activityCache?: { revision: number; items: ChildActivity };
 	contextWindow?: number;
 	session?: any;
 	ready?: Promise<void>;
@@ -584,6 +586,7 @@ function view(run: Run): RunView {
 		settled: run.completion.settled,
 		role: run.role,
 		model: run.model,
+		cwd: run.cwd,
 		thinking: run.thinking,
 		context: run.context,
 		forkedMessages: run.forkedMessages,
@@ -740,32 +743,36 @@ function beginResume(run: Run, restart: boolean) {
 }
 
 /** Actual conversation after the inherited prefix, including streamed text and tool results. */
-function activityOf(run: Run): ActivityItem[] {
+function activityOf(run: Run): ChildActivity {
 	if (run.activityCache?.revision === run.revision) return run.activityCache.items;
-	const out: ActivityItem[] = [];
-	const textOf = (content: any) => typeof content === "string" ? content : (content ?? []).map((b: any) => b.type === "text" ? b.text : b.type === "image" ? "[image attachment]" : "").join("\n");
-	const append = (m: any) => {
-		if (m?.role === "user") out.push({ kind: "user", text: textOf(m.content) });
-		else if (m?.role === "toolResult") out.push({ kind: "result", text: textOf(m.content), isError: Boolean(m.isError) });
-		else if (m?.role === "assistant") for (const b of m.content ?? []) {
-			if (b.type === "text" && b.text) out.push({ kind: "text", text: b.text });
-			if (b.type === "toolCall") out.push({ kind: "tool", name: b.name, args: b.arguments ?? {} });
-		}
-	};
-	let msgs: any[];
-	try { msgs = messagesOf(run); }
-	catch (error) { return [{ kind: "result", text: String(error), isError: true }]; }
-	for (let i = run.startIdx; i < msgs.length; i++) append(msgs[i]);
-	if (run.streamingMessage && !msgs.includes(run.streamingMessage)) append(run.streamingMessage);
-	run.activityCache = { revision: run.revision, items: out };
-	return out;
+	let messages: any[];
+	try { messages = messagesOf(run).slice(run.startIdx).filter((m) => m.role === "user" || m.role === "assistant" || m.role === "toolResult"); }
+	catch (error) { return { messages: [], activeTools: run.activeTools, error: String(error) }; }
+	const items = { messages, activeTools: run.activeTools,
+		streaming: run.streamingMessage && !messages.includes(run.streamingMessage) ? run.streamingMessage : undefined };
+	run.activityCache = { revision: run.revision, items };
+	return items;
 }
 
 export default function (pi: ExtensionAPI) {
 	// Reload refreshes configuration for future session opens. Live children retain the
 	// runtime they already own; replacing a binding must not mutate their provider state.
 	let modelRuntime: Promise<ModelRuntime> | undefined;
-	const getRuntime = () => modelRuntime ??= ModelRuntime.create();
+	const getRuntime = () => {
+		if (modelRuntime) return modelRuntime;
+		// Account/provider extensions register offerings in the parent's live catalog,
+		// not necessarily models.json. Carry their public definitions into this runtime.
+		const registry = requireOwner().binding!.ctx.modelRegistry;
+		return modelRuntime = ModelRuntime.create().then((runtime) => {
+			for (const id of registry.getRegisteredProviderIds()) {
+				const native = registry.getRegisteredNativeProvider(id);
+				if (native) runtime.registerNativeProvider(native);
+				const config = registry.getRegisteredProviderConfig(id);
+				if (config) runtime.registerProvider(id, config);
+			}
+			return runtime;
+		});
+	};
 	let owner: Owner | undefined;
 	let attachError: string | undefined;
 	function requireOwner(): Owner {
@@ -817,7 +824,7 @@ export default function (pi: ExtensionAPI) {
 	}
 	const liveSource: LiveSource = {
 		all: () => owner ? ownedRuns(owner).map(view) : [],
-		activity: (id) => { const r = runs.get(id); return r && r.ownerKey === owner?.key ? activityOf(r) : []; },
+		activity: (id) => { const r = runs.get(id); return r && r.ownerKey === owner?.key ? activityOf(r) : { messages: [], activeTools: new Map() }; },
 		subscribe: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
 		steer: async (id, message) => {
 			const r = runs.get(id);
@@ -872,6 +879,10 @@ export default function (pi: ExtensionAPI) {
 				if (run.toolCalls.length < MAX_TOOL_CALLS) run.toolCalls.push({ name: ev.toolName, args: (ev.args ?? {}) as Record<string, unknown>, at: Date.now() });
 				if (state.owners.get(run.ownerKey)?.binding?.pi === pi) onUpdate?.({ content: [{ type: "text", text: `${run.id}: ${ev.toolName}` }], details: view(run) });
 			}
+			if (ev.type === "tool_execution_update") {
+				const active = run.activeTools.get(ev.toolCallId);
+				if (active) active.result = { ...ev.partialResult, isError: false };
+			}
 			if (ev.type === "tool_execution_end") run.activeTools.delete(ev.toolCallId);
 			run.revision++;
 			if (ev.type === "message_end") {
@@ -897,6 +908,9 @@ export default function (pi: ExtensionAPI) {
 					// Recheck at the SDK's dispatch boundary, before it starts the agent loop.
 					if (accepted && run.status !== "running") throw new Error("Child stopped before prompt dispatch.");
 				} });
+				// Provider failures are assistant messages, not rejected prompt promises.
+				const last = messagesOf(run).findLast((message) => message.role === "assistant");
+				if (run.status === "running" && last?.stopReason === "error") throw new Error(last.errorMessage ?? "Child provider failed.");
 			}
 			finish(run, run.status === "running" ? "complete" : run.status);
 		} catch (e: any) {
@@ -1184,7 +1198,7 @@ export default function (pi: ExtensionAPI) {
 		navigationOpen = true;
 		try {
 			await ctx.ui.custom<undefined>(
-				(childTui, childTheme, _kb, done) => new ChildView(id, liveSource, childTheme, childTui, () => done(undefined), childDrafts.get(id) ?? "", (draft) => { childDrafts.set(id, draft); }),
+				(childTui, childTheme, kb, done) => new ChildView(id, liveSource, childTheme, childTui, kb, SettingsManager.create(ctx.cwd, AGENT_DIR), () => done(undefined), childDrafts.get(id) ?? "", (draft) => { childDrafts.set(id, draft); }),
 				{ overlay: true, overlayOptions: { width: "100%", maxHeight: "100%", anchor: "top-left", margin: 0 } },
 			);
 		} catch (e) { ctx.ui.notify(`Cannot open child: ${String(e)}`, "error"); }
