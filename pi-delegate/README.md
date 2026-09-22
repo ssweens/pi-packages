@@ -99,6 +99,12 @@ One OMP-style **Agents** frame above the parent editor shows only running or sto
 
 The child transcript uses Pi's own assistant/user message, built-in tool, and editor components—not a second text/JSON renderer. It opens at the newest output and follows streaming text and tool output. **PgUp** pauses following; **Ctrl+End** or paging back to the bottom resumes it. Tools start collapsed; Pi's **Ctrl+O** action expands/collapses them, and its thinking-toggle binding controls reasoning display. Markdown, code highlighting, errors, and tool results use the active Pi theme. Fullscreen mode also supports Pi's native click-to-expand tool results and mouse-wheel scrolling; regular mode leaves mouse handling to the terminal emulator. It does not launch a second writer against the child's session file. Opening a saved child reads its transcript without reviving it; sending a message revives it.
 
+## Control-tool output
+
+`delegate_ctl` results use Pi's own tool shape rather than a text dump: a titled call line (`delegate_ctl roles 3`, `delegate_ctl wait scout-…`), output in tool colours, and a preview clipped by *visual* lines with `ctrl+o to expand`. The preview keeps the **head** of the report, because these reports lead with what matters — approved defaults, drift, counts — unlike a shell command whose tail is the interesting part.
+
+`roles` renders one aligned row per role (name, context and reasoning level, default offering, description clipped to the terminal), with the role file paths behind the expand. `status` and `result` on a single child render the same compact outcome line the transcript already uses. The text handed to the model is unchanged and complete in every case; only the human's view is clipped.
+
 ## Reading a result
 
 Every returned report is a run description followed by the child's own words, fenced so the two cannot be confused:

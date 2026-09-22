@@ -17,9 +17,10 @@ import {
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { keyHint } from "@earendil-works/pi-coding-agent";
 import { AgentHistory, AgentsPanel, ChildView, type LiveSource } from "./inspector.js";
 import type { ActiveTool, ChildActivity } from "./transcript.js";
-import { elapsed, empty, framed, resultLines, type RunView } from "./render.js";
+import { elapsed, empty, framed, previewLines, resultLines, type RunView } from "./render.js";
 import { loadRoles } from "./roles.js";
 import { RunCompletion } from "./completion.js";
 import { claimOwner, readRecord, storageDir, writeRecord } from "./storage.js";
@@ -40,6 +41,7 @@ const WRITE_TOOLS = new Set(["edit", "write"]);
 const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
 const MAX_RETAINED_SESSIONS = 8;
 const OUTPUT_CAP = 40_000;
+const CONTROL_PREVIEW_LINES = 8;
 
 const CONTRACT_FOOTER = `
 
@@ -1009,6 +1011,15 @@ export default function (pi: ExtensionAPI) {
 		} finally { signal?.removeEventListener("abort", abort); run.ready = undefined; }
 	}
 
+	// What the control call was about, in the header rather than buried in its output.
+	const subject = (args: any): string => {
+		if (!args) return "";
+		if (args.action === "models" || args.action === "roles") return args.message ? `"${args.message}"` : "";
+		if (args.action === "approve") return [args.role, args.model].filter(Boolean).join(" \u2192 ");
+		if (args.action === "rate") return `${args.ratings?.length ?? 0} offering${args.ratings?.length === 1 ? "" : "s"}`;
+		return args.runId ?? "";
+	};
+
 	// Async dispatch stays silent in the transcript; a call that blocks the parent's turn must not.
 	// Without this the parent simply stops for minutes with nothing on screen explaining why.
 	const blockingCall = (label: (args: any) => string | undefined) => (args: any, theme: any, ctx: any) => {
@@ -1038,11 +1049,38 @@ export default function (pi: ExtensionAPI) {
 			if (v.status === "running") return empty();
 			return framed((width) => resultLines(v, opts.expanded, theme, width));
 		}
-		const text = result.content?.filter((b: any) => b.type === "text").map((b: any) => b.text).join("\n") ?? "";
-		const lines = text.split("\n");
-		const body = opts.expanded ? lines : lines.slice(0, 12);
-		if (!opts.expanded && lines.length > 12) body.push("… Ctrl+O expand");
-		return framed((width) => [theme.fg(result.isError ? "error" : "dim", `${title}${ctx.args?.action ? ` · ${ctx.args.action}` : ""}`), ...body.flatMap((line: string) => wrapTextWithAnsi(line, Math.max(1, width)))]);
+		// status/result on one child: the same compact outcome line the transcript already uses.
+		if (v?.id) return framed((width) => resultLines(v, opts.expanded, theme, width));
+		// One row per role, aligned and clipped to the terminal: the model still gets the full text.
+		if (result.details?.kind === "roles") {
+			const rows = result.details.rows as { name: string; mode: string; model: string; description: string; source: string }[];
+			const nameWidth = Math.max(...rows.map((r) => r.name.length), 4);
+			const modeWidth = Math.max(...rows.map((r) => r.mode.length), 4);
+			const modelWidth = Math.min(28, Math.max(...rows.map((r) => r.model.length), 5));
+			return framed((width) => [
+				theme.fg("toolTitle", theme.bold(title)) + ` ${theme.fg("accent", "roles")}` + theme.fg("muted", ` ${rows.length}`),
+				...rows.map((r) => truncateToWidth(
+					`  ${theme.fg("text", r.name.padEnd(nameWidth))}  ${theme.fg("muted", r.mode.padEnd(modeWidth))}  ${theme.fg(r.model === "needs approval" ? "warning" : "dim", r.model.padEnd(modelWidth))}  ${theme.fg("dim", r.description)}`,
+					Math.max(1, width), "\u2026")),
+				...(opts.expanded ? rows.map((r) => theme.fg("dim", `  ${r.name}: ${r.source}`)) : []),
+			]);
+		}
+		const text = (result.content?.filter((b: any) => b.type === "text").map((b: any) => b.text).join("\n") ?? "").trim();
+		// Same shape as Pi's own tools: a titled call line, then output in tool colours,
+		// clipped to a preview by *visual* lines so a wide catalog cannot sprawl down the chat.
+		const header = theme.fg("toolTitle", theme.bold(title))
+			+ (ctx.args?.action ? ` ${theme.fg("accent", ctx.args.action)}` : "")
+			+ (subject(ctx.args) ? theme.fg("muted", ` ${subject(ctx.args)}`) : "");
+		return framed((width) => {
+			const inner = Math.max(1, width);
+			const styled = text.split("\n").map((line: string) => theme.fg(result.isError ? "error" : "toolOutput", line)).join("\n");
+			const all = text ? wrapTextWithAnsi(styled, inner) : [];
+			if (opts.expanded) return [header, ...all];
+			const { shown, hidden } = previewLines(all, CONTROL_PREVIEW_LINES);
+			return [header, ...shown, ...(hidden
+				? [theme.fg("muted", `\u2026 ${hidden} more line${hidden === 1 ? "" : "s"},`) + ` ${keyHint("app.tools.expand", "to expand")}`]
+				: [])];
+		});
 	};
 
 	pi.registerTool({
@@ -1264,10 +1302,15 @@ export default function (pi: ExtensionAPI) {
 			if (p.action === "roles") {
 				const roles = [...loadRoles(ctx.cwd, ctx.isProjectTrusted()).values()].sort((a, b) => a.name.localeCompare(b.name));
 				const approved = loadDefaults().approved;
-				const lines = roles.map(
-					(r) => `${r.name}  [${r.context ?? "fork"}${r.model ? `, ${r.model}` : ""}${r.thinking ? `:${r.thinking}` : ""}]  default: ${approved[r.name]?.spec ?? "none \u2014 needs approval"}  ${r.description}  (${r.source})`,
-				);
-				return { content: [{ type: "text", text: lines.join("\n") || "no roles found" }], details: undefined };
+				const rows = roles.map((r) => ({
+					name: r.name,
+					mode: `${r.context ?? "fork"}${r.thinking ? `:${r.thinking}` : ""}`,
+					model: approved[r.name]?.spec ?? r.model ?? "needs approval",
+					description: r.description,
+					source: r.source,
+				}));
+				const lines = rows.map((r, i) => `${r.name}  [${r.mode}]  ${approved[roles[i].name] ? "default" : "no default"}: ${r.model}  ${r.description}  (${r.source})`);
+				return { content: [{ type: "text", text: lines.join("\n") || "no roles found" }], details: { kind: "roles", rows } };
 			}
 			const owner = requireOwner();
 			if (p.action === "status" && !p.runId) {

@@ -86,6 +86,25 @@ try {
 		joinGate.resolve(); await expect(/PARENT-SAW-RESULT/);
 		await expect(/Waiting for a new scout/, true); save(`${mode}-joined`);
 		assert.equal(capture().match(/Joined child · scout/g)?.length, 1, "the outcome is recorded once, not reprinted");
+		// Control-tool output uses Pi's own tool shape: titled line, clipped preview, expandable.
+		api.script("Show the roles", { tool: { name: "delegate_ctl", arguments: { action: "roles" } } }, { text: "ROLES-SEEN" });
+		key("C-u"); await command("Show the roles");
+		await expect(/ROLES-SEEN/);
+		const listed = capture();
+		assert.match(listed, /delegate_ctl roles 3/);
+		// One aligned row per role, no wrapped wall of paths.
+		for (const role of ["reviewer", "scout", "worker"]) assert.match(listed, new RegExp(`\\n  ${role} +(fresh|fork)`));
+		assert.doesNotMatch(listed, /roles\/scout\.md/, "sources belong behind the expand, not in the collapsed row");
+		save(`${mode}-control-collapsed`);
+		key("C-o"); await expect(/roles\/scout\.md/); save(`${mode}-control-expanded`); key("C-o");
+		// A long text report previews its head — what it leads with — not its tail.
+		api.script("Show all runs", { tool: { name: "delegate_ctl", arguments: { action: "status" } } }, { text: "STATUS-SEEN" });
+		key("C-u"); await command("Show all runs");
+		await expect(/STATUS-SEEN/);
+		const statusView = capture();
+		assert.match(statusView, /delegate_ctl status/);
+		assert.match(statusView, /\ncomplete · scout-[\w-]+ · role scout · model fixture\/fixture:off/);
+		save(`${mode}-control-status`);
 		key("C-u"); await command("/agents"); await expect(/Finished agents/); key("Enter"); await expect(/LATEST-END/);
 		api.script("Resume detail", { text: "**RESUMED-SAME-CHILD**" });
 		await command("Resume detail"); await expect(/RESUMED-SAME-CHILD/); save(`${mode}-resumed`);

@@ -106,6 +106,16 @@ export function empty(): Component {
 	return { render: () => [], invalidate() {} };
 }
 
+/**
+ * Control reports lead with what matters — defaults, drift, counts — so a preview keeps the
+ * head, unlike a command whose tail is the interesting part. Returns the lines to show and how
+ * many were withheld.
+ */
+export function previewLines(lines: string[], max: number): { shown: string[]; hidden: number } {
+	if (lines.length <= max) return { shown: lines, hidden: 0 };
+	return { shown: lines.slice(0, max), hidden: lines.length - max };
+}
+
 export function framed(build: (width: number) => string[]): Component {
 	return { render: build, invalidate() {} };
 }
