@@ -21,6 +21,10 @@ export default function (pi: any) {
 		writeFileSync(join(root, "parent.json"), JSON.stringify({ file: ctx.sessionManager.getSessionFile() }));
 		ctx.ui.setStatus("fixture", "FIXTURE-READY");
 	});
+	pi.registerCommand("fixture-join", { handler: async (args: string, ctx: any) => {
+		const result = await tools.get("delegate_ctl").execute("fixture", { action: "wait", runId: args.trim() }, undefined, undefined, ctx);
+		trace({ event: "joined", details: result.details });
+	} });
 	pi.registerCommand("fixture-spawn", { handler: async (args: string, ctx: any) => {
 		const result = await tools.get("delegate").execute("fixture", { role: "scout", model: "fixture/fixture:off", context: "fresh", cwd: ctx.cwd, task: args || "Native detail" }, undefined, undefined, ctx);
 		trace({ event: "launch", details: result.details });

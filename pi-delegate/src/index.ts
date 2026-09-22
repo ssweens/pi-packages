@@ -16,10 +16,10 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
-import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { AgentHistory, AgentsPanel, ChildView, type LiveSource } from "./inspector.js";
 import type { ActiveTool, ChildActivity } from "./transcript.js";
-import { empty, framed, resultLines, type RunView } from "./render.js";
+import { elapsed, empty, framed, resultLines, type RunView } from "./render.js";
 import { loadRoles } from "./roles.js";
 import { RunCompletion } from "./completion.js";
 import { claimOwner, readRecord, storageDir, writeRecord } from "./storage.js";
@@ -107,6 +107,7 @@ interface Run {
 	segmentStartedAt: number;
 	forkedMessages?: number;
 	writer: boolean;
+	syncJoined?: boolean;
 	dirtyBefore?: Map<string, number>;
 	timer?: ReturnType<typeof setTimeout>;
 	sessionFile?: string;
@@ -652,7 +653,9 @@ function view(run: Run): RunView {
 		lastAttemptError: run.lastAttemptError,
 		toolCalls: run.toolCalls,
 		activeTool: run.activeTools.values().next().value,
-		joinedWaiters: run.completion.waiting,
+		// A synchronous launch is a blocked parent too, but only while it is actually running:
+		// the recorded outcome should not claim someone is still waiting on it.
+		joinedWaiters: run.completion.waiting + (run.syncJoined && run.status === "running" ? 1 : 0),
 		revision: run.revision,
 		lastTool: run.lastTool,
 		error: run.error,
@@ -1006,7 +1009,29 @@ export default function (pi: ExtensionAPI) {
 		} finally { signal?.removeEventListener("abort", abort); run.ready = undefined; }
 	}
 
+	// Async dispatch stays silent in the transcript; a call that blocks the parent's turn must not.
+	// Without this the parent simply stops for minutes with nothing on screen explaining why.
+	const blockingCall = (label: (args: any) => string | undefined) => (args: any, theme: any, ctx: any) => {
+		const text = label(args);
+		const state = ctx.state as { interval?: ReturnType<typeof setInterval>; startedAt?: number };
+		// Settlement is read from the run itself: the call renders before the result in the same
+		// pass, and forcing an extra pass reprints the whole block in regular mode. Once the
+		// outcome line exists it is the record, and a stale "waiting" above it would lie.
+		const run = runs.get(args?.runId ?? syncLaunches.get(ctx.toolCallId) ?? "");
+		if (!text || run?.completion.settled) { stopTicking(ctx); return empty(); }
+		state.startedAt ??= Date.now();
+		state.interval ??= setInterval(() => ctx.invalidate(), 1000);
+		const child = run ? ` \u00b7 ${run.status === "running" ? run.activeTools.values().next().value?.name ?? "thinking" : run.status}` : "";
+		return framed((width) => [truncateToWidth(theme.fg("accent", `\u23f3 ${text}`) + theme.fg("dim", `${child} \u00b7 ${elapsed(Date.now() - state.startedAt!)} \u00b7 abort to stop waiting; the child keeps running`), width, "\u2026")]);
+	};
+	// A synchronous launch has no run id in its arguments; its row needs one to know when to stop.
+	const syncLaunches = new Map<string, string>();
+	const stopTicking = (ctx: any) => {
+		const state = ctx?.state as { interval?: ReturnType<typeof setInterval> } | undefined;
+		if (state?.interval) { clearInterval(state.interval); state.interval = undefined; }
+	};
 	const resultRenderer = (title: string) => (result: any, opts: any, theme: any, ctx: any) => {
+		stopTicking(ctx);
 		const v = result.details as RunView | undefined;
 		// Async launch stays invisible in chat; its completion message is the one outcome record.
 		if ((title === "delegate" || ctx.args?.action === "wait") && v?.id) {
@@ -1023,7 +1048,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "delegate",
 		renderShell: "self",
-		renderCall: empty,
+		renderCall: blockingCall((args) => args?.sync ? `Waiting for a new ${args.role ?? "child"} \u2014 this launch joins at once (sync)` : undefined),
 		renderResult: resultRenderer("delegate"),
 		label: "Delegate",
 		description:
@@ -1107,7 +1132,7 @@ export default function (pi: ExtensionAPI) {
 				output: "",
 				startIdx: inherited.length,
 				forkedMessages: context === "fork" ? inherited.length : undefined,
-				writer: isWriter,
+				writer: isWriter, syncJoined: p.sync === true,
 				toolCalls: [],
 				activeTools: new Map(),
 				revision: 0,
@@ -1120,6 +1145,7 @@ export default function (pi: ExtensionAPI) {
 			runs.set(run.id, run);
 			changed();
 			const completion = run.completion;
+			if (p.sync) syncLaunches.set(_id, run.id);
 			const work = launch(run, p.task, p.sync ? signal : undefined, onUpdate, loader);
 
 			if (!p.sync) {
@@ -1135,7 +1161,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "delegate_ctl",
 		renderShell: "self",
-		renderCall: empty,
+		renderCall: blockingCall((args) => args?.action === "wait" ? `Waiting for ${args.runId ?? "a child"}` : undefined),
 		renderResult: resultRenderer("delegate_ctl"),
 		label: "Delegate control",
 		description:

@@ -42,7 +42,7 @@ Models live on OpenRouter but absent from the registry are listed separately (us
 
 ## While a child runs
 
-Launching never blocks the parent's turn; joining does. A prompt that appears queued as **Steering** in the parent editor means its turn is busy — typically inside `wait` or a `sync: true` launch — and the Agents frame says `parent blocked in wait` for as long as that holds. Aborting that tool detaches the waiter and leaves the child running.
+Launching never blocks the parent's turn; joining does. A blocking join writes a live line into the transcript for as long as it lasts — `⏳ Waiting for scout-… · bash · 2m14s · abort to stop waiting; the child keeps running` — and the Agents frame adds `parent blocked in wait`. While that line is on screen, a prompt you type is queued as **Steering** because the parent's turn is busy, not because delegation is synchronous. Aborting the tool detaches the waiter and leaves the child running; the line gives way to the outcome when the child finishes. An async launch writes nothing, because nothing is waiting.
 
 The parent is woken **once**, when a child finishes. There are deliberately no mid-run progress pings: an interrupt per tool call would spend a parent turn on information nobody asked for, and the human already watches live progress in the pinned Agents frame. Waiting is not the parent's work — it does other work, or `wait`s (blocking without polling), or takes a single `status` read:
 

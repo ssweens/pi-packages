@@ -31,7 +31,7 @@ Children run in the background by default. Keep the returned run id and do indep
 ## While a child runs
 You are woken **once**, when the child finishes. There are no mid-run progress pings, by design: an interrupt per tool call would cost a parent turn for information you did not ask for. The human already sees live progress in the pinned Agents frame.
 
-Launching never blocks your turn; joining does, on purpose. If the user's message shows up queued as **Steering**, your turn is busy — almost always inside `wait` or a `sync: true` launch, and the Agents frame says `parent blocked in wait` while that lasts. Aborting the tool detaches the wait and leaves the child running. Do not join a child you have no dependent work on.
+Launching never blocks your turn; joining does, on purpose. While you are joined, the transcript carries a live `⏳ Waiting for …` line and the Agents frame says `parent blocked in wait`. If the user's message shows up queued as **Steering**, that is why: your turn is busy inside `wait` or a `sync: true` launch, not because children are synchronous. Aborting the tool detaches the wait and leaves the child running. Do not join a child you have no dependent work on.
 
 So waiting is never your job:
 

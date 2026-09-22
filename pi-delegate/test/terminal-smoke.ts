@@ -75,6 +75,17 @@ try {
 		tmux("resize-window", "-t", "pi", "-x", "54", "-y", "20");
 		await expect(/LATEST-END/); save(`${mode}-narrow`);
 		key("Escape"); await expect(/PARENT-DRAFT/); await expect(/Agents.*active/, true);
+		// A blocking join must be visible in the transcript, not a silently frozen parent.
+		tmux("resize-window", "-t", "pi", "-x", "110", "-y", "36");
+		const joinGate = deferred();
+		api.script("Join a child", { tool: { name: "delegate", arguments: { role: "scout", context: "fresh", sync: true, model: "fixture/fixture:off", cwd: box.cwd, task: "Joined child\nReply JOINED-DONE." } } }, { text: "PARENT-SAW-RESULT" });
+		api.script("Joined child\nReply JOINED-DONE.", { text: "JOINED-DONE", gate: joinGate });
+		key("C-u"); await command("Join a child");
+		await expect(/Waiting for a new scout/); await expect(/abort to stop waiting/);
+		await expect(/parent blocked in wait/); save(`${mode}-waiting`);
+		joinGate.resolve(); await expect(/PARENT-SAW-RESULT/);
+		await expect(/Waiting for a new scout/, true); save(`${mode}-joined`);
+		assert.equal(capture().match(/Joined child · scout/g)?.length, 1, "the outcome is recorded once, not reprinted");
 		key("C-u"); await command("/agents"); await expect(/Finished agents/); key("Enter"); await expect(/LATEST-END/);
 		api.script("Resume detail", { text: "**RESUMED-SAME-CHILD**" });
 		await command("Resume detail"); await expect(/RESUMED-SAME-CHILD/); save(`${mode}-resumed`);
