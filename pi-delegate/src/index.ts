@@ -1064,16 +1064,33 @@ export default function (pi: ExtensionAPI) {
 		}
 		// One row per role, aligned and clipped to the terminal: the model still gets the full text.
 		if (result.details?.kind === "roles") {
-			const rows = result.details.rows as { name: string; mode: string; model: string; description: string; source: string }[];
+			type Row = { name: string; mode: string; model: string; approved: boolean; writes: boolean; tools: string[]; dropped: string[]; timeoutMs?: number; description: string; source: string };
+			const rows = result.details.rows as Row[];
+			const pad = (value: string, width: number) => value.padEnd(width);
 			const nameWidth = Math.max(...rows.map((r) => r.name.length), 4);
 			const modeWidth = Math.max(...rows.map((r) => r.mode.length), 4);
-			const modelWidth = Math.min(28, Math.max(...rows.map((r) => r.model.length), 5));
+			const modelWidth = Math.max(...rows.map((r) => r.model.length), 5);
+			// What a role does to your tree and what it costs to run it are the facts you pick by.
+			// Its prose is written for the model and does not survive a column, so it waits for the expand.
 			return framed((width) => [
 				theme.fg("toolTitle", theme.bold(title)) + ` ${theme.fg("accent", "roles")}` + theme.fg("muted", ` ${rows.length}`),
-				...rows.map((r) => truncateToWidth(
-					`  ${theme.fg("text", r.name.padEnd(nameWidth))}  ${theme.fg("muted", r.mode.padEnd(modeWidth))}  ${theme.fg(r.model === "needs approval" ? "warning" : "dim", r.model.padEnd(modelWidth))}  ${theme.fg("dim", r.description)}`,
+				...rows.map((r) => truncateToWidth("  "
+					+ theme.fg("text", pad(r.name, nameWidth)) + "  "
+					+ theme.fg("muted", pad(r.mode, modeWidth)) + "  "
+					+ theme.fg(r.approved ? "dim" : "warning", pad(r.model, modelWidth)) + "  "
+					+ theme.fg(r.writes ? "warning" : "success", r.writes ? "writes" : "read-only")
+					+ theme.fg("dim", ` · ${r.tools.length} tools`)
+					+ (r.timeoutMs ? theme.fg("dim", ` · ${Math.round(r.timeoutMs / 60000)}m`) : "")
+					+ (r.dropped.length ? theme.fg("warning", ` · ${r.dropped.length} unavailable`) : ""),
 					Math.max(1, width), "\u2026")),
-				...(opts.expanded ? rows.map((r) => theme.fg("dim", `  ${r.name}: ${r.source}`)) : []),
+				...(opts.expanded
+					? rows.flatMap((r) => [
+						"",
+						theme.fg("text", `  ${r.name}`) + theme.fg("dim", `  ${r.tools.join(" ")}`),
+						...wrapTextWithAnsi(theme.fg("dim", `  ${r.description}`), Math.max(1, width)),
+						theme.fg("dim", `  ${r.source}`),
+					])
+					: [theme.fg("muted", "  ") + keyHint("app.tools.expand", "what each role is for, and where it comes from")]),
 			]);
 		}
 		const text = (result.content?.filter((b: any) => b.type === "text").map((b: any) => b.text).join("\n") ?? "").trim();
@@ -1311,13 +1328,22 @@ export default function (pi: ExtensionAPI) {
 			if (p.action === "roles") {
 				const roles = [...loadRoles(ctx.cwd, ctx.isProjectTrusted()).values()].sort((a, b) => a.name.localeCompare(b.name));
 				const approved = loadDefaults().approved;
-				const rows = roles.map((r) => ({
-					name: r.name,
-					mode: `${r.context ?? "fork"}${r.thinking ? `:${r.thinking}` : ""}`,
-					model: approved[r.name]?.spec ?? r.model ?? "needs approval",
-					description: r.description,
-					source: r.source,
-				}));
+				const rows = roles.map((r) => {
+					const wanted = r.tools ?? BUILTIN_TOOLS;
+					const tools = wanted.filter((t) => BUILTIN_TOOLS.includes(t));
+					return {
+						name: r.name,
+						mode: `${r.context ?? "fork"}${r.thinking ? `:${r.thinking}` : ""}`,
+						model: approved[r.name]?.spec ?? r.model ?? "needs approval",
+						approved: Boolean(approved[r.name]),
+						writes: tools.some((t) => WRITE_TOOLS.has(t)),
+						tools,
+						dropped: wanted.filter((t) => !BUILTIN_TOOLS.includes(t)),
+						timeoutMs: r.timeoutMs,
+						description: r.description,
+						source: r.source,
+					};
+				});
 				const lines = rows.map((r, i) => `${r.name}  [${r.mode}]  ${approved[roles[i].name] ? "default" : "no default"}: ${r.model}  ${r.description}  (${r.source})`);
 				return { content: [{ type: "text", text: lines.join("\n") || "no roles found" }], details: { kind: "roles", rows } };
 			}

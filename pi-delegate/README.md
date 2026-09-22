@@ -105,7 +105,7 @@ The child transcript uses Pi's own assistant/user message, built-in tool, and ed
 
 Children are drawn the same way everywhere — pinned frame, `status`, completion record: a status glyph and bold title in the state's colour (accent while running, success, error, warning), the current tool in accent while it runs, then role, elapsed, turns, cost, failed attempts and changed files in descending emphasis. `status` without a run id lists one such row per child under a counted header.
 
-`roles` renders one aligned row per role (name, context and reasoning level, default offering, description clipped to the terminal), with the role file paths behind the expand. `status` and `result` on a single child render the same compact outcome line the transcript already uses. The text handed to the model is unchanged and complete in every case; only the human's view is clipped.
+`roles` renders one aligned row per role with the facts you choose by — context and reasoning level, the offering it will run on, whether it writes to your tree, how many tools it gets — and keeps each role's purpose and file path behind the expand. Role descriptions are written for the model and do not survive a column, so they are never clipped mid-sentence into one. `status` and `result` on a single child render the same compact outcome line the transcript already uses. The text handed to the model is unchanged and complete in every case; only the human's view is clipped.
 
 ## Reading a result
 
