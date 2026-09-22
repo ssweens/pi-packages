@@ -15,7 +15,6 @@ Extension packages for [pi](https://github.com/badlogic/pi-mono).
 | **pi-image-gen** | Provider-agnostic image generation |
 | **pi-dynamic-models** | Dynamic model discovery from any configured API server at startup |
 | **pi-huddle** | Huddle mode — read-only exploration + `ask_user` structured elicitation |
-| **pi-file-todos** | File-based todo tracking skill |
 | **pi-plugins** | Claude plugin marketplace support for Pi, including GitHub HTTPS and SSH marketplace repos |
 | **pi-multi-pass** | Multiple OAuth subscriptions with rate-limit rotation, pools, and failover |
 | **pi-strings** | Multi-agent ACP orchestration with persistent named workers and a hardened Pi adapter |
@@ -30,7 +29,6 @@ pi install @ssweens/pi-handoff
 pi install @ssweens/pi-image-gen
 pi install @ssweens/pi-dynamic-models
 pi install @ssweens/pi-huddle
-pi install @ssweens/pi-file-todos
 pi install @ssweens/pi-plugins
 pi install @ssweens/pi-multi-pass
 pi install @ssweens/pi-strings
