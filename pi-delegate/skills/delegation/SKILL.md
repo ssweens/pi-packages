@@ -23,13 +23,38 @@ Model is chosen per call from `delegate_ctl models` (below), never from memory o
 Run `reviewer` only when at least one holds: interface or public API change · security or concurrency · migration · more than ~5 files · behavior you could not observe · the change will be hard to reverse. Otherwise your own verification is acceptance. A review that has never changed an outcome is ceremony — stop running it.
 
 ## Correcting a child
-Bounded fix → `delegate_ctl steer` on the same run. The child keeps its context; no new child, no new review. New review only for a `rethink`-class change (decomposition or scope moved). Never re-send an unchanged brief.
+Bounded fix → `delegate_ctl steer` on the same run. The child keeps its context; no new child, no new review. Steering queues a correction or resumes a finished child in the background and returns immediately. Continue independent work; use `wait` when you need the resumed result. New review only for a `rethink`-class change (decomposition or scope moved). Never re-send an unchanged brief.
 
 ## Launching
-Children run in the background by default: the call returns a run id, you keep working or yield, and Pi wakes you with the result. Pass `sync: true` only when you cannot finish the turn without the result. Parallel lanes are several background calls with disjoint `cwd` or ownership — one writer per tree.
+Children run in the background by default. Keep the returned run id and do independent work. When dependent work needs the result, call `delegate_ctl` with `action: "wait"` and that `runId`; do not poll status, sleep, or relaunch the child. If you yield without joining, completion wakes you automatically.
+
+`wait` returns immediately for a finished run. Cancelling it only detaches the waiter; use `cancel` to stop the child. An attached waiter receives the report instead of a redundant completion wake-up. Check the returned terminal status before acting on the report.
+
+`sync: true` remains available when joining at launch is explicitly needed; a dependency discovered later is not a reason to require it upfront. Parallel lanes are several background calls with disjoint `cwd` or ownership — one writer per tree.
+
+If automatic continuation fails, distinguish child completion, notification delivery, and parent continuation using the transcript and runtime errors. Do not claim the cause from configuration alone or work around it by switching every launch to synchronous.
+
+## Execution model and terminal independence
+Keep children in the parent Pi process. Here, **background means asynchronous, not a detached worker**. Use `delegate` and `delegate_ctl` for child coordination. The pinned Agents frame shows only live work; finished children leave one expandable transcript line. For human inspection, `/agents` opens finished-child history; Ctrl+J focuses live children or opens history when idle. Opening history or a child transcript does not restart work.
+
+If work must continue after a terminal disconnect, run the **parent Pi inside tmux**. Use one tmux session per independent workstream, not per subagent. Detach from tmux instead of quitting Pi. Keep using the delegation tools; do not orchestrate children through terminal panes. tmux is optional, not a package dependency.
+
+Distinguish the lifetimes: tmux preserves the running Pi process across terminal disconnects; saved sessions recover conversation context after Pi exits or crashes. Neither keeps in-process children executing after Pi dies or the machine shuts down.
+
+Do not add a detached-worker supervisor merely for terminal independence. Revisit that design only when a concrete task requires children to keep executing after the parent Pi process exits, or requires ownership to move between parent processes.
+
+## Reload and revival
+`/reload` reconnects to live children; it does not restart them. Reopening the same parent after exit restores saved children without running work. `status`, `result`, `wait`, and the child view are inspection, not revival.
+
+Use `steer` to revive an inactive child under the same ID, transcript, and saved execution configuration. Do not relaunch just to recover a report. A completed result awaiting delivery is not interrupted execution.
+
+If the child is `interrupted`, inspect its saved work before continuing; tool side effects are not rolled back. If it was explicitly stopped, use `restart: true` only after the user requests a restart. Missing history or an unavailable saved model requires a decision, not a silent replacement.
 
 ## The brief
+Start with a short task title on its own line. It labels the child in the Agents frame; the UI does not guess a summary.
+
 ```
+<short task title>
 OBJECTIVE      observable outcome + acceptance evidence
 OWNERSHIP      files/modules owned; explicit exclusions; "not alone in the repo"
 INTERFACES     settled signatures, constraints, non-goals

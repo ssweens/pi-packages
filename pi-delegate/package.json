@@ -5,6 +5,9 @@
   "type": "module",
   "main": "src/index.ts",
   "license": "MIT",
+  "scripts": {
+    "test": "node --experimental-strip-types --test test/*.test.ts"
+  },
   "pi": {
     "extensions": [
       "./src/index.ts"
@@ -13,10 +16,16 @@
       "./skills"
     ]
   },
+  "dependencies": {
+    "proper-lockfile": "^4.1.2"
+  },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*"
+    "@earendil-works/pi-coding-agent": ">=0.86.1"
   },
   "keywords": [
     "pi-package"
-  ]
+  ],
+  "devDependencies": {
+    "@types/proper-lockfile": "^4.1.4"
+  }
 }

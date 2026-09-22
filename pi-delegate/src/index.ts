@@ -1,11 +1,13 @@
 import { execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import {
 	type ExtensionAPI,
 	type ExtensionContext,
 	buildSessionContext,
+	convertToLlm,
 	createAgentSession,
 	DefaultResourceLoader,
 	ModelRuntime,
@@ -13,15 +15,16 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
-import { type ActivityItem, Inspector, type LiveSource, railComponent } from "./inspector.js";
-import { borderFor, callLines, dispatchLine, empty, frame, framed, resultLines, type RunView } from "./render.js";
-import { loadRoles, type Role } from "./roles.js";
+import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { type ActivityItem, AgentHistory, AgentsPanel, ChildView, type LiveSource } from "./inspector.js";
+import { empty, framed, resultLines, type RunView } from "./render.js";
+import { loadRoles } from "./roles.js";
+import { RunCompletion } from "./completion.js";
+import { claimOwner, readRecord, storageDir, writeRecord } from "./storage.js";
 
 const AGENT_DIR = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
 const LOG_FILE = join(AGENT_DIR, "delegate-runs.jsonl");
 const DEFAULTS_FILE = join(AGENT_DIR, "delegate-models.json");
-/** Child transcripts live with the work: <cwd>/.agents/pi/subsessions. */
-const SUBSESSION_DIR = join(".agents", "pi", "subsessions");
 const RATINGS_FILE = join(AGENT_DIR, "delegate-ratings.json");
 const STALE_DAYS = 30;
 const RATINGS_STALE_DAYS = 14;
@@ -45,10 +48,23 @@ CHANGES: <files changed, from the actual diff; or none>
 VERIFIED: <commands or flows run and their concrete results>
 GAPS: <unfinished work or blockers, or none>`;
 
-type Status = "running" | "complete" | "error" | "cancelled" | "timeout";
+type Status = RunView["status"];
+type RunResult = { content: { type: "text"; text: string }[]; details: RunView; isError: boolean };
 
 interface Run {
 	id: string;
+	ownerKey: string;
+	recordPath: string;
+	segment: number;
+	stopped: boolean;
+	acknowledged: boolean;
+	systemPrompt: string;
+	contextFiles: { path: string; content: string }[];
+	appendSystemPrompt: string[];
+	tools: string[];
+	timeoutMs: number;
+	sessionId: string;
+	completion: RunCompletion<RunResult>;
 	role: string;
 	model: string;
 	thinking: string;
@@ -67,8 +83,13 @@ interface Run {
 	error?: string;
 	lastTool?: string;
 	toolCalls: { name: string; args: Record<string, unknown>; at: number }[];
+	activeTools: Map<string, { name: string; args: Record<string, unknown> }>;
+	revision: number;
+	streamingMessage?: any;
+	activityCache?: { revision: number; items: ActivityItem[] };
 	contextWindow?: number;
 	session?: any;
+	ready?: Promise<void>;
 	startIdx: number;
 	forkedMessages?: number;
 	writer: boolean;
@@ -77,12 +98,74 @@ interface Run {
 	sessionFile?: string;
 }
 
-const runs = new Map<string, Run>();
-let seq = 0;
+interface Owner {
+	key: string;
+	path: string;
+	runPaths: string[];
+	queued: Set<string>;
+	closed: boolean;
+	lost?: Error;
+	release: () => Promise<void>;
+	binding?: { pi: ExtensionAPI; ctx: ExtensionContext };
+}
+interface RuntimeState {
+	runs: Map<string, Run>;
+	owners: Map<string, Owner>;
+	listeners: Set<() => void>;
+}
+// This is the process-owned execution layer. Extension instances are replaceable UI/tool bindings.
+// Never persist live session objects; a fresh process reconstructs only inert records from disk.
+const runtimeKey = Symbol.for("@ssweens/pi-delegate/runtime/1");
+const processState = globalThis as typeof globalThis & { [key: symbol]: RuntimeState };
+const state = processState[runtimeKey] ??= { runs: new Map(), owners: new Map(), listeners: new Set() };
+const { runs, listeners } = state;
+function changed() { for (const listener of listeners) listener(); }
+function newId(role: string): string { return `${role}-${randomUUID()}`; }
+function ownerPath(ctx: ExtensionContext): string {
+	return join(storageDir(ctx.sessionManager.getCwd()), "owners", `${ctx.sessionManager.getSessionId()}.json`);
+}
+function ownedRuns(owner: Owner): Run[] { return [...runs.values()].filter((r) => r.ownerKey === owner.key); }
 
-function newId(role: string): string {
-	seq += 1;
-	return `${role}-${Date.now().toString(36)}-${seq}`;
+type RunRecord = Omit<Run, "completion" | "session" | "timer" | "streamingMessage" | "activeTools" | "activityCache" | "dirtyBefore" | "ready" | "acknowledged"> & { version: 1; savedAt: number };
+function saveRun(run: Run): void {
+	const owner = state.owners.get(run.ownerKey);
+	if (owner?.lost) throw owner.lost;
+	const { completion, session, timer, streamingMessage, activeTools, activityCache, dirtyBefore, ready, acknowledged, ...record } = run;
+	writeRecord(run.recordPath, { ...record, version: 1, savedAt: Date.now() });
+}
+function messagesOf(run: Run): any[] {
+	if (!run.sessionFile) return [];
+	const manager = run.session?.sessionManager ?? openTranscript(run);
+	return manager.getEntries().filter((e: any) => e.type === "message").map((e: any) => e.message);
+}
+function openTranscript(run: Run): SessionManager {
+	if (!run.sessionFile || !existsSync(run.sessionFile)) throw new Error(`${run.id}: saved transcript is missing; refusing to start a replacement.`);
+	const manager = SessionManager.open(run.sessionFile);
+	if (manager.getSessionId() !== run.sessionId) throw new Error(`${run.id}: transcript identity does not match its saved configuration.`);
+	return manager;
+}
+function finalResult(run: Run): RunResult {
+	return { content: [{ type: "text", text: resultText(run) }], details: { ...view(run), settled: true, completionReceipt: true, toolCalls: [...run.toolCalls] }, isError: run.status !== "complete" };
+}
+function restoreRun(path: string, owner: Owner): Run {
+	const record = readRecord<RunRecord>(path);
+	if (!record || record.version !== 1 || record.ownerKey !== owner.key || typeof record.id !== "string" ||
+		typeof record.systemPrompt !== "string" || !Array.isArray(record.contextFiles) || !Array.isArray(record.appendSystemPrompt) || !Array.isArray(record.tools) || typeof record.sessionId !== "string" ||
+		!Number.isInteger(record.segment) || typeof record.cwd !== "string" || !Array.isArray(record.toolCalls)) {
+		throw new Error(`Cannot restore delegate metadata: ${path}`);
+	}
+	// Parent message_end hooks run before Pi appends the message. Only its transcript
+	// can establish durable delivery after a crash; never trust a saved in-memory acknowledgement.
+	const run: Run = { ...record, recordPath: path, acknowledged: false, completion: new RunCompletion(), activeTools: new Map() };
+	if (run.status === "running") {
+		run.status = "interrupted";
+		run.endedAt = record.savedAt;
+		run.error = "The previous process ended before this execution settled. Inspect its saved work; send a message to continue.";
+	}
+	try { harvest(run); }
+	catch (error) { run.status = "error"; run.error = String(error); }
+	run.completion.settle(finalResult(run));
+	return run;
 }
 
 function parseModelSpec(spec: string): { provider?: string; id: string; thinking?: string } {
@@ -155,7 +238,7 @@ function trimDangling(messages: any[]): any[] {
 }
 
 function harvest(run: Run) {
-	const msgs: any[] = run.session?.messages ?? [];
+	const msgs = messagesOf(run);
 	let turns = 0;
 	const tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 	let cost = 0;
@@ -496,6 +579,9 @@ const MAX_TOOL_CALLS = 200;
 function view(run: Run): RunView {
 	return {
 		id: run.id,
+		segment: run.segment,
+		stopped: run.stopped,
+		settled: run.completion.settled,
 		role: run.role,
 		model: run.model,
 		thinking: run.thinking,
@@ -512,6 +598,8 @@ function view(run: Run): RunView {
 		changedFiles: run.changedFiles,
 		droppedTools: run.droppedTools,
 		toolCalls: run.toolCalls,
+		activeTool: run.activeTools.values().next().value,
+		revision: run.revision,
 		lastTool: run.lastTool,
 		error: run.error,
 		sessionFile: run.sessionFile,
@@ -546,7 +634,7 @@ function resultText(run: Run): string {
 function log(run: Run) {
 	try {
 		mkdirSync(dirname(LOG_FILE), { recursive: true });
-		const { session: _s, timer: _t, ...rest } = run;
+		const { session: _s, timer: _t, activityCache: _a, streamingMessage: _m, activeTools: _tools, completion: _completion, ready: _ready, systemPrompt: _prompt, contextFiles: _context, appendSystemPrompt: _append, ...rest } = run;
 		appendFileSync(LOG_FILE, `${JSON.stringify({ ...rest, output: run.output.slice(0, 2000), ts: Date.now() })}\n`);
 	} catch {
 		/* logging must never fail the run */
@@ -554,10 +642,11 @@ function log(run: Run) {
 }
 
 function retire(keep: Run) {
-	const finished = [...runs.values()].filter((r) => r !== keep && r.session && r.status !== "running");
+	const finished = [...runs.values()].filter((r) => r.ownerKey === keep.ownerKey && r !== keep && r.session && r.completion.settled);
 	finished.sort((a, b) => (a.endedAt ?? 0) - (b.endedAt ?? 0));
 	while (finished.length > MAX_RETAINED_SESSIONS - 1) {
 		const r = finished.shift()!;
+		r.activityCache = { revision: r.revision, items: activityOf(r) };
 		try {
 			r.session.dispose();
 		} catch {
@@ -573,220 +662,274 @@ function finish(run: Run, status: Status, error?: string) {
 	run.endedAt = Date.now();
 	run.status = status;
 	if (error) run.error = error;
-	if (run.session) harvest(run);
+	try { if (run.session) harvest(run); }
+	catch (e) { run.status = "error"; run.error = `Cannot read child transcript: ${String(e)}`; }
+	run.activeTools.clear();
+	run.streamingMessage = undefined;
+	run.revision++;
+	try { saveRun(run); }
+	catch (e) { run.status = "error"; run.error = `Could not persist completion: ${String(e)}`; }
 	log(run);
 	retire(run);
+	run.completion.settle(finalResult(run));
+	changed();
 }
 
 async function cancelRun(run: Run) {
-	if (run.status !== "running") return;
-	run.status = "cancelled";
-	await run.session?.abort();
+	run.stopped = true;
+	if (run.status === "running") run.status = "cancelled";
+	try { saveRun(run); }
+	finally { changed(); await run.session?.abort(); }
 }
 
-/** Continue a finished child in its own session with a correction. Same code path for the tool and the inspector. */
-async function steerFinished(run: Run, message: string, signal?: AbortSignal) {
-	run.status = "running";
-	run.endedAt = undefined;
-	run.error = undefined;
-	run.dirtyBefore = snapshotDirty(run.cwd);
-	run.timer = setTimeout(() => {
-		run.status = "timeout";
-		run.session.abort().catch(() => {});
-	}, DEFAULT_TIMEOUT_MS);
-	signal?.addEventListener(
-		"abort",
-		() => {
-			if (run.status === "running") {
-				run.status = "cancelled";
-				run.session.abort().catch(() => {});
-			}
-		},
-		{ once: true },
-	);
+function publish(completion: RunCompletion<RunResult>) {
+	if (completion.claimed) return;
+	const result = completion.result;
+	const run = runs.get(result.details.id);
+	if (!run || run.segment !== result.details.segment || run.acknowledged) return;
+	const owner = state.owners.get(run.ownerKey);
+	if (!owner?.binding || owner.closed || owner.lost) return;
+	const key = `${run.id}:${run.segment}`;
+	if (owner.queued.has(key)) return;
+	owner.queued.add(key);
 	try {
-		await run.session.prompt(message);
-		finish(run, run.status === "running" ? "complete" : run.status);
-	} catch (e: any) {
-		finish(run, run.status === "running" ? "error" : run.status, String(e?.message ?? e));
-	}
+		owner.binding.pi.sendMessage(
+			{ customType: "delegate", content: `delegate finished\n${result.content[0].text}`, display: true, details: result.details },
+			{ deliverAs: "followUp", triggerTurn: true },
+		);
+	} catch (error) { owner.queued.delete(key); throw error; }
 }
 
-/** Ordered tool calls + assistant/user text from the child's live message list, after the forked prefix. */
-function activityOf(run: Run): ActivityItem[] {
-	const out: ActivityItem[] = [];
-	const msgs: any[] = run.session?.messages ?? [];
-	for (let i = run.startIdx; i < msgs.length; i++) {
-		const m = msgs[i];
-		if (m?.role === "user") {
-			const t = Array.isArray(m.content) ? m.content.filter((b: any) => b?.type === "text").map((b: any) => b.text).join("") : String(m.content ?? "");
-			if (t.trim()) out.push({ kind: "user", text: t });
-		} else if (m?.role === "assistant") {
-			for (const b of m.content ?? []) {
-				if (b?.type === "text" && b.text?.trim()) out.push({ kind: "text", text: b.text });
-				if (b?.type === "toolCall") out.push({ kind: "tool", name: b.name, args: (b.arguments ?? {}) as Record<string, unknown> });
-			}
+function acknowledge(owner: Owner, details: any) {
+	const run = details?.id ? runs.get(details.id) : undefined;
+	if (!run || !details.completionReceipt || run.ownerKey !== owner.key || details.status === "running" || details.segment !== run.segment || run.acknowledged) return;
+	run.acknowledged = true;
+	owner.queued.delete(`${run.id}:${run.segment}`);
+}
+
+async function closeOwner(owner: Owner) {
+	owner.binding = undefined;
+	owner.closed = true;
+	await Promise.all(ownedRuns(owner).map(async (run) => {
+		if (!run.completion.settled) {
+			if (run.status === "running") run.status = "interrupted";
+			await run.session?.abort();
+			await run.completion.wait();
 		}
+		run.session?.dispose();
+		runs.delete(run.id);
+	}));
+	try { await owner.release(); } finally { state.owners.delete(owner.key); }
+}
+
+/** Reserve a segment before awaiting setup: concurrent steers cannot create duplicate sessions. */
+function beginResume(run: Run, restart: boolean) {
+	if (!run.completion.settled) throw new Error(`${run.id} is still stopping; wait for completion before resuming.`);
+	if (run.stopped && !restart) throw new Error(`${run.id} was explicitly stopped. Restart only at the user's request (steer with restart: true).`);
+	if (run.writer) {
+		const clash = [...runs.values()].find((r) => r !== run && !r.completion.settled && r.writer && r.cwd === run.cwd);
+		if (clash) throw new Error(`${clash.id} is already writing in ${run.cwd}; wait before resuming this child.`);
 	}
-	// Session not retained (retired) — fall back to the tool calls we captured.
-	if (!out.length && run.toolCalls.length) return run.toolCalls.map((t) => ({ kind: "tool" as const, ...t }));
+	openTranscript(run); // Missing history is an error, never permission to start over.
+	const next: Run = { ...run, segment: run.segment + 1, stopped: false, acknowledged: false,
+		status: "running", endedAt: undefined, error: undefined, revision: run.revision + 1,
+		completion: new RunCompletion<RunResult>() };
+	saveRun(next);
+	Object.assign(run, next);
+	changed();
+}
+
+/** Actual conversation after the inherited prefix, including streamed text and tool results. */
+function activityOf(run: Run): ActivityItem[] {
+	if (run.activityCache?.revision === run.revision) return run.activityCache.items;
+	const out: ActivityItem[] = [];
+	const textOf = (content: any) => typeof content === "string" ? content : (content ?? []).map((b: any) => b.type === "text" ? b.text : b.type === "image" ? "[image attachment]" : "").join("\n");
+	const append = (m: any) => {
+		if (m?.role === "user") out.push({ kind: "user", text: textOf(m.content) });
+		else if (m?.role === "toolResult") out.push({ kind: "result", text: textOf(m.content), isError: Boolean(m.isError) });
+		else if (m?.role === "assistant") for (const b of m.content ?? []) {
+			if (b.type === "text" && b.text) out.push({ kind: "text", text: b.text });
+			if (b.type === "toolCall") out.push({ kind: "tool", name: b.name, args: b.arguments ?? {} });
+		}
+	};
+	let msgs: any[];
+	try { msgs = messagesOf(run); }
+	catch (error) { return [{ kind: "result", text: String(error), isError: true }]; }
+	for (let i = run.startIdx; i < msgs.length; i++) append(msgs[i]);
+	if (run.streamingMessage && !msgs.includes(run.streamingMessage)) append(run.streamingMessage);
+	run.activityCache = { revision: run.revision, items: out };
 	return out;
 }
 
-const liveSource: LiveSource = {
-	running: () => [...runs.values()].filter((r) => r.status === "running").map(view),
-	all: () => [...runs.values()].map(view),
-	activity: (id) => {
-		const r = runs.get(id);
-		return r ? activityOf(r) : [];
-	},
-	steer: async (id, message) => {
-		const r = runs.get(id);
-		if (!r) throw new Error(`unknown run ${id}`);
-		if (!r.session) throw new Error(`${id}: session not retained`);
-		if (r.status === "running") await r.session.steer(message);
-		else void steerFinished(r, message);
-	},
-	cancel: async (id) => {
-		const r = runs.get(id);
-		if (r) await cancelRun(r);
-	},
-};
-
 export default function (pi: ExtensionAPI) {
-	let runtime: ModelRuntime | undefined;
-	const getRuntime = async () => (runtime ??= await ModelRuntime.create());
+	// Reload refreshes configuration for future session opens. Live children retain the
+	// runtime they already own; replacing a binding must not mutate their provider state.
+	let modelRuntime: Promise<ModelRuntime> | undefined;
+	const getRuntime = () => modelRuntime ??= ModelRuntime.create();
+	let owner: Owner | undefined;
+	let attachError: string | undefined;
+	function requireOwner(): Owner {
+		if (!owner || owner.closed || owner.lost || owner.binding?.pi !== pi) throw new Error(attachError ?? owner?.lost?.message ?? "Delegate runtime is not attached to this parent.");
+		return owner;
+	}
+	async function attach(ctx: ExtensionContext) {
+		const path = ownerPath(ctx);
+		let existing = state.owners.get(path);
+		if (existing?.binding && existing.binding.pi !== pi) throw new Error("This parent already has an attached delegate runtime.");
+		if (!existing) {
+			const created: Owner = { key: path, path, runPaths: [], queued: new Set(), closed: false, release: async () => {} };
+			created.release = await claimOwner(path, (error) => {
+				created.lost = error;
+				created.binding?.ctx.ui.notify(`Delegate ownership lost: ${error.message}`, "error");
+				void closeOwner(created).catch(() => {});
+			});
+			state.owners.set(path, created);
+			try {
+				const index = readRecord<{ version: number; runs: string[] }>(path);
+				if (index && (index.version !== 1 || !Array.isArray(index.runs) || index.runs.some((p) => typeof p !== "string"))) throw new Error(`Invalid delegate index: ${path}`);
+				created.runPaths = index?.runs ?? [];
+				for (const recordPath of created.runPaths) {
+					const run = restoreRun(recordPath, created);
+					runs.set(run.id, run);
+				}
+			} catch (error) { await closeOwner(created); throw error; }
+			existing = created;
+		}
+		owner = existing;
+		owner.binding = { pi, ctx };
+		attachError = undefined;
+		// The parent's persisted receipt is the durable delivery acknowledgement.
+		for (const entry of ctx.sessionManager.getEntries()) {
+			if (entry.type === "custom_message" && entry.customType === "delegate") acknowledge(owner, entry.details);
+			if (entry.type === "message" && entry.message.role === "toolResult") acknowledge(owner, entry.message.details);
+		}
+		for (const run of ownedRuns(owner)) if (run.completion.settled) publish(run.completion);
+	}
+	async function steer(run: Run, message: string, restart = false) {
+		requireOwner();
+		if (run.status === "running") {
+			await run.ready;
+			if (run.status === "running") { await run.session.steer(message); return; }
+		}
+		beginResume(run, restart);
+		const completion = run.completion;
+		void launch(run, message).then(() => publish(completion));
+	}
+	const liveSource: LiveSource = {
+		all: () => owner ? ownedRuns(owner).map(view) : [],
+		activity: (id) => { const r = runs.get(id); return r && r.ownerKey === owner?.key ? activityOf(r) : []; },
+		subscribe: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+		steer: async (id, message) => {
+			const r = runs.get(id);
+			if (!r || r.ownerKey !== requireOwner().key) throw new Error(`${id}: child is not owned by this parent`);
+			await steer(r, message, true); // A message typed directly by the human is an explicit restart request.
+		},
+		cancel: async (id) => { const r = runs.get(id); if (r?.ownerKey === requireOwner().key) await cancelRun(r); },
+	};
+	pi.on("message_end", (event) => {
+		if (!owner?.binding || owner.binding.pi !== pi) return;
+		const message = event.message;
+		if ((message.role === "custom" && message.customType === "delegate") || message.role === "toolResult") acknowledge(owner, message.details);
+	});
 
-	async function launch(
-		run: Run,
-		role: Role,
-		model: any,
-		thinking: string,
-		tools: string[],
-		task: string,
-		timeoutMs: number,
-		ctx: ExtensionContext,
-		signal: AbortSignal | undefined,
-		onUpdate?: (u: any) => void,
-	) {
-		const loader = new DefaultResourceLoader({
-			cwd: run.cwd,
-			agentDir: AGENT_DIR,
-			noExtensions: true,
-			noSkills: true,
-			noPromptTemplates: true,
-			noThemes: true,
-			systemPrompt: role.systemPrompt + (role.systemPrompt.includes("STATUS:") ? "" : CONTRACT_FOOTER),
-		} as any);
-		await loader.reload();
-
-		const subsessionDir = join(run.cwd, SUBSESSION_DIR);
-		mkdirSync(subsessionDir, { recursive: true });
-		// Self-ignoring: transcripts stay out of git status and out of any `git add -A` a child runs.
-		// Scoped to this directory so a repo can still track .agents/ for agent definitions.
-		try {
-			const ignore = join(subsessionDir, ".gitignore");
-			if (!existsSync(ignore)) writeFileSync(ignore, "*\n");
-		} catch {
-			/* never fail a run over housekeeping */
+	async function openSession(run: Run, onUpdate?: (u: any) => void, preparedLoader?: DefaultResourceLoader) {
+		if (run.session) return;
+		if (!statSync(run.cwd).isDirectory()) throw new Error(`Saved working directory is unavailable: ${run.cwd}`);
+		const runtime = await getRuntime();
+		const slash = run.model.indexOf("/");
+		const model = runtime.getModel(run.model.slice(0, slash), run.model.slice(slash + 1));
+		if (!model) throw new Error(`Saved model is unavailable: ${run.model}. No fallback was selected.`);
+		const loader = preparedLoader ?? new DefaultResourceLoader({
+			cwd: run.cwd, agentDir: AGENT_DIR,
+			noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
+			systemPrompt: run.systemPrompt,
+			agentsFilesOverride: () => ({ agentsFiles: run.contextFiles }),
+			appendSystemPromptOverride: () => run.appendSystemPrompt,
+		});
+		if (!preparedLoader) await loader.reload();
+		const manager = openTranscript(run);
+		// A crash may have happened before the first prompt was appended. Preserve the original
+		// brief before the explicit revival message rather than silently discarding the task.
+		if (run.segment > 1 && !messagesOf(run).some((message, index) => index >= run.startIdx && message.role === "user")) {
+			manager.appendMessage({ role: "user", content: [{ type: "text", text: run.task }], timestamp: run.startedAt });
 		}
 		const { session } = await createAgentSession({
-			cwd: run.cwd,
-			model,
-			thinkingLevel: thinking as any,
-			tools,
-			resourceLoader: loader,
-			sessionManager: SessionManager.create(run.cwd, subsessionDir),
-			modelRuntime: await getRuntime(),
+			cwd: run.cwd, model, thinkingLevel: run.thinking as any,
+			tools: run.tools, resourceLoader: loader,
+			sessionManager: manager, modelRuntime: runtime,
 		} as any);
 		run.session = session;
-		run.sessionFile = session.sessionFile;
-		run.dirtyBefore = snapshotDirty(run.cwd);
-
-		if (run.context === "fork") {
-			const parent = buildSessionContext(ctx.sessionManager.buildContextEntries());
-			const forked = trimDangling(parent.messages);
-			session.agent.state.messages = forked;
-			run.startIdx = forked.length;
-			run.forkedMessages = forked.length;
-		}
+		saveRun(run);
 
 		session.subscribe((ev: any) => {
+			if (ev.type === "message_start" || ev.type === "message_update") {
+				if (ev.message?.role === "assistant") run.streamingMessage = ev.message;
+			}
+			if (ev.type === "message_end") run.streamingMessage = undefined;
 			if (ev.type === "tool_execution_start") {
 				run.lastTool = ev.toolName;
+				run.activeTools.set(ev.toolCallId, { name: ev.toolName, args: ev.args ?? {} });
 				if (run.toolCalls.length < MAX_TOOL_CALLS) run.toolCalls.push({ name: ev.toolName, args: (ev.args ?? {}) as Record<string, unknown>, at: Date.now() });
-				onUpdate?.({ content: [{ type: "text", text: `${run.id}: ${ev.toolName}` }], details: view(run) });
+				if (state.owners.get(run.ownerKey)?.binding?.pi === pi) onUpdate?.({ content: [{ type: "text", text: `${run.id}: ${ev.toolName}` }], details: view(run) });
 			}
+			if (ev.type === "tool_execution_end") run.activeTools.delete(ev.toolCallId);
+			run.revision++;
+			if (ev.type === "message_end") {
+				try { saveRun(run); }
+				catch (error) { run.status = "error"; run.error = `Cannot save child state: ${String(error)}`; void session.abort(); }
+			}
+			changed();
 		});
+	}
 
-		run.timer = setTimeout(() => {
-			run.status = "timeout";
-			session.abort().catch(() => {});
-		}, timeoutMs);
-		signal?.addEventListener(
-			"abort",
-			() => {
-				if (run.status === "running") {
-					run.status = "cancelled";
-					session.abort().catch(() => {});
-				}
-			},
-			{ once: true },
-		);
-
+	async function launch(run: Run, task: string, signal?: AbortSignal, onUpdate?: (u: any) => void, preparedLoader?: DefaultResourceLoader) {
+		const abort = () => { if (run.status === "running") { run.status = "cancelled"; run.stopped = true; void run.session?.abort(); } };
+		signal?.addEventListener("abort", abort, { once: true });
 		try {
-			await session.prompt(task);
+			if (signal?.aborted) abort();
+			run.ready = openSession(run, onUpdate, preparedLoader);
+			await run.ready;
+			if (run.status === "running") {
+				run.dirtyBefore = snapshotDirty(run.cwd);
+				run.timer = setTimeout(() => { run.status = "timeout"; void run.session.abort(); }, run.timeoutMs);
+				await run.session.prompt(task, { preflightResult: (accepted: boolean) => {
+					// Pi abort() cannot cancel prompt preflight while its agent is still idle.
+					// Recheck at the SDK's dispatch boundary, before it starts the agent loop.
+					if (accepted && run.status !== "running") throw new Error("Child stopped before prompt dispatch.");
+				} });
+			}
 			finish(run, run.status === "running" ? "complete" : run.status);
 		} catch (e: any) {
 			finish(run, run.status === "running" ? "error" : run.status, String(e?.message ?? e));
-		}
+		} finally { signal?.removeEventListener("abort", abort); run.ready = undefined; }
 	}
 
-	/** omp-style frame. Call preview owns the frame until a result exists; then the result owns it. */
-	const callRenderer = (title: string) => (args: any, theme: any, ctx: any) => {
-		if (ctx.state?.hasResult) return empty();
-		const sub = args?.role ?? args?.action;
-		const header = `${theme.fg("accent", "\u25c6")} ${theme.fg("toolTitle", theme.bold(title))}${sub ? theme.fg("muted", `: ${sub}`) : ""}`;
-		const body = args?.role || args?.task ? callLines(args, theme) : args?.runId || args?.message ? [theme.fg("dim", [args.runId, args.message ? `"${String(args.message).slice(0, 60)}"` : ""].filter(Boolean).join("  "))] : [];
-		return framed((width) => frame(header, body, "borderMuted", theme, width));
-	};
 	const resultRenderer = (title: string) => (result: any, opts: any, theme: any, ctx: any) => {
-		// Collapse the call preview on the next tick. Invalidating synchronously re-enters updateDisplay
-		// from inside it and duplicates children.
-		if (ctx.state && !ctx.state.hasResult) {
-			ctx.state.hasResult = true;
-			setTimeout(() => ctx.invalidate?.(), 0);
+		const v = result.details as RunView | undefined;
+		// Async launch stays invisible in chat; its completion message is the one outcome record.
+		if ((title === "delegate" || ctx.args?.action === "wait") && v?.id) {
+			if (v.status === "running") return empty();
+			return framed((width) => resultLines(v, opts.expanded, theme, width));
 		}
-		const sub = ctx.args?.role ?? ctx.args?.action;
-		const header = `${theme.fg("accent", "◆")} ${theme.fg("toolTitle", theme.bold(title))}${sub ? theme.fg("muted", `: ${sub}`) : ""}`;
-		const snap = result.details as RunView | undefined;
-		// Prefer live state: async runs return a "running" snapshot and finish later; the spinner tick re-renders until done.
-		const liveRun = snap && typeof snap === "object" && "id" in snap ? runs.get(snap.id) : undefined;
-		const v = liveRun ? view(liveRun) : snap;
-		if (!v || typeof v !== "object" || !("id" in v)) {
-			const text = result.content?.[0]?.type === "text" ? result.content[0].text : "";
-			const all = text.split("\n");
-			const body = opts.expanded || all.length <= 12 ? all : all.slice(0, 12).concat(theme.fg("dim", `… ${all.length - 12} more lines (ctrl+o)`));
-			return framed((width) => frame(header, body, result.isError ? "error" : "border", theme, width));
-		}
-		// Running: a static dispatch record. Live progress is the rail's job; the rail's tick re-renders this
-		// frame too, so it flips to the full result on completion without its own timer.
-		if (v.status === "running") return framed((width) => frame(header, [dispatchLine(v, theme, width - 4)], "borderMuted", theme, width));
-		return framed((width) => frame(header, resultLines(v, opts.expanded, theme, width - 4, 0), borderFor(v), theme, width));
+		const text = result.content?.filter((b: any) => b.type === "text").map((b: any) => b.text).join("\n") ?? "";
+		const lines = text.split("\n");
+		const body = opts.expanded ? lines : lines.slice(0, 12);
+		if (!opts.expanded && lines.length > 12) body.push("… Ctrl+O expand");
+		return framed((width) => [theme.fg(result.isError ? "error" : "dim", `${title}${ctx.args?.action ? ` · ${ctx.args.action}` : ""}`), ...body.flatMap((line: string) => wrapTextWithAnsi(line, Math.max(1, width)))]);
 	};
 
 	pi.registerTool({
 		name: "delegate",
 		renderShell: "self",
-		renderCall: callRenderer("delegate"),
+		renderCall: empty,
 		renderResult: resultRenderer("delegate"),
 		label: "Delegate",
 		description:
 			"Run a role on a task in its own session; returns its final report, changed files, tokens, cost, and a runId. Load the delegation skill for when to delegate, review triggers, and the model-proposal procedure. " +
 			"Delegate only for context isolation, parallelism, or a model-tier switch — if the brief would be longer than the expected diff, do the work yourself. " +
-			"Brief = objective, ownership, interfaces/constraints, verification, return shape. " +
+			"Start the brief with a short task title on its own line, then objective, ownership, interfaces/constraints, verification, return shape. " +
 			'context "fork" (default) hands the child your conversation so far; "fresh" is for adversarial review. ' +
-			"Runs in the background by default \u2014 the call returns a run id at once and you are woken when the child finishes; pass sync:true only when you must have the result inside this turn. Children have built-in tools only. Model: run delegate_ctl models first; a role's approved default is used when model: is omitted. Proposing a model that is not the approved default is a conversation with the user, not a tool step: state the offering, price, rating and tradeoff, get their answer, then call delegate; if they want it kept, delegate_ctl action=approve. Use delegate_ctl to list roles, check status, steer, or cancel.",
+			"Runs in the background by default \u2014 the call returns a run id at once and you are woken when the child finishes. When later work depends on it, use delegate_ctl wait with that runId rather than polling or relaunching. sync:true joins at launch when explicitly needed. Children have built-in tools only. Model: run delegate_ctl models first; a role's approved default is used when model: is omitted. Proposing a model that is not the approved default is a conversation with the user, not a tool step: state the offering, price, rating and tradeoff, get their answer, then call delegate; if they want it kept, delegate_ctl action=approve. Use delegate_ctl to list roles, wait, check status, steer, or cancel.",
 		parameters: Type.Object({
 			role: Type.String({ description: "role name (delegate_ctl action=roles lists them)" }),
 			task: Type.String({ description: "the brief" }),
@@ -798,38 +941,58 @@ export default function (pi: ExtensionAPI) {
 			reason: Type.Optional(Type.String({ description: "one line: why this model for this role; recorded in the run log" })),
 		}),
 		async execute(_id, p, signal, onUpdate, ctx) {
-			const cwd = p.cwd ?? ctx.cwd;
+			const owner = requireOwner();
+			const cwd = realpathSync(p.cwd ?? ctx.cwd);
 			const roles = loadRoles(cwd, ctx.isProjectTrusted());
 			const role = roles.get(p.role);
 			if (!role) {
 				return {
 					content: [{ type: "text", text: `unknown role "${p.role}". available: ${[...roles.keys()].sort().join(", ")}` }],
-					isError: true,
+					isError: true, details: undefined,
 				};
 			}
 			// Model: explicit param, else the role's approved default, else the role file, else the parent's.
 			const approved = loadDefaults().approved[role.name];
 			const { model, thinking: specThinking } = resolveModel(p.model ?? approved?.spec ?? role.model, ctx);
-			if (!model) return { content: [{ type: "text", text: "no model available for child" }], isError: true };
+			if (!model) return { content: [{ type: "text", text: "no model available for child" }], isError: true, details: undefined };
 			const thinking = String(specThinking ?? (p.model ? undefined : approved?.spec.split(":")[1]) ?? role.thinking ?? ctx.thinkingLevel ?? "");
 			const timeoutMs = p.timeoutMs ?? role.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 			const wantedTools = role.tools ?? BUILTIN_TOOLS;
 			const isWriter = wantedTools.some((t) => WRITE_TOOLS.has(t));
+			const tools = wantedTools.filter((t) => BUILTIN_TOOLS.includes(t));
+			if (!tools.length) tools.push("read");
+			const systemPrompt = role.systemPrompt + (role.systemPrompt.includes("STATUS:") ? "" : CONTRACT_FOOTER);
+			const loader = new DefaultResourceLoader({ cwd, agentDir: AGENT_DIR, systemPrompt,
+				noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true });
+			await loader.reload();
+			requireOwner(); // Setup may have yielded through a parent session replacement.
 			if (isWriter) {
-				const clash = [...runs.values()].find((r) => r.status === "running" && r.writer && r.cwd === cwd);
-				if (clash) {
-					return {
-						content: [{ type: "text", text: `refused: ${clash.id} (${clash.role}) is already writing in ${cwd}. One writer per tree \u2014 wait, cancel it, or give this child its own cwd/worktree.` }],
-						isError: true,
-					};
-				}
+				const clash = [...runs.values()].find((r) => !r.completion.settled && r.writer && r.cwd === cwd);
+				if (clash) return { content: [{ type: "text", text: `refused: ${clash.id} (${clash.role}) is already writing in ${cwd}. One writer per tree — wait, cancel it, or give this child its own cwd/worktree.` }], isError: true, details: undefined };
 			}
+			// Freeze the runtime inputs before advertising a run, including project instructions.
+			const dir = storageDir(cwd);
+			const created = SessionManager.create(cwd, dir);
+			const sessionFile = created.getSessionFile()!;
+			// Pi normally defers the first disk write until an assistant replies. Establish its own
+			// header now so a crash before the first response still leaves a resumable identity.
+			writeFileSync(sessionFile, `${JSON.stringify(created.getHeader())}\n`, { flag: "wx", mode: 0o600 });
+			const manager = SessionManager.open(sessionFile);
+			const context = p.context ?? role.context ?? "fork";
+			const inherited = context === "fork" ? convertToLlm(trimDangling(buildSessionContext(ctx.sessionManager.buildContextEntries()).messages)) : [];
+			for (const message of inherited) manager.appendMessage(message);
+			const id = newId(role.name);
 			const run: Run = {
-				id: newId(role.name),
+				id, ownerKey: owner.key, recordPath: join(dir, `${encodeURIComponent(id)}.json`),
+				segment: 1, stopped: false, acknowledged: false,
+				systemPrompt, contextFiles: loader.getAgentsFiles().agentsFiles, appendSystemPrompt: loader.getAppendSystemPrompt(),
+				tools, timeoutMs,
+				sessionFile, sessionId: manager.getSessionId(),
+				completion: new RunCompletion<RunResult>(),
 				role: role.name,
-				model: "",
-				thinking: "",
-				context: p.context ?? role.context ?? "fork",
+				model: modelKey(model),
+				thinking,
+				context,
 				cwd,
 				task: p.task,
 				status: "running",
@@ -838,52 +1001,51 @@ export default function (pi: ExtensionAPI) {
 				tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 				cost: 0,
 				changedFiles: [],
-				droppedTools: [],
+				droppedTools: wantedTools.filter((t) => !BUILTIN_TOOLS.includes(t)),
 				output: "",
-				startIdx: 0,
+				startIdx: inherited.length,
+				forkedMessages: context === "fork" ? inherited.length : undefined,
 				writer: isWriter,
 				toolCalls: [],
+				activeTools: new Map(),
+				revision: 0,
 				contextWindow: model.contextWindow,
 			};
+			saveRun(run);
+			const paths = [...owner.runPaths, run.recordPath];
+			writeRecord(owner.path, { version: 1, runs: paths });
+			owner.runPaths = paths;
 			runs.set(run.id, run);
-
-			run.model = modelKey(model);
-			run.thinking = thinking;
-			const tools = wantedTools.filter((t) => BUILTIN_TOOLS.includes(t));
-			run.droppedTools = wantedTools.filter((t) => !BUILTIN_TOOLS.includes(t));
-			if (!tools.length) tools.push("read");
-			const work = launch(run, role, model, run.thinking, tools, p.task, timeoutMs, ctx, p.sync ? signal : undefined, onUpdate);
+			changed();
+			const completion = run.completion;
+			const work = launch(run, p.task, p.sync ? signal : undefined, onUpdate, loader);
 
 			if (!p.sync) {
-				work.then(() => {
-					pi.sendMessage(
-						{ customType: "delegate", content: `delegate finished\n${resultText(run)}`, display: true, details: view(run) },
-						{ deliverAs: "followUp", triggerTurn: true },
-					);
-				});
-				return { content: [{ type: "text", text: `${run.id} running (${run.context}, ${run.model}). You will be woken with the result; delegate_ctl status/steer/cancel meanwhile.` }], details: view(run) };
+				void work.then(() => publish(completion));
+				return { content: [{ type: "text", text: `${run.id} running (${run.context}, ${run.model}). Completion will wake you; use delegate_ctl wait with this runId when dependent work needs the result.` }], details: view(run) };
 			}
 
 			await work;
-			return { content: [{ type: "text", text: resultText(run) }], details: view(run), isError: run.status !== "complete" };
+			return completion.result;
 		},
 	});
 
 	pi.registerTool({
 		name: "delegate_ctl",
 		renderShell: "self",
-		renderCall: callRenderer("delegate_ctl"),
+		renderCall: empty,
 		renderResult: resultRenderer("delegate_ctl"),
 		label: "Delegate control",
 		description:
 			"See the delegation skill for the full procedure. models: every offering across all enabled providers, verbatim from the registry (provider/id, reasoning, context, $/M), plus live OpenRouter pricing, tiered rates, expirations and Artificial Analysis indices, your cached ratings, approved defaults and drift \u2014 call before the first delegate of a session. " +
 			"rate: store quality ratings you researched, per exact offering (provider/id), so choices are grounded; stale after 14 days. approve: record a role's default model after the user agreed in conversation. " +
-			"roles: list roles. status: one run or all. result: full report. steer: correct a running or finished child (keeps its context). cancel: abort.",
+			"roles: list roles. status: one run or all. result: current report without waiting. wait: join an existing runId without polling; returns its final report, immediately if finished. Cancelling wait only detaches; the child keeps running. An attached waiter receives completion instead of a separate wake-up. steer: queue a correction or resume a finished child in the background, keeping its context; returns immediately. Use wait to join the resumed work. Saved children are restored on parent reopen without running; steer revives them with their original configuration. Explicitly stopped children require restart:true and the user's request. cancel: stop the child and prevent automatic revival.",
 		parameters: Type.Object({
-			action: StringEnum(["models", "rate", "approve", "roles", "status", "result", "steer", "cancel"] as const),
+			action: StringEnum(["models", "rate", "approve", "roles", "status", "result", "wait", "steer", "cancel"] as const),
 			role: Type.Optional(Type.String({ description: "approve: role name" })),
 			model: Type.Optional(Type.String({ description: "approve: provider/id[:thinking] the user agreed to" })),
 			runId: Type.Optional(Type.String()),
+			restart: Type.Optional(Type.Boolean({ description: "steer only: restart an explicitly stopped child, only when the user requested it" })),
 			message: Type.Optional(Type.String({ description: "steer: the correction. models: substring filter. approve: one-line reason the user agreed to" })),
 			ratings: Type.Optional(
 				Type.Array(
@@ -899,17 +1061,17 @@ export default function (pi: ExtensionAPI) {
 		}),
 		async execute(_id, p, signal, onUpdate, ctx) {
 			if (p.action === "approve") {
-				if (!p.role || !p.model) return { content: [{ type: "text", text: "approve requires role and model" }], isError: true };
+				if (!p.role || !p.model) return { content: [{ type: "text", text: "approve requires role and model" }], isError: true, details: undefined };
 				const { model, thinking } = resolveModel(p.model, ctx);
-				if (!model) return { content: [{ type: "text", text: `model not found: ${p.model}` }], isError: true };
+				if (!model) return { content: [{ type: "text", text: `model not found: ${p.model}` }], isError: true, details: undefined };
 				const spec = `${modelKey(model)}${thinking ? `:${thinking}` : ""}`;
 				saveDefault(p.role, { spec, reason: p.message, approvedAt: Date.now(), cost: model.cost ? { input: model.cost.input, output: model.cost.output } : undefined }, (ctx.modelRegistry as any).getAvailable());
-				return { content: [{ type: "text", text: `${p.role} \u2192 ${spec} saved as default (${DEFAULTS_FILE.replace(homedir(), "~")}). Only call this after the user has agreed in conversation.` }] };
+				return { content: [{ type: "text", text: `${p.role} \u2192 ${spec} saved as default (${DEFAULTS_FILE.replace(homedir(), "~")}). Only call this after the user has agreed in conversation.` }], details: undefined };
 			}
 			if (p.action === "rate") {
-				if (!p.ratings?.length) return { content: [{ type: "text", text: "rate requires ratings: [{model, score, source, note?}]" }], isError: true };
+				if (!p.ratings?.length) return { content: [{ type: "text", text: "rate requires ratings: [{model, score, source, note?}]" }], isError: true, details: undefined };
 				const r = saveRatings(p.ratings);
-				return { content: [{ type: "text", text: `stored ${p.ratings.length}; ${Object.keys(r.entries).length} rated in total. Run models to see them applied.` }] };
+				return { content: [{ type: "text", text: `stored ${p.ratings.length}; ${Object.keys(r.entries).length} rated in total. Run models to see them applied.` }], details: undefined };
 			}
 			if (p.action === "models") {
 				const all: any[] = (ctx.modelRegistry as any).getAvailable();
@@ -968,7 +1130,7 @@ export default function (pi: ExtensionAPI) {
 					: f
 						? `\n\nno registry offering matches "${p.message}"`
 						: "\n\nno rated offerings; message=<substring> to search, action=rate to add";
-				return { content: [{ type: "text", text: `${defaultsReport(ctx)}\n${ratingsStatus(ratings)}\n${liveStatus(live)}\n\n${head}${body}${liveOnlyStr}\n\nproviders: ${provLine}` }] };
+				return { content: [{ type: "text", text: `${defaultsReport(ctx)}\n${ratingsStatus(ratings)}\n${liveStatus(live)}\n\n${head}${body}${liveOnlyStr}\n\nproviders: ${provLine}` }], details: undefined };
 			}
 			if (p.action === "roles") {
 				const roles = [...loadRoles(ctx.cwd, ctx.isProjectTrusted()).values()].sort((a, b) => a.name.localeCompare(b.name));
@@ -976,75 +1138,103 @@ export default function (pi: ExtensionAPI) {
 				const lines = roles.map(
 					(r) => `${r.name}  [${r.context ?? "fork"}${r.model ? `, ${r.model}` : ""}${r.thinking ? `:${r.thinking}` : ""}]  default: ${approved[r.name]?.spec ?? "none \u2014 needs approval"}  ${r.description}  (${r.source})`,
 				);
-				return { content: [{ type: "text", text: lines.join("\n") || "no roles found" }] };
+				return { content: [{ type: "text", text: lines.join("\n") || "no roles found" }], details: undefined };
 			}
+			const owner = requireOwner();
 			if (p.action === "status" && !p.runId) {
-				const lines = [...runs.values()].map((r) => `${summary(r).split("\n")[0]}${r.status === "running" && r.lastTool ? `  last: ${r.lastTool}` : ""}`);
-				return { content: [{ type: "text", text: lines.join("\n") || "no runs" }] };
+				const lines = ownedRuns(owner).map((r) => `${summary(r).split("\n")[0]}${r.status === "running" && r.lastTool ? `  last: ${r.lastTool}` : ""}`);
+				return { content: [{ type: "text", text: lines.join("\n") || "no runs" }], details: undefined };
 			}
 			const run = p.runId ? runs.get(p.runId) : undefined;
-			if (!run) return { content: [{ type: "text", text: `unknown runId ${p.runId ?? "(none)"}; known: ${[...runs.keys()].join(", ") || "none"}` }], isError: true };
+			if (!run || run.ownerKey !== owner.key) throw new Error(`unknown runId ${p.runId ?? "(none)"}; known: ${ownedRuns(owner).map((r) => r.id).join(", ") || "none"}`);
 
 			switch (p.action) {
+				case "wait":
+					return await run.completion.wait(signal);
 				case "status":
 					if (run.session && run.status === "running") harvest(run);
 					return { content: [{ type: "text", text: `${summary(run)}${run.status === "running" && run.lastTool ? `\nlast tool: ${run.lastTool}` : ""}` }], details: view(run) };
 				case "result":
-					return { content: [{ type: "text", text: resultText(run) }], details: view(run) };
+					return run.completion.settled ? finalResult(run) : { content: [{ type: "text", text: resultText(run) }], details: view(run) };
 				case "cancel":
-					if (run.status !== "running") return { content: [{ type: "text", text: `${run.id} already ${run.status}` }] };
 					await cancelRun(run);
-					return { content: [{ type: "text", text: `${run.id} cancelled` }] };
+					return { content: [{ type: "text", text: `${run.id} stopped; automatic revival is disabled.` }], details: view(run) };
 				case "steer": {
-					if (!p.message) return { content: [{ type: "text", text: "steer requires message" }], isError: true };
-					if (!run.session) return { content: [{ type: "text", text: `${run.id} has no retained session (retired); start a new delegate with context fork` }], isError: true };
-					if (run.status === "running") {
-						await run.session.steer(p.message);
-						return { content: [{ type: "text", text: `${run.id}: steer queued` }] };
-					}
-					await steerFinished(run, p.message, signal);
-					return { content: [{ type: "text", text: resultText(run) }], details: view(run), isError: run.status !== "complete" };
+					if (!p.message) throw new Error("steer requires message");
+					const running = run.status === "running";
+					await steer(run, p.message, p.restart);
+					return { content: [{ type: "text", text: `${run.id}: ${running ? "steer queued" : "resumed in the background"}. Completion will wake you; use wait to join.` }], details: view(run) };
 				}
 			}
-			return { content: [{ type: "text", text: "unreachable" }], isError: true };
+			return { content: [{ type: "text", text: "unreachable" }], isError: true, details: undefined };
 		},
 	});
 
 	pi.registerMessageRenderer("delegate", (message: any, { expanded }: any, theme: any) => {
 		const v = message.details as RunView | undefined;
 		if (!v || typeof v !== "object" || !("id" in v)) return undefined;
-		const header = `${theme.fg("accent", "◆")} ${theme.fg("toolTitle", theme.bold("delegate"))}${theme.fg("muted", `: ${v.role}`)} ${theme.fg("dim", "finished")}`;
-		// The tool frame above is live and already shows the full result; the wake is a one-line notice unless expanded.
-		return framed((width) => frame(header, expanded ? resultLines(v, true, theme, width - 4, 0) : resultLines(v, false, theme, width - 4, 0).slice(0, 1), borderFor(v), theme, width));
+		return framed((width) => resultLines(v, expanded, theme, width));
 	});
 
-	const SHORTCUT = "ctrl+j";
-	pi.on("session_start", (_ev, ctx) => {
-		if (!ctx.hasUI) return;
-		ctx.ui.setWidget("delegate-rail", (tui, theme) => railComponent(liveSource, theme, () => tui.requestRender(), SHORTCUT));
-	});
-	pi.registerShortcut(SHORTCUT, {
-		description: "Inspect running delegate children",
-		handler: async (ctx) => {
-			if (!ctx.hasUI) return;
-			if (!runs.size) {
-				ctx.ui.notify("delegate: no runs this session", "info");
-				return;
-			}
+	let panel: AgentsPanel | undefined;
+	let navigationOpen = false;
+	const childDrafts = new Map<string, string>();
+	async function openChild(ctx: ExtensionContext, id: string) {
+		if (navigationOpen) return;
+		navigationOpen = true;
+		try {
 			await ctx.ui.custom<undefined>(
-				(tui, theme, _kb, done) => new Inspector(liveSource, theme, () => tui.requestRender(), done, (path) => ctx.ui.setEditorText(`pi --session ${path}`)),
-				{ overlay: true, overlayOptions: { width: "90%", maxHeight: "80%", anchor: "center" } },
+				(childTui, childTheme, _kb, done) => new ChildView(id, liveSource, childTheme, childTui, () => done(undefined), childDrafts.get(id) ?? "", (draft) => { childDrafts.set(id, draft); }),
+				{ overlay: true, overlayOptions: { width: "100%", maxHeight: "100%", anchor: "top-left", margin: 0 } },
 			);
+		} catch (e) { ctx.ui.notify(`Cannot open child: ${String(e)}`, "error"); }
+		finally { navigationOpen = false; }
+	}
+	async function openHistory(ctx: ExtensionContext) {
+		if (navigationOpen || ctx.mode !== "tui") return;
+		const finished = liveSource.all().filter((r) => r.settled);
+		if (!finished.length) { ctx.ui.notify("No finished agents.", "info"); return; }
+		navigationOpen = true;
+		let id: string | undefined;
+		try {
+			id = await ctx.ui.custom<string | undefined>(
+				(tui, theme, _kb, done) => new AgentHistory(finished, theme, tui, done),
+				{ overlay: true, overlayOptions: { width: "90%", maxHeight: "100%", anchor: "center", margin: 1 } },
+			);
+		} catch (e) { ctx.ui.notify(`Cannot open agent history: ${String(e)}`, "error"); }
+		finally { navigationOpen = false; }
+		if (id) await openChild(ctx, id);
+	}
+	pi.on("session_start", async (_ev, ctx) => {
+		try { await attach(ctx); }
+		catch (error) { attachError = String(error); ctx.ui.notify(attachError, "error"); return; }
+		if (ctx.mode !== "tui") return;
+		ctx.ui.setWidget("delegate-agents", (tui, theme) => {
+			panel = new AgentsPanel(liveSource, theme, tui, (id) => openChild(ctx, id));
+			return panel;
+		});
+	});
+	pi.registerCommand("agents", {
+		description: "Open finished delegate history without restarting children",
+		handler: async (_args, ctx) => { await openHistory(ctx); },
+	});
+	pi.registerShortcut("ctrl+j", {
+		description: "Focus active delegates, or open finished history when idle",
+		handler: async (ctx) => {
+			if (navigationOpen) return;
+			if (liveSource.all().some((r) => !r.settled)) panel?.focus();
+			else await openHistory(ctx);
 		},
 	});
 
-	pi.on("session_shutdown", async () => {
-		for (const r of runs.values()) {
-			try {
-				r.session?.dispose();
-			} catch {
-				/* ignore */
-			}
-		}
+	pi.on("session_shutdown", async (event) => {
+		panel?.dispose();
+		panel = undefined;
+		const previous = owner;
+		owner = undefined;
+		if (!previous || previous.binding?.pi !== pi) return;
+		previous.binding = undefined;
+		// A reload replaces only the binding. Actual exit/session replacement settles and parks children.
+		if (event.reason !== "reload") await closeOwner(previous);
 	});
 }
