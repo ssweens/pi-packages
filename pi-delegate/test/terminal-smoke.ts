@@ -49,9 +49,13 @@ try {
 		writeFileSync(launch, `#!/bin/sh\ncd ${quote(box.cwd)}\nexec env HOME=${quote(box.root)} PI_CODING_AGENT_DIR=${quote(box.agentDir)} PI_OFFLINE=1 PI_TELEMETRY=0 DELEGATE_SMOKE_ROOT=${quote(box.root)} ${args.map(quote).join(" ")}\n`, { mode: 0o700 });
 		tmux("new-session", "-d", "-s", "pi", "-x", "110", "-y", "36", `sh ${quote(launch)}`);
 		await expect(/FIXTURE-READY/);
+		// Startup diagnostics are failures. An [Extension issues] banner sat in every capture
+		// one evening while this suite kept passing; never again.
+		assert.doesNotMatch(capture(), /\[Extension issues\]/);
+		assert.doesNotMatch(capture(), /shortcut conflict/);
 		await command("/fixture-spawn Native detail");
 		await expect(/Agents.*1 active/);
-		text("PARENT-DRAFT"); key("C-j"); key("Enter");
+		text("PARENT-DRAFT"); key("M-j"); key("Enter");
 		await expect(/^\s+OUTPUT-30\s*$/m); save(`${mode}-collapsed-live`);
 		assert.doesNotMatch(capture(), /"command":|"path":/);
 		assert.match(capture(), /earlier lines|more lines/);
@@ -63,7 +67,7 @@ try {
 		key("C-o"); key("PPage"); await expect(/^\s+OUTPUT-(?:1|2)\s*$/m); save(`${mode}-expanded`);
 		key("C-o"); key("C-End");
 		text("CHILD-DRAFT"); key("Escape"); await expect(/PARENT-DRAFT/);
-		key("C-j"); key("Enter"); await expect(/CHILD-DRAFT/); key("C-u");
+		key("M-j"); key("Enter"); await expect(/CHILD-DRAFT/); key("C-u");
 		writeFileSync(release, "release");
 		await expect(/Streaming line 35/); save(`${mode}-streaming-latest`);
 		key("PPage"); await expect(/scroll paused/);
@@ -129,7 +133,17 @@ try {
 		api.script("Restart detail", { text: "RESTARTED-SAME-CHILD" });
 		await command("Restart detail"); await expect(/RESTARTED-SAME-CHILD/); save(`${mode}-restarted`);
 		key("Escape"); await expect(/FIXTURE-READY/);
-		await command("/reload"); await expect(/FIXTURE-READY/); await expect(/Agents.*active/, true);
+		await command("/reload");
+		await expect(/Reloaded .*extensions/); // the real completion line; a persisting footer proves nothing
+		await expect(/Agents.*active/, true);
+		assert.doesNotMatch(capture(), /\[Extension issues\]/);
+		// Ctrl+J stays the newline. Without it, terminals lacking the kitty protocol cannot
+		// type a multiline draft at all — the regression that motivated moving our key.
+		text("MULTI-A"); key("C-j"); text("MULTI-B");
+		await expect(/MULTI-A/);
+		await expect(/MULTI-B/);
+		save(`${mode}-multiline`);
+		key("C-c"); await expect(/MULTI-B/, true);
 		tmux("kill-session", "-t", "pi");
 	}
 	const events = readFileSync(join(box.root, "trace.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
@@ -140,7 +154,7 @@ try {
 		assert.equal(new Set(outcomes.map((e) => e.details.sessionFile)).size, 1);
 	}
 	assert.deepEqual(api.errors, []);
-	console.log(`PASS real Pi regular/fullscreen: native collapsed/expanded tools, streaming latest, paused scrolling, narrow resize, drafts, same-ID revival, hidden finished frame.\nEvidence: ${box.root}`);
+	console.log(`PASS real Pi regular/fullscreen: clean startup, native collapsed/expanded tools, streaming latest, paused scrolling, narrow resize, drafts, same-ID revival, hidden finished frame.\nEvidence: ${box.root}`);
 } catch (error) {
 	try { save("failure"); } catch { /* process may already have exited */ }
 	console.error(`Evidence: ${box.root}`); throw error;

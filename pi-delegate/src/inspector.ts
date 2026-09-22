@@ -86,7 +86,7 @@ export class AgentsPanel implements Component, Focusable {
 	handleInput(data: string) {
 		const rows = this.rows();
 		let index = Math.max(0, rows.findIndex((r) => r.id === this.selectedId));
-		if (matchesKey(data, "escape") || matchesKey(data, "ctrl+j")) { this.release(); return; }
+		if (matchesKey(data, "escape") || matchesKey(data, "alt+j")) { this.release(); return; }
 		if (matchesKey(data, "up")) index--;
 		else if (matchesKey(data, "down")) index++;
 		else if (matchesKey(data, "pageUp")) index -= LIST_ROWS;
@@ -134,7 +134,7 @@ export class AgentsPanel implements Component, Focusable {
 		const joined = rows.some((v) => v.joinedWaiters);
 		const header = this.theme.bold("Agents") + this.theme.fg("muted", ` · ${rows.length} active${range}`)
 			+ (joined ? this.theme.fg("warning", " · parent blocked in wait") : "");
-		const hint = this.focused ? "↑↓ select · Enter open · Esc editor" : "Ctrl+J focus agents · /agents history";
+		const hint = this.focused ? "↑↓ select · Enter open · Esc editor" : "Alt+J focus agents · /agents history";
 		return withLegend(frame(header, body.map((l) => truncateToWidth(l, inner, "…")), this.focused ? "borderAccent" : "borderMuted", this.theme, width), hint, this.theme, width);
 	}
 

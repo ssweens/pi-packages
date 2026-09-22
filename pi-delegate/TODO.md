@@ -23,6 +23,12 @@ Two tools. In `settings.packages`; `pi-subagents` and `pi-strings` removed, `set
 - Discovery, lowest → highest priority: package `roles/` → `~/.pi/agent/agents/` → `~/.agents/agents/` (skips `_*`/`.*`) → `<cwd>/.pi/agents/` when trusted.
 - State: `~/.pi/agent/delegate-runs.jsonl` (plaintext task, tokens, cost, duration, changed files), `delegate-models.json` (approved defaults + catalog snapshot), `delegate-ratings.json` (agent-researched ratings, stale after 14 days), child transcripts in `<cwd>/.agents/pi/subsessions/` — with the work, not under `~/.pi`.
 
+## Startup banner and the stolen newline (uncommitted)
+
+- Reported: every startup printed `[Extension issues] … shortcut conflict: 'ctrl+j' is built-in shortcut for tui.input.newLine`. It had been sitting at the top of every terminal capture all along; the suite passed because nothing asserted on startup state. The banner was truthful and worse than noise: Ctrl+J is the **only** newline that works without the kitty keyboard protocol, so the override made multiline drafts impossible there — while the README claimed "Shift+Enter still inserts a newline" unconditionally. The tmux runs even warned `extended-keys is off`, and no test typed a multiline draft.
+- Moved the entrance key to **Alt+J** (same letter, free of built-ins and editor bindings, xterm-standard ESC-prefixed encoding — works without kitty). Ctrl+J is the newline again on every terminal. README/skill/hint updated; the Shift+Enter claim is now qualified.
+- Testing fixes, the real lesson: startup diagnostics are failures — smoke now asserts no `[Extension issues]` and no `shortcut conflict`, and types a multiline draft through Ctrl+J. It also waits for `/reload`'s own completion line (`Reloaded …extensions`) instead of passing on a persisting footer, and polls for typed text instead of asserting on an instant capture. Three assertions in this flow had been passing on pre-existing screen state.
+
 ## Crash on reload (fixed, uncommitted at time of note)
 
 - **Reported crash:** `TypeError: Cannot read properties of undefined (reading 'length')` in the roles renderer, taking the whole app down. Root cause: tool results live in the transcript and are re-rendered after `/reload`, including records written by earlier versions whose `details.rows` lacked the `tools` field added today. The renderer trusted today's shape and read `r.tools.length` off last week's record. My smoke only ever exercised fresh results — that gap is exactly what a transcript carries and a smoke does not.
