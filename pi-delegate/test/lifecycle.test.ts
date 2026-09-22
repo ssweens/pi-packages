@@ -100,10 +100,15 @@ test("real SDK delegation lifecycle (loopback provider, no credentials)", { time
 			for (const noise of [/INHERITED-ORCHESTRATION/, /DELEGATE-TOOL-RESULT/, /CONTROL-ARGUMENT/, /CONTROL-TOOL-RESULT/, /DELEGATE-COMPLETION-NOTICE/, /"name":"delegate/]) assert.doesNotMatch(inherited, noise);
 			// A message whose only content was a delegation call leaves no empty turn behind.
 			assert(!(await arrived).messages.some((m: any) => Array.isArray(m.content) && m.content.length === 0));
+			// And the child is told whose conversation it is reading, so it does not adopt the supervising voice.
+			const system = (await arrived).messages.find((m: any) => m.role === "system").content;
+			assert.match(system, /It belongs to the agent that delegated to you/);
+			assert.match(system, /you are the worker it hired/);
 		});
 		await t.test("the child's report is quoted, never blended into this tool's own reporting", async () => {
 			api.script("Quoted report", { text: "CHILD-WORDS" });
 			const result = await h.launch("Quoted report", { sync: true });
+			assert.equal(result.details.joinedWaiters, 0);
 			const [summary, report] = result.content[0].text.split(/^----- \S+ reported, verbatim -----$/m);
 			assert.match(summary, /^complete \u00b7 scout-[\w-]+ \u00b7 role scout \u00b7 model fixture\/fixture:off \u00b7 context fresh \u00b7 1 turn in \d+s \u00b7 tokens in \d/);
 			// Progress is a read the parent can take at any time, not something it must wait for.
@@ -113,7 +118,14 @@ test("real SDK delegation lifecycle (loopback provider, no credentials)", { time
 			const status = await h.ctl("status", id);
 			assert.match(status.content[0].text, /^running \u00b7 /);
 			assert.match(status.content[0].text, /\nnow: thinking \u00b7 0 tool calls so far \u00b7 10 min of its budget left$/);
-			const wait = h.ctl("wait", id); gate.resolve(); await wait;
+			// A blocked parent turn is visible while it lasts, so a queued prompt is explicable.
+			assert.equal(state().runs.get(id).completion.waiting, 0);
+			const wait = h.ctl("wait", id);
+			await sleep(10);
+			assert.equal(state().runs.get(id).completion.waiting, 1);
+			assert.equal((await h.ctl("status", id)).details.joinedWaiters, 1);
+			gate.resolve(); await wait;
+			assert.equal(state().runs.get(id).completion.waiting, 0);
 			assert.match(summary, new RegExp(`\nsession: ${result.details.sessionFile}`));
 			assert.doesNotMatch(summary, /CHILD-WORDS/);
 			assert.doesNotMatch(summary, /error:|changed:|could not have/);

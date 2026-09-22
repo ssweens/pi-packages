@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.3] - 2026-09-22
+
+### Fixed
+- **Streams that are accepted and never start no longer cost five minutes each.** Some Vertex deployments answer a streaming request with `200 text/event-stream` and then send nothing at all. Measured on `zai-org/glm-5.2-maas` (global): 9 of 19 requests, with and without tools, while `zai-org/glm-4.7-maas` and `deepseek-ai/deepseek-v3.2-maas` on the same endpoint and credentials stalled 0 of 22. undici only abandons a silent body after its 300 s timeout, so each dead request burned five minutes before a retry could start — a one-line answer through a delegated agent took ten minutes and two `terminated` errors.
+
+  The fetch wrapper that strips keepalive lines now also bounds the wait for the **first** byte, default 90 s, configurable with `PI_VERTEX_FIRST_BYTE_TIMEOUT_MS` (`0` disables). A stream that has begun is untouched: genuinely slow ones keep the socket alive with the keepalive lines this wrapper strips further down, and mid-stream gaps remain undici's business. The error names the endpoint and says retrying or another offering is the fix.
+
+  This is a client-side bound on someone else's outage, not a repair of it. `glm-5.2` on the global MaaS endpoint is unreliable for interactive use; it has no regional endpoint (`us-central1` answers HTTP 400).
+
+### Added
+- `npm test` with a first-byte-timeout check covering a dead stream, a slow-starting stream, and keepalive stripping.
+
 ## [1.2.2] - 2026-09-03
 ### Added
 - **GLM 5.2** (`glm-5.2`) — 1M context, 64,000 max output, thinking, tools, and global Vertex endpoint. Pricing is $1.40/$4.40 per 1M input/output tokens with $0.26/1M cached input tokens.

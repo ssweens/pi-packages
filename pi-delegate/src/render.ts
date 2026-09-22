@@ -28,6 +28,7 @@ export interface RunView {
 	lastAttemptError?: string;
 	toolCalls: { name: string; args: Record<string, unknown>; at?: number }[];
 	activeTool?: { name: string; args: Record<string, unknown> };
+	joinedWaiters?: number;
 	revision: number;
 	lastTool?: string;
 	error?: string;

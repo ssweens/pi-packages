@@ -74,6 +74,55 @@ function createKeepaliveStripper(): TransformStream<Uint8Array, Uint8Array> {
   });
 }
 
+/**
+ * Some Vertex deployments accept a streaming request, answer 200, and then send nothing at
+ * all \u2014 observed on `zai-org/glm-5.2-maas` (global) for roughly half of all requests, while
+ * glm-4.7 and deepseek on the same endpoint and credentials never did it. undici only gives up
+ * after its 300 s body timeout, so every dead request costs five minutes before a retry starts.
+ *
+ * Bound the wait for the *first* byte only. A stream that has begun is left alone: a genuinely
+ * slow one keeps the socket alive with keepalive lines (stripped further down, but counted here
+ * because this sits upstream of the stripper), and mid-stream gaps stay undici's business.
+ */
+const FIRST_BYTE_TIMEOUT_MS = Number(process.env.PI_VERTEX_FIRST_BYTE_TIMEOUT_MS ?? 90_000);
+
+function withFirstByteTimeout(body: ReadableStream<Uint8Array>, url: string, timeoutMs: number): ReadableStream<Uint8Array> {
+  if (!(timeoutMs > 0)) return body;
+  const reader = body.getReader();
+  let started = false;
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      if (started) {
+        const { done, value } = await reader.read();
+        if (done) controller.close();
+        else controller.enqueue(value);
+        return;
+      }
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const first = await Promise.race([
+          reader.read(),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(
+              () => reject(new Error(`Vertex sent no data for ${Math.round(timeoutMs / 1000)}s after accepting this streaming request (${url}). The endpoint is not producing output; retry or use another offering. Raise PI_VERTEX_FIRST_BYTE_TIMEOUT_MS to wait longer, 0 to disable.`)),
+              timeoutMs,
+            );
+          }),
+        ]);
+        started = true;
+        if (first.done) controller.close();
+        else controller.enqueue(first.value);
+      } catch (error) {
+        await reader.cancel(error).catch(() => {});
+        controller.error(error);
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+    cancel(reason) { return reader.cancel(reason); },
+  });
+}
+
 function requestUrl(input: RequestInfo | URL): string {
   if (typeof input === "string") return input;
   if (input instanceof URL) return input.href;
@@ -102,10 +151,12 @@ export function installSseCommentFilter(): void {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const response = await originalFetch(input, init);
-    if (!isVertexStreamingUrl(requestUrl(input)) || !response.body) {
+    const url = requestUrl(input);
+    if (!isVertexStreamingUrl(url) || !response.body) {
       return response;
     }
-    return new Response(response.body.pipeThrough(createKeepaliveStripper()), {
+    const live = withFirstByteTimeout(response.body, url, FIRST_BYTE_TIMEOUT_MS);
+    return new Response(live.pipeThrough(createKeepaliveStripper()), {
       headers: response.headers,
       status: response.status,
       statusText: response.statusText,

@@ -52,6 +52,13 @@ CHANGES: <files changed, from the actual diff; or none>
 VERIFIED: <commands or flows run and their concrete results>
 GAPS: <unfinished work or blockers, or none>`;
 
+// Stripping the delegating agent's tool calls is not enough on its own: its prose still reads as
+// "I am supervising a worker", and a child that adopts that voice inspects the job instead of doing it.
+const FORK_FOOTER = `
+
+## The conversation before your assignment
+It belongs to the agent that delegated to you \u2014 its plans, its investigation, its supervision of workers. Read it as background only. You are not that agent and you are not observing anyone: you are the worker it hired, and the assignment that follows is yours to carry out with your own tools.`;
+
 type Status = RunView["status"];
 type RunResult = { content: { type: "text"; text: string }[]; details: RunView; isError: boolean };
 
@@ -645,6 +652,7 @@ function view(run: Run): RunView {
 		lastAttemptError: run.lastAttemptError,
 		toolCalls: run.toolCalls,
 		activeTool: run.activeTools.values().next().value,
+		joinedWaiters: run.completion.waiting,
 		revision: run.revision,
 		lastTool: run.lastTool,
 		error: run.error,
@@ -1055,7 +1063,8 @@ export default function (pi: ExtensionAPI) {
 			const isWriter = wantedTools.some((t) => WRITE_TOOLS.has(t));
 			const tools = wantedTools.filter((t) => BUILTIN_TOOLS.includes(t));
 			if (!tools.length) tools.push("read");
-			const systemPrompt = role.systemPrompt + (role.systemPrompt.includes("STATUS:") ? "" : CONTRACT_FOOTER);
+			const context = p.context ?? role.context ?? "fork";
+			const systemPrompt = role.systemPrompt + (role.systemPrompt.includes("STATUS:") ? "" : CONTRACT_FOOTER) + (context === "fork" ? FORK_FOOTER : "");
 			const loader = new DefaultResourceLoader({ cwd, agentDir: AGENT_DIR, systemPrompt,
 				noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true });
 			await loader.reload();
@@ -1072,7 +1081,6 @@ export default function (pi: ExtensionAPI) {
 			// header now so a crash before the first response still leaves a resumable identity.
 			writeFileSync(sessionFile, `${JSON.stringify(created.getHeader())}\n`, { flag: "wx", mode: 0o600 });
 			const manager = SessionManager.open(sessionFile);
-			const context = p.context ?? role.context ?? "fork";
 			const inherited = context === "fork" ? convertToLlm(trimDangling(stripDelegation(buildSessionContext(ctx.sessionManager.buildContextEntries()).messages))) : [];
 			for (const message of inherited) manager.appendMessage(message);
 			const id = newId(role.name);

@@ -1,6 +1,6 @@
 {
   "name": "@ssweens/pi-vertex",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "description": "Google Vertex AI provider for Pi coding agent - supports Gemini, Claude, and all MaaS models",
   "type": "module",
   "main": "index.ts",
@@ -16,12 +16,14 @@
     "CHANGELOG.md",
     "TEST_COVERAGE.md",
     "LICENSE",
-    "screenshot.png"
+    "screenshot.png",
+    "tests/"
   ],
   "scripts": {
     "clean": "echo 'nothing to clean'",
     "build": "echo 'nothing to build'",
-    "check": "echo 'nothing to check'"
+    "check": "echo 'nothing to check'",
+    "test": "node --experimental-strip-types --test tests/*.mjs"
   },
   "dependencies": {
     "@anthropic-ai/vertex-sdk": "^0.14.4",

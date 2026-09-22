@@ -6,6 +6,8 @@ export class RunCompletion<T> {
 	claimed = false;
 
 	get settled(): boolean { return this.completed; }
+	/** Parent turns currently blocked on this segment. A queued prompt in the parent usually means one. */
+	get waiting(): number { return this.waiters.size; }
 	get result(): T {
 		if (!this.completed) throw new Error("Run has not settled");
 		return this.value;

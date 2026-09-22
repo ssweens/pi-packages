@@ -131,7 +131,10 @@ export class AgentsPanel implements Component, Focusable {
 			return prefix + pad(title, titleWidth) + " " + pad(this.theme.fg("muted", v.role), roleWidth) + " " + pad(activity, activityWidth) + " " + this.theme.fg("dim", time);
 		});
 		const range = rows.length > count ? ` · ${this.offset + 1}–${this.offset + count}/${rows.length}` : "";
-		const header = this.theme.bold("Agents") + this.theme.fg("muted", ` · ${rows.length} active${range}`);
+		// A queued prompt in the parent editor is otherwise unexplained: say when its turn is blocked here.
+		const joined = rows.some((v) => v.joinedWaiters);
+		const header = this.theme.bold("Agents") + this.theme.fg("muted", ` · ${rows.length} active${range}`)
+			+ (joined ? this.theme.fg("warning", " · parent blocked in wait") : "");
 		const hint = this.focused ? "↑↓ select · Enter open · Esc editor" : "Ctrl+J focus agents · /agents history";
 		return withLegend(frame(header, body.map((l) => truncateToWidth(l, inner, "…")), this.focused ? "borderAccent" : "borderMuted", this.theme, width), hint, this.theme, width);
 	}

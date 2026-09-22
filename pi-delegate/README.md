@@ -9,7 +9,7 @@ Requires Pi 0.86.1 or newer. Minimal delegation for pi. Two tools, role files, f
 **`delegate({ role, task, model?, reason?, context?, cwd?, timeoutMs?, sync? })`**
 Runs `role` on `task` in its own in-process session (`createAgentSession`, no extensions/skills loaded — built-in tools only). Returns final report, changed files, turns, tokens, cost, run id, and the child's session file path. Refuses a second writing child in a `cwd` that already has one running.
 
-- `context: "fork"` (default) — child starts with the parent's conversation so far (`buildSessionContext` of the active branch, trailing unresolved tool call trimmed). No re-acquisition. Delegation records are left out of that inheritance — `delegate`/`delegate_ctl` calls, their results, and completion notices — so a child inherits the work rather than a pattern of handing it off; children have no delegation tools, and copies of those calls only produced confident re-delegation attempts and false "extension not loaded" diagnoses.
+- `context: "fork"` (default) — child starts with the parent's conversation so far (`buildSessionContext` of the active branch, trailing unresolved tool call trimmed). No re-acquisition. Delegation records are left out of that inheritance — `delegate`/`delegate_ctl` calls, their results, and completion notices — so a child inherits the work rather than a pattern of handing it off; children have no delegation tools, and copies of those calls only produced confident re-delegation attempts and false "extension not loaded" diagnoses. A forked child is also told, in its own instructions, that the inherited conversation belongs to the agent that delegated to it: stripping the calls stops the mimicry, but the surrounding prose still reads as supervising a worker, and a child that adopts that voice inspects the job instead of doing it. When the parent's recent conversation is mostly orchestration, `fresh` with a complete brief remains the safer choice.
 - `context: "fresh"` — adversarial/independent review.
 - `model: "provider/id[:thinking]"` — tier switch at call time; no new role needed.
 - Background by default — returns a run id at once. Do independent work, then use `delegate_ctl wait` when a dependency needs the result. Unjoined completion wakes the parent via `sendMessage(followUp, triggerTurn)`. `sync: true` remains an explicit option to join at launch.
@@ -41,6 +41,8 @@ Models live on OpenRouter but absent from the registry are listed separately (us
 - Run IDs belong to their parent session. Reloading or reopening that same parent restores access to its children. `wait` joins a live child or returns its saved result; it never restarts work.
 
 ## While a child runs
+
+Launching never blocks the parent's turn; joining does. A prompt that appears queued as **Steering** in the parent editor means its turn is busy — typically inside `wait` or a `sync: true` launch — and the Agents frame says `parent blocked in wait` for as long as that holds. Aborting that tool detaches the waiter and leaves the child running.
 
 The parent is woken **once**, when a child finishes. There are deliberately no mid-run progress pings: an interrupt per tool call would spend a parent turn on information nobody asked for, and the human already watches live progress in the pinned Agents frame. Waiting is not the parent's work — it does other work, or `wait`s (blocking without polling), or takes a single `status` read:
 

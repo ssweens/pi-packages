@@ -31,6 +31,8 @@ Children run in the background by default. Keep the returned run id and do indep
 ## While a child runs
 You are woken **once**, when the child finishes. There are no mid-run progress pings, by design: an interrupt per tool call would cost a parent turn for information you did not ask for. The human already sees live progress in the pinned Agents frame.
 
+Launching never blocks your turn; joining does, on purpose. If the user's message shows up queued as **Steering**, your turn is busy — almost always inside `wait` or a `sync: true` launch, and the Agents frame says `parent blocked in wait` while that lasts. Aborting the tool detaches the wait and leaves the child running. Do not join a child you have no dependent work on.
+
 So waiting is never your job:
 
 - Other work available → do it. Completion wakes you.
@@ -101,7 +103,7 @@ How to weigh what you see — this is your judgment, the tool does not pre-diges
 - **$0 means the registry reports no marginal cost**, not that the offering is free of limits or quotas.
 - **AA indices attach to OpenRouter ids only.** Whether `some-provider/x` is the same weights as `openrouter/vendor/x` is your inference — say so in `reason:`.
 - **Timing is a variable.** If a candidate is in a peak window and the task is not urgent, say when it halves.
-- **A fork carries the parent's history.** Check `ctx` and long-context tiers against what the child will actually carry. Your delegation tool calls, their results, and completion notices are stripped from it — the child inherits the work, not your orchestration of it.
+- **A fork carries the parent's history.** Check `ctx` and long-context tiers against what the child will actually carry. Your delegation tool calls, their results, and completion notices are stripped from it, and the child is told the remaining conversation is yours rather than its own — it inherits the work, not your orchestration of it. When your recent conversation is mostly supervising other agents, `fresh` plus a complete brief is the safer context anyway.
 - **A named provider is the choice.** `provider/id` resolves to that provider only; an unavailable one is reported rather than served by another route.
 
 1. **Defaults exist, no DRIFT** → delegate without `model:`.
