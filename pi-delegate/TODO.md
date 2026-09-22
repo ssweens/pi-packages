@@ -23,6 +23,12 @@ Two tools. In `settings.packages`; `pi-subagents` and `pi-strings` removed, `set
 - Discovery, lowest → highest priority: package `roles/` → `~/.pi/agent/agents/` → `~/.agents/agents/` (skips `_*`/`.*`) → `<cwd>/.pi/agents/` when trusted.
 - State: `~/.pi/agent/delegate-runs.jsonl` (plaintext task, tokens, cost, duration, changed files), `delegate-models.json` (approved defaults + catalog snapshot), `delegate-ratings.json` (agent-researched ratings, stale after 14 days), child transcripts in `<cwd>/.agents/pi/subsessions/` — with the work, not under `~/.pi`.
 
+## Crash on reload (fixed, uncommitted at time of note)
+
+- **Reported crash:** `TypeError: Cannot read properties of undefined (reading 'length')` in the roles renderer, taking the whole app down. Root cause: tool results live in the transcript and are re-rendered after `/reload`, including records written by earlier versions whose `details.rows` lacked the `tools` field added today. The renderer trusted today's shape and read `r.tools.length` off last week's record. My smoke only ever exercised fresh results — that gap is exactly what a transcript carries and a smoke does not.
+- Fix: `resultView` in `render.ts` treats every result as foreign input. Structured rendering only when rows pass a shape check (`isRoleRow`/`isRunRow`); anything else falls back to the text path, which is complete by construction. `runLine`/`resultLines`/`runTitle` no longer assume arrays or strings exist.
+- Regression tests replay the exact legacy record from the crash plus malformed rows, minimal child rows and a result missing `output`. Lesson to keep: **anything that renders persisted records must be tested against the shapes already on disk**, not only what the current writer emits.
+
 ## Control-tool rendering (uncommitted)
 
 - Field report: "delegate_ctl renders in the chat log still look like absolute shit." They did: a dim `delegate_ctl · models` label followed by up to 12 *logical* lines of raw text, which at terminal width became a wrapped wall, with `… Ctrl+O expand` that did not match Pi's keybinding display.

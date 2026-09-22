@@ -20,7 +20,7 @@ import { truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { keyHint } from "@earendil-works/pi-coding-agent";
 import { AgentHistory, AgentsPanel, ChildView, type LiveSource } from "./inspector.js";
 import type { ActiveTool, ChildActivity } from "./transcript.js";
-import { elapsed, empty, framed, previewLines, resultLines, runLine, type RunView } from "./render.js";
+import { elapsed, empty, framed, resultLines, resultView, type RunView } from "./render.js";
 import { loadRoles } from "./roles.js";
 import { RunCompletion } from "./completion.js";
 import { claimOwner, readRecord, storageDir, writeRecord } from "./storage.js";
@@ -41,7 +41,6 @@ const WRITE_TOOLS = new Set(["edit", "write"]);
 const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
 const MAX_RETAINED_SESSIONS = 8;
 const OUTPUT_CAP = 40_000;
-const CONTROL_PREVIEW_LINES = 8;
 
 const CONTRACT_FOOTER = `
 
@@ -1041,74 +1040,10 @@ export default function (pi: ExtensionAPI) {
 		const state = ctx?.state as { interval?: ReturnType<typeof setInterval> } | undefined;
 		if (state?.interval) { clearInterval(state.interval); state.interval = undefined; }
 	};
+	// The renderer must tolerate whatever shape is on disk from earlier versions; see resultView.
 	const resultRenderer = (title: string) => (result: any, opts: any, theme: any, ctx: any) => {
 		stopTicking(ctx);
-		const v = result.details as RunView | undefined;
-		// Async launch stays invisible in chat; its completion message is the one outcome record.
-		if ((title === "delegate" || ctx.args?.action === "wait") && v?.id) {
-			if (v.status === "running") return empty();
-			return framed((width) => resultLines(v, opts.expanded, theme, width));
-		}
-		// status/result on one child: the same compact outcome line the transcript already uses.
-		if (v?.id) return framed((width) => resultLines(v, opts.expanded, theme, width));
-		// Every child on its own line, in the same colours the frame and the outcomes use.
-		if (result.details?.kind === "runs") {
-			const rows = result.details.rows as RunView[];
-			const running = rows.filter((r) => r.status === "running").length;
-			return framed((width) => [
-				theme.fg("toolTitle", theme.bold(title)) + ` ${theme.fg("accent", "status")}`
-					+ theme.fg("muted", ` ${rows.length} child${rows.length === 1 ? "" : "ren"}`)
-					+ (running ? theme.fg("accent", ` · ${running} running`) : ""),
-				...rows.map((r) => `  ${runLine(r, theme, Math.max(1, width - 2))}`),
-			]);
-		}
-		// One row per role, aligned and clipped to the terminal: the model still gets the full text.
-		if (result.details?.kind === "roles") {
-			type Row = { name: string; mode: string; model: string; approved: boolean; writes: boolean; tools: string[]; dropped: string[]; timeoutMs?: number; description: string; source: string };
-			const rows = result.details.rows as Row[];
-			const pad = (value: string, width: number) => value.padEnd(width);
-			const nameWidth = Math.max(...rows.map((r) => r.name.length), 4);
-			const modeWidth = Math.max(...rows.map((r) => r.mode.length), 4);
-			const modelWidth = Math.max(...rows.map((r) => r.model.length), 5);
-			// What a role does to your tree and what it costs to run it are the facts you pick by.
-			// Its prose is written for the model and does not survive a column, so it waits for the expand.
-			return framed((width) => [
-				theme.fg("toolTitle", theme.bold(title)) + ` ${theme.fg("accent", "roles")}` + theme.fg("muted", ` ${rows.length}`),
-				...rows.map((r) => truncateToWidth("  "
-					+ theme.fg("text", pad(r.name, nameWidth)) + "  "
-					+ theme.fg("muted", pad(r.mode, modeWidth)) + "  "
-					+ theme.fg(r.approved ? "dim" : "warning", pad(r.model, modelWidth)) + "  "
-					+ theme.fg(r.writes ? "warning" : "success", r.writes ? "writes" : "read-only")
-					+ theme.fg("dim", ` · ${r.tools.length} tools`)
-					+ (r.timeoutMs ? theme.fg("dim", ` · ${Math.round(r.timeoutMs / 60000)}m`) : "")
-					+ (r.dropped.length ? theme.fg("warning", ` · ${r.dropped.length} unavailable`) : ""),
-					Math.max(1, width), "\u2026")),
-				...(opts.expanded
-					? rows.flatMap((r) => [
-						"",
-						theme.fg("text", `  ${r.name}`) + theme.fg("dim", `  ${r.tools.join(" ")}`),
-						...wrapTextWithAnsi(theme.fg("dim", `  ${r.description}`), Math.max(1, width)),
-						theme.fg("dim", `  ${r.source}`),
-					])
-					: [theme.fg("muted", "  ") + keyHint("app.tools.expand", "what each role is for, and where it comes from")]),
-			]);
-		}
-		const text = (result.content?.filter((b: any) => b.type === "text").map((b: any) => b.text).join("\n") ?? "").trim();
-		// Same shape as Pi's own tools: a titled call line, then output in tool colours,
-		// clipped to a preview by *visual* lines so a wide catalog cannot sprawl down the chat.
-		const header = theme.fg("toolTitle", theme.bold(title))
-			+ (ctx.args?.action ? ` ${theme.fg("accent", ctx.args.action)}` : "")
-			+ (subject(ctx.args) ? theme.fg("muted", ` ${subject(ctx.args)}`) : "");
-		return framed((width) => {
-			const inner = Math.max(1, width);
-			const styled = text.split("\n").map((line: string) => theme.fg(result.isError ? "error" : "toolOutput", line)).join("\n");
-			const all = text ? wrapTextWithAnsi(styled, inner) : [];
-			if (opts.expanded) return [header, ...all];
-			const { shown, hidden } = previewLines(all, CONTROL_PREVIEW_LINES);
-			return [header, ...shown, ...(hidden
-				? [theme.fg("muted", `\u2026 ${hidden} more line${hidden === 1 ? "" : "s"},`) + ` ${keyHint("app.tools.expand", "to expand")}`]
-				: [])];
-		});
+		return framed((width) => resultView(title, ctx.args?.action, subject(ctx.args), result, opts, theme, width));
 	};
 
 	pi.registerTool({
