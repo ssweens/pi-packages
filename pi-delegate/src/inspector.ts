@@ -2,7 +2,7 @@
 import { CustomEditor, getSelectListTheme, keyHint, type KeybindingsManager, type SettingsManager, type Theme } from "@earendil-works/pi-coding-agent";
 import { type Component, type Focusable, matchesKey, SelectList, type TUI, type TuiMouseEvent, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { ChildTranscript, type ChildActivity } from "./transcript.js";
-import { elapsed, formatToolCall, frame, runTitle, type RunView } from "./render.js";
+import { elapsed, formatToolCall, frame, runTitle, statusMark, type RunView } from "./render.js";
 
 export interface LiveSource {
 	all(): RunView[];
@@ -16,9 +16,8 @@ const TICK_MS = 250;
 const LIST_ROWS = 4;
 
 function icon(v: RunView, theme: Theme): string {
-	if (v.status === "running") return theme.fg("accent", "●");
-	if (v.status === "complete") return theme.fg("success", "✓");
-	return theme.fg(v.status === "error" ? "error" : "warning", v.status === "error" ? "✗" : "⊘");
+	const { color, glyph } = statusMark(v);
+	return theme.fg(color, glyph);
 }
 
 function pad(text: string, width: number): string {

@@ -85,7 +85,7 @@ try {
 		await expect(/parent blocked in wait/); save(`${mode}-waiting`);
 		joinGate.resolve(); await expect(/PARENT-SAW-RESULT/);
 		await expect(/Waiting for a new scout/, true); save(`${mode}-joined`);
-		assert.equal(capture().match(/Joined child · scout/g)?.length, 1, "the outcome is recorded once, not reprinted");
+		assert.equal(capture().match(/Joined child\s+scout · /g)?.length, 1, "the outcome is recorded once, not reprinted");
 		// Control-tool output uses Pi's own tool shape: titled line, clipped preview, expandable.
 		api.script("Show the roles", { tool: { name: "delegate_ctl", arguments: { action: "roles" } } }, { text: "ROLES-SEEN" });
 		key("C-u"); await command("Show the roles");
@@ -103,14 +103,17 @@ try {
 		await expect(/STATUS-SEEN/);
 		const statusView = capture();
 		assert.match(statusView, /delegate_ctl status/);
-		assert.match(statusView, /\n\s*complete · scout-[\w-]+ · role scout · model fixture\/fixture:off/);
-		// Long output stays clipped with a working expand, at any width.
-		tmux("resize-window", "-t", "pi", "-x", "40", "-y", "20");
-		await expect(/more lines, ctrl\+o to expand/); save(`${mode}-control-clipped`);
-		key("C-o"); await expect(/more lines, ctrl\+o to expand/, true);
-		await expect(/tokens in/); save(`${mode}-control-unclipped`); key("C-o");
-		tmux("resize-window", "-t", "pi", "-x", "110", "-y", "36");
+		assert.match(statusView, /delegate_ctl status 2 children/);
+		assert.match(statusView, /✓ Native detail\s+scout · /, "one styled row per child, not a summary wall");
 		save(`${mode}-control-status`);
+		// A child's full report stays one line until ctrl+o, however long the report is.
+		const lastLaunch = JSON.parse(readFileSync(join(box.root, "trace.jsonl"), "utf8").trim().split("\n").filter((l) => l.includes('"launch"')).pop()!).details.id;
+		api.script("Show that report", { tool: { name: "delegate_ctl", arguments: { action: "result", runId: lastLaunch } } }, { text: "REPORT-SEEN" });
+		key("C-u"); await command("Show that report");
+		await expect(/REPORT-SEEN/);
+		assert.doesNotMatch(capture(), /LATEST-END/, "the report is collapsed to its outcome line");
+		save(`${mode}-control-report`);
+		key("C-o"); await expect(/LATEST-END/); save(`${mode}-control-report-expanded`); key("C-o");
 		key("C-u"); await command("/agents"); await expect(/Finished agents/); key("Enter"); await expect(/LATEST-END/);
 		api.script("Resume detail", { text: "**RESUMED-SAME-CHILD**" });
 		await command("Resume detail"); await expect(/RESUMED-SAME-CHILD/); save(`${mode}-resumed`);

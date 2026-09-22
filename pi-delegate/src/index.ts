@@ -20,7 +20,7 @@ import { truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { keyHint } from "@earendil-works/pi-coding-agent";
 import { AgentHistory, AgentsPanel, ChildView, type LiveSource } from "./inspector.js";
 import type { ActiveTool, ChildActivity } from "./transcript.js";
-import { elapsed, empty, framed, previewLines, resultLines, type RunView } from "./render.js";
+import { elapsed, empty, framed, previewLines, resultLines, runLine, type RunView } from "./render.js";
 import { loadRoles } from "./roles.js";
 import { RunCompletion } from "./completion.js";
 import { claimOwner, readRecord, storageDir, writeRecord } from "./storage.js";
@@ -1051,6 +1051,17 @@ export default function (pi: ExtensionAPI) {
 		}
 		// status/result on one child: the same compact outcome line the transcript already uses.
 		if (v?.id) return framed((width) => resultLines(v, opts.expanded, theme, width));
+		// Every child on its own line, in the same colours the frame and the outcomes use.
+		if (result.details?.kind === "runs") {
+			const rows = result.details.rows as RunView[];
+			const running = rows.filter((r) => r.status === "running").length;
+			return framed((width) => [
+				theme.fg("toolTitle", theme.bold(title)) + ` ${theme.fg("accent", "status")}`
+					+ theme.fg("muted", ` ${rows.length} child${rows.length === 1 ? "" : "ren"}`)
+					+ (running ? theme.fg("accent", ` · ${running} running`) : ""),
+				...rows.map((r) => `  ${runLine(r, theme, Math.max(1, width - 2))}`),
+			]);
+		}
 		// One row per role, aligned and clipped to the terminal: the model still gets the full text.
 		if (result.details?.kind === "roles") {
 			const rows = result.details.rows as { name: string; mode: string; model: string; description: string; source: string }[];
@@ -1312,8 +1323,9 @@ export default function (pi: ExtensionAPI) {
 			}
 			const owner = requireOwner();
 			if (p.action === "status" && !p.runId) {
-				const lines = ownedRuns(owner).map((r) => `${summary(r).split("\n")[0]}${r.status === "running" && r.lastTool ? `  last: ${r.lastTool}` : ""}`);
-				return { content: [{ type: "text", text: lines.join("\n") || "no runs" }], details: undefined };
+				const owned = ownedRuns(owner);
+				const lines = owned.map((r) => `${summary(r).split("\n")[0]}${r.status === "running" && r.lastTool ? `  last: ${r.lastTool}` : ""}`);
+				return { content: [{ type: "text", text: lines.join("\n") || "no runs" }], details: { kind: "runs", rows: owned.map(view) } };
 			}
 			const run = p.runId ? runs.get(p.runId) : undefined;
 			if (!run || run.ownerKey !== owner.key) throw new Error(`unknown runId ${p.runId ?? "(none)"}; known: ${ownedRuns(owner).map((r) => r.id).join(", ") || "none"}`);

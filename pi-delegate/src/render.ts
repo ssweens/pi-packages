@@ -46,14 +46,40 @@ export function elapsed(ms: number): string {
 }
 
 /** The durable outcome. No live status, frame, or duplicate dispatch record. */
+/** Status colour and glyph, shared by every surface that shows a child. */
+export function statusMark(v: Pick<RunView, "status">): { color: ThemeColor; glyph: string } {
+	if (v.status === "running") return { color: "accent", glyph: "●" };
+	if (v.status === "complete") return { color: "success", glyph: "✓" };
+	if (v.status === "error") return { color: "error", glyph: "✗" };
+	return { color: "warning", glyph: "⊘" };
+}
+
+/**
+ * One child on one line: glyph and title carry the state, the facts behind it are dimmed so the
+ * eye lands on what changed rather than on punctuation.
+ */
+export function runLine(v: RunView, theme: Theme, width: number, now = Date.now()): string {
+	const { color, glyph } = statusMark(v);
+	const dim = (text: string) => theme.fg("dim", text);
+	const facts = [
+		// The glyph already says "complete"; only a status worth reacting to earns a word.
+		v.status === "running" ? theme.fg("accent", v.activeTool?.name ?? v.lastTool ?? "thinking") : v.status === "complete" ? "" : theme.fg(color, v.status),
+		theme.fg("muted", v.role),
+		dim(elapsed(v.durationMs)),
+		v.turns ? dim(`${v.turns} turn${v.turns === 1 ? "" : "s"}`) : "",
+		v.cost ? theme.fg("muted", `$${v.cost.toFixed(4)}`) : "",
+		v.failedAttempts ? theme.fg("warning", `${v.failedAttempts} failed`) : "",
+		v.changedFiles.length ? theme.fg("success", `${v.changedFiles.length} changed`) : "",
+	].filter(Boolean);
+	const suffix = dim("  ") + facts.join(dim(" · "));
+	const title = truncateToWidth(runTitle(v), Math.max(4, width - 2 - visibleWidth(suffix)), "…");
+	void now;
+	return truncateToWidth(`${theme.fg(color, glyph)} ${theme.bold(title)}${suffix}`, width, "…");
+}
+
 export function resultLines(v: RunView, expanded: boolean, theme: Theme, width: number): string[] {
 	const color = v.status === "complete" ? "success" : v.status === "error" ? "error" : "warning";
-	const glyph = v.status === "complete" ? "✓" : v.status === "error" ? "✗" : "⊘";
-	const status = v.status === "complete" ? "" : ` · ${v.status}`;
-	const suffix = theme.fg(color, status) + theme.fg("dim", ` · ${v.role} · ${elapsed(v.durationMs)}`)
-		+ (v.droppedTools.length ? theme.fg("warning", " · tools unavailable") : "");
-	const title = truncateToWidth(runTitle(v), Math.max(0, width - 2 - visibleWidth(suffix)), "…");
-	const lines = [truncateToWidth(`${theme.fg(color, glyph)} ${theme.bold(title)}${suffix}`, width, "…")];
+	const lines = [runLine(v, theme, width)];
 	if (!expanded) return lines;
 	if (v.output.trim()) {
 		const output = new Markdown(v.output.trim(), 0, 0, getMarkdownTheme()).render(Math.max(1, width - 2));
@@ -61,9 +87,9 @@ export function resultLines(v: RunView, expanded: boolean, theme: Theme, width: 
 	}
 	if (v.failedAttempts) lines.push(theme.fg("warning", `${v.failedAttempts} failed provider attempt${v.failedAttempts === 1 ? "" : "s"} before this (last: ${v.lastAttemptError})`));
 	if (v.error) lines.push(...wrapTextWithAnsi(theme.fg("error", v.error), Math.max(1, width)));
-	lines.push(theme.fg("dim", `${v.id} · ${v.model} · ${v.context} · ${v.turns} turns · $${v.cost.toFixed(4)}`));
-	if (v.changedFiles.length) lines.push(theme.fg("dim", `Changed: ${v.changedFiles.join(", ")}`));
-	if (v.sessionFile) lines.push(theme.fg("dim", `Session: ${v.sessionFile}`));
+	lines.push(theme.fg("dim", "id ") + theme.fg("muted", v.id) + theme.fg("dim", "  model ") + theme.fg("muted", `${v.model}${v.thinking ? `:${v.thinking}` : ""}`) + theme.fg("dim", `  ${v.context}`));
+	if (v.changedFiles.length) lines.push(theme.fg("dim", "changed ") + theme.fg("success", v.changedFiles.join(", ")));
+	if (v.sessionFile) lines.push(theme.fg("dim", `session ${v.sessionFile}`));
 	if (v.droppedTools.length) lines.push(theme.fg("warning", `Unavailable tools: ${v.droppedTools.join(", ")}`));
 	return lines.flatMap((l) => wrapTextWithAnsi(l, Math.max(1, width)));
 }

@@ -103,6 +103,8 @@ The child transcript uses Pi's own assistant/user message, built-in tool, and ed
 
 `delegate_ctl` results are drawn by Pi's standard tool shell — the same box, padding and success/error background as `read` or `bash` — rather than a bare text dump: a titled call line (`delegate_ctl roles 3`, `delegate_ctl wait scout-…`), output in tool colours, and a preview clipped by *visual* lines with `ctrl+o to expand`. The preview keeps the **head** of the report, because these reports lead with what matters — approved defaults, drift, counts — unlike a shell command whose tail is the interesting part.
 
+Children are drawn the same way everywhere — pinned frame, `status`, completion record: a status glyph and bold title in the state's colour (accent while running, success, error, warning), the current tool in accent while it runs, then role, elapsed, turns, cost, failed attempts and changed files in descending emphasis. `status` without a run id lists one such row per child under a counted header.
+
 `roles` renders one aligned row per role (name, context and reasoning level, default offering, description clipped to the terminal), with the role file paths behind the expand. `status` and `result` on a single child render the same compact outcome line the transcript already uses. The text handed to the model is unchanged and complete in every case; only the human's view is clipped.
 
 ## Reading a result
