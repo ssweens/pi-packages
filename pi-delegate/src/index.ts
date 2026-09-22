@@ -84,6 +84,8 @@ interface Run {
 	changedFiles: string[];
 	droppedTools: string[];
 	output: string;
+	failedAttempts: number;
+	lastAttemptError?: string;
 	error?: string;
 	lastTool?: string;
 	toolCalls: { name: string; args: Record<string, unknown>; at: number }[];
@@ -279,10 +281,15 @@ function harvest(run: Run) {
 	const changed = new Set<string>(dirtyDelta(run.dirtyBefore, run.cwd) ?? []);
 	const gitBacked = run.dirtyBefore !== undefined;
 	let output = "";
+	let failedAttempts = 0;
+	let lastAttemptError: string | undefined;
 	for (let i = run.startIdx; i < msgs.length; i++) {
 		const m = msgs[i];
 		if (m?.role !== "assistant") continue;
-		turns += 1;
+		// A failed request and its retries are attempts, not turns of work. Counting them as turns
+		// made a provider stalling twice for five minutes look like a slow model thinking hard.
+		if (m.stopReason === "error") { failedAttempts += 1; lastAttemptError = m.errorMessage || "unknown provider error"; }
+		else if (m.stopReason !== "aborted") turns += 1;
 		const u = m.usage;
 		if (u) {
 			tokens.input += u.input ?? 0;
@@ -302,6 +309,8 @@ function harvest(run: Run) {
 		if (text.trim()) output = text;
 	}
 	run.turns = turns;
+	run.failedAttempts = failedAttempts;
+	run.lastAttemptError = lastAttemptError;
 	run.tokens = tokens;
 	run.cost = cost;
 	run.changedFiles = [...changed].sort();
@@ -632,6 +641,8 @@ function view(run: Run): RunView {
 		durationMs: (run.endedAt ?? Date.now()) - run.startedAt,
 		changedFiles: run.changedFiles,
 		droppedTools: run.droppedTools,
+		failedAttempts: run.failedAttempts,
+		lastAttemptError: run.lastAttemptError,
 		toolCalls: run.toolCalls,
 		activeTool: run.activeTools.values().next().value,
 		revision: run.revision,
@@ -654,6 +665,7 @@ function summary(run: Run): string {
 		run.cost ? `$${run.cost.toFixed(4)}` : "",
 	].filter(Boolean);
 	let s = parts.join(" · ");
+	if (run.failedAttempts) s += `\n${run.failedAttempts} provider attempt${run.failedAttempts === 1 ? "" : "s"} failed and were retried before this (last: ${run.lastAttemptError}) — that wall clock and any tokens are included above.`;
 	if (run.sessionFile) s += `\nsession: ${run.sessionFile}`;
 	if (run.droppedTools.length) s += `\ntools the child could not have (children get built-ins only): ${run.droppedTools.join(", ")}`;
 	if (run.changedFiles.length) s += `\nchanged: ${run.changedFiles.join(", ")}`;
@@ -699,6 +711,12 @@ function finish(run: Run, status: Status, error?: string) {
 	if (error) run.error = error;
 	try { if (run.session) harvest(run); }
 	catch (e) { run.status = "error"; run.error = `Cannot read child transcript: ${String(e)}`; }
+	if (run.status === "timeout" && !run.error) {
+		run.error = `Stopped after its ${Math.round(run.timeoutMs / 60000)} min budget (timeoutMs, default ${DEFAULT_TIMEOUT_MS / 60000} min). Its work up to that point stands and is not rolled back.`
+			+ (run.failedAttempts
+				? ` Most of that budget went to ${run.failedAttempts} failed provider attempt${run.failedAttempts === 1 ? "" : "s"} and retries (last: ${run.lastAttemptError}), not to the work \u2014 investigate that provider or choose another offering before granting more time.`
+				: ` Give it a larger timeoutMs only if the work genuinely needs longer.`);
+	}
 	run.activeTools.clear();
 	run.streamingMessage = undefined;
 	run.revision++;
@@ -762,12 +780,8 @@ function armTimeout(run: Run) {
 	if (run.timer) clearTimeout(run.timer);
 	const spent = Date.now() - run.segmentStartedAt;
 	if (spent >= run.timeoutMs) throw new Error(`${run.id} has already run ${Math.round(spent / 60000)} min of this segment; a ${Math.round(run.timeoutMs / 60000)} min budget is already spent. Pass a larger timeoutMs.`);
-	run.timer = setTimeout(() => {
-		run.status = "timeout";
-		// A timeout aborts real work mid-flight. Say what the budget was and how to give more.
-		run.error = `Stopped after its ${Math.round(run.timeoutMs / 60000)} min budget (timeoutMs, default ${DEFAULT_TIMEOUT_MS / 60000} min). Its work up to that point stands and is not rolled back; inspect it, then steer this child with a larger timeoutMs or relaunch with one.`;
-		void run.session.abort();
-	}, run.timeoutMs - spent);
+	// The explanation is composed in finish(), after harvesting can say where the budget went.
+	run.timer = setTimeout(() => { run.status = "timeout"; void run.session.abort(); }, run.timeoutMs - spent);
 }
 
 function beginResume(run: Run, restart: boolean, replacement?: { model?: string; thinking?: string; contextWindow?: number; timeoutMs?: number }) {
@@ -1077,7 +1091,7 @@ export default function (pi: ExtensionAPI) {
 				task: p.task,
 				status: "running",
 				startedAt: Date.now(), segmentStartedAt: Date.now(),
-				turns: 0,
+				turns: 0, failedAttempts: 0,
 				tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 				cost: 0,
 				changedFiles: [],

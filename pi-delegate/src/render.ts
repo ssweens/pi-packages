@@ -24,6 +24,8 @@ export interface RunView {
 	durationMs: number;
 	changedFiles: string[];
 	droppedTools: string[];
+	failedAttempts?: number;
+	lastAttemptError?: string;
 	toolCalls: { name: string; args: Record<string, unknown>; at?: number }[];
 	activeTool?: { name: string; args: Record<string, unknown> };
 	revision: number;
@@ -56,6 +58,7 @@ export function resultLines(v: RunView, expanded: boolean, theme: Theme, width: 
 		const output = new Markdown(v.output.trim(), 0, 0, getMarkdownTheme()).render(Math.max(1, width - 2));
 		lines.push(...output.map((l) => `  ${l}`));
 	}
+	if (v.failedAttempts) lines.push(theme.fg("warning", `${v.failedAttempts} failed provider attempt${v.failedAttempts === 1 ? "" : "s"} before this (last: ${v.lastAttemptError})`));
 	if (v.error) lines.push(...wrapTextWithAnsi(theme.fg("error", v.error), Math.max(1, width)));
 	lines.push(theme.fg("dim", `${v.id} · ${v.model} · ${v.context} · ${v.turns} turns · $${v.cost.toFixed(4)}`));
 	if (v.changedFiles.length) lines.push(theme.fg("dim", `Changed: ${v.changedFiles.join(", ")}`));

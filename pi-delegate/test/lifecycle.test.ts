@@ -210,11 +210,39 @@ test("real SDK delegation lifecycle (loopback provider, no credentials)", { time
 			const timeout = await h.launch("Timeout work", { timeoutMs: 200, sync: true });
 			assert.equal(timeout.details.status, "timeout");
 			assert.match(timeout.details.error, /Stopped after its 0 min budget \(timeoutMs, default 15 min\)\. Its work up to that point stands/);
-			assert.match(timeout.details.error, /steer this child with a larger timeoutMs/);
+
+			assert.match(timeout.details.error, /Give it a larger timeoutMs only if the work genuinely needs longer/);
 			api.script("Provider failure", { error: 400 });
 			const failure = await h.launch("Provider failure", { sync: true });
 			assert.equal(failure.details.status, "error");
 			assert.match(failure.details.error, /Fixture provider failure/);
+		});
+		await t.test("a failed provider attempt is reported as an attempt, not as a turn of work", async () => {
+			api.script("Stalled provider", { error: 503 });
+			const failed = await h.launch("Stalled provider", { sync: true });
+			const id = failed.details.id;
+			assert.equal(failed.details.status, "error");
+			assert.equal(failed.details.failedAttempts, 1);
+			assert.equal(failed.details.turns, 0, "a failed request is not a turn");
+			// The same child then succeeds: the report must still surface the attempt that burned time.
+			api.script("Retry by hand", { text: "EVENTUALLY-OK" });
+			await h.ctl("steer", id, { message: "Retry by hand" });
+			const done = await h.ctl("wait", id);
+			assert.equal(done.details.status, "complete");
+			assert.equal(done.details.turns, 1);
+			assert.equal(done.details.failedAttempts, 1);
+			assert.match(done.content[0].text, /1 provider attempt failed and were retried before this \(last: [^)]*Fixture provider failure/);
+			// And a timeout whose budget went to failed attempts points at the provider, not at the budget.
+			api.script("Stall then hang", { error: 503 }, { text: "Waiting", gate: deferred() });
+			const hung = await h.launch("Stall then hang", { sync: true, timeoutMs: 400 });
+			assert.equal(hung.details.status, "error");
+			api.onUnscripted(() => ({ text: "Waiting", gate: deferred() }));
+			await h.ctl("steer", hung.details.id, { message: "Hang now", timeoutMs: 600 });
+			const timedOut = await h.ctl("wait", hung.details.id);
+			api.onUnscripted();
+			assert.equal(timedOut.details.status, "timeout");
+			assert.match(timedOut.details.error, /Most of that budget went to 1 failed provider attempt and retries \(last: [^)]*Fixture provider failure[^)]*\), not to the work/);
+			assert.doesNotMatch(timedOut.details.error, /Give it a larger timeoutMs only/);
 		});
 		await t.test("missing transcript and failed snapshot leave the previous segment intact", async () => {
 			api.script("Transactional seed", { text: "SAVED" });

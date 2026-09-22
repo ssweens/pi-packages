@@ -50,6 +50,8 @@ session: …
 now: bash · 12 tool calls so far · 47 min of its budget left
 ```
 
+Failed requests are counted as attempts, not as turns of work, and reported on their own line: `2 provider attempts failed and were retried before this (last: terminated)`. Three turns and ten minutes for a one-line answer is a stalled provider, not a thoughtful child — and a timeout whose budget went to failed attempts says exactly that instead of suggesting a bigger budget. A run's wall clock, its turns, and its provider's failures stay distinguishable.
+
 `timeoutMs` is that budget, 15 minutes by default, and it belongs to the current run segment. A child that needs hours must be launched with hours, or it is aborted mid-flight; a timeout says so, names the budget, and leaves the work in place — nothing is rolled back. `{"action":"steer","runId":"<id>","message":"…","timeoutMs":3600000}` re-arms a running child's budget immediately and persists it for later segments; a budget already spent is refused rather than applied as an instant kill.
 
 A missing automatic continuation is a delivery problem to investigate, not a reason to make all launches synchronous. Check the parent transcript and Pi's `send_message` extension errors to distinguish child completion, notification delivery, and parent continuation.

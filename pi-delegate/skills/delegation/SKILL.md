@@ -37,9 +37,13 @@ So waiting is never your job:
 - Nothing can proceed without the result → `wait`. It blocks without polling and costs nothing while it waits.
 - Someone asks how it is going, or you need to decide whether to let it continue → one `status` read. It reports the current tool, tool calls so far, elapsed time and remaining budget. One read is not a poll loop; repeating it on a timer is.
 
-Never promise to sit idle and report back later, and never tell the user that progress is unavailable. If a child's remaining budget cannot cover the work, `steer` it with more time or `cancel` and relaunch with a larger `timeoutMs` — do not wait out a run you expect to be killed.
+Never promise to sit idle and report back later, and never tell the user that progress is unavailable.
 
 Size `timeoutMs` to the actual work before launching: the default is 15 minutes, and a build, suite, or training run measured in hours is otherwise aborted mid-flight. A timeout leaves its work in place, unrolled back; read the child's report before continuing.
+
+Before buying more time, read what the time was spent on. A report that says `N provider attempts failed and were retried` means requests died and were retried — a stalled stream, a rate limit, a flaky route — not a model that thinks slowly. Minutes of wall clock with near-zero output tokens is the same signal. Fix or change the offering; granting a broken route a larger budget just buys more failures. Extend the budget when the child is actually working: tool calls advancing, tokens accumulating, turns completing.
+
+Distinguish the three in your own words when you report to the user: the child's work, the provider's failures, and your own budget. Never state one as another.
 
 `wait` returns immediately for a finished run. Cancelling it only detaches the waiter; use `cancel` to stop the child. An attached waiter receives the report instead of a redundant completion wake-up. Check the returned terminal status before acting on the report.
 
@@ -80,7 +84,7 @@ Omit nothing above; add nothing else.
 
 ## Your job after the child returns
 
-The child's words arrive quoted between `----- <id> reported, verbatim -----` and `----- end of report -----`. Everything above that marker is this tool describing the run; everything inside it is the child. A report that reads like your own message is inherited context showing through, not a rendering bug — read the child's `session:` file to settle it.
+Check `turns`, `failedAttempts` and cost against what you asked for. Three turns and ten minutes for a one-line answer is not a diligent child; it is a provider that failed twice before answering, and the report says so on its own line. The child's words arrive quoted between `----- <id> reported, verbatim -----` and `----- end of report -----`. Everything above that marker is this tool describing the run; everything inside it is the child. A report that reads like your own message is inherited context showing through, not a rendering bug — read the child's `session:` file to settle it.
 Treat the report as a claim. Read the diff (`changed:` in the result), rerun the named verification, observe the behavior when tests alone do not prove it. Then accept, steer, or escalate.
 
 ## Model per role — research, then the user approves
