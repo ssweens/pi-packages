@@ -9,12 +9,12 @@ Requires Pi 0.86.1 or newer. Minimal delegation for pi. Two tools, role files, f
 **`delegate({ role, task, model?, reason?, context?, cwd?, timeoutMs?, sync? })`**
 Runs `role` on `task` in its own in-process session (`createAgentSession`, no extensions/skills loaded — built-in tools only). Returns final report, changed files, turns, tokens, cost, run id, and the child's session file path. Refuses a second writing child in a `cwd` that already has one running.
 
-- `context: "fork"` (default) — child starts with the parent's conversation so far (`buildSessionContext` of the active branch, trailing unresolved tool call trimmed). No re-acquisition.
+- `context: "fork"` (default) — child starts with the parent's conversation so far (`buildSessionContext` of the active branch, trailing unresolved tool call trimmed). No re-acquisition. Delegation records are left out of that inheritance — `delegate`/`delegate_ctl` calls, their results, and completion notices — so a child inherits the work rather than a pattern of handing it off; children have no delegation tools, and copies of those calls only produced confident re-delegation attempts and false "extension not loaded" diagnoses.
 - `context: "fresh"` — adversarial/independent review.
 - `model: "provider/id[:thinking]"` — tier switch at call time; no new role needed.
 - Background by default — returns a run id at once. Do independent work, then use `delegate_ctl wait` when a dependency needs the result. Unjoined completion wakes the parent via `sendMessage(followUp, triggerTurn)`. `sync: true` remains an explicit option to join at launch.
 
-**`delegate_ctl({ action: models|rate|approve|roles|status|result|wait|steer|cancel, runId?, message?, restart?, ratings? })`**
+**`delegate_ctl({ action: models|rate|approve|roles|status|result|wait|steer|cancel, runId?, message?, model?, restart?, ratings? })`**
 `models` reports approved defaults per role, DRIFT against the live catalog (default unavailable · price changed · approval >30 days · new offerings · OpenRouter live price or expiration differs), your ratings cache, and the catalog across **all** enabled providers exactly as the registry reports it: one line per offering, `provider/id`, reasoning flag, context window, $/M in/out. Nothing is deduplicated, excluded, scoped, or ranked by price — the same weights on a subscription, a metered API, a local box, and a free tier are different offerings and the agent weighs them in the open.
 
 For OpenRouter offerings it also fetches the public API (no key; 10-minute in-memory cache; 8 s timeout; on failure it says so and shows registry data):
@@ -48,7 +48,11 @@ Children run inside Pi, not in detached runners. `/reload` replaces the extensio
 
 Closing Pi or switching parent sessions interrupts active children. Reopening the same parent restores saved children without running them. After a crash, an unfinished child appears as `interrupted`; inspecting its transcript, reading its result, or waiting does not resume it. Inspect interrupted tool work before continuing: interruption does not undo side effects.
 
-Send a message with `steer` to resume an inactive child under the same run ID and transcript. Revival uses the saved model, reasoning level, tool list, role instructions, project instructions, working directory, and timeout—not current role files or model defaults. Missing history or an unavailable saved model is an error, not permission to start a replacement. Finished sessions evicted from memory can also revive this way.
+Send a message with `steer` to resume an inactive child under the same run ID and transcript. Revival uses the saved model, reasoning level, tool list, role instructions, project instructions, working directory, and timeout—not current role files or model defaults. Missing history is an error, not permission to start a replacement. Finished sessions evicted from memory can also revive this way.
+
+An unavailable or exhausted saved model is also an error, and the choice of replacement is yours: `{"action":"steer","runId":"<id>","message":"...","model":"provider/id[:thinking]"}` revives that child on the offering you name, keeping its ID, transcript, tools, and instructions. The new offering applies from that segment on and is persisted, so later revivals use it; earlier segments keep the model they actually ran on, and the omitted reasoning level stays as saved. A running child refuses the switch—its turn is already bound to its model, so wait or `cancel` first. The agent proposes the replacement in conversation before calling this; nothing substitutes an offering on its own.
+
+A model spec naming a provider resolves to that provider only. `openai-codex/x` never falls back to `openrouter/x`: same weights on another route differ in cost, limits, and serving, so an unavailable one is reported, not silently swapped.
 
 An explicit `cancel` remains stopped across reloads and process restarts. The agent must have your request before using `steer` with `restart: true`. Typing a message in a stopped child's **Restart** editor is your direct restart request.
 
@@ -57,6 +61,10 @@ Completed results and interrupted executions are separate states. On reopen, an 
 One filesystem lease owns each parent's children. Opening the same parent in another Pi process cannot start a second child writer. After an abrupt crash, the lease expires within 10 seconds; retry opening the parent after that. Different parent sessions remain independent.
 
 Recovery metadata is recorded for children launched by this version. Older transcript files remain readable but have no saved parent/runtime contract to revive.
+
+## Which offerings a child can use
+
+A child runs on the parent's catalog, including providers that extensions register at runtime — account switchers, gateways, subscription pools. Those registrations are mirrored into the child runtime each time a child session opens, so launch order does not decide what a child can run, and a provider registered after the first child still works. A provider the parent drops stops serving children that have to reopen their session; a session already in memory keeps the model it was built with. Nothing about those providers is copied into a child's saved record beyond the `provider/id` it ran on, so credentials stay with the parent's runtime.
 
 ## Model approval
 
@@ -74,6 +82,23 @@ One OMP-style **Agents** frame above the parent editor shows only running or sto
 - **`/agents`** opens an on-demand list of finished children, including failures, cancellations, and interrupted runs. Select a row with **↑↓**, then **Enter** to inspect it; **Esc** closes the list. History remains available while other children run. Removing a row from the pinned frame does not delete its session or prevent revival.
 
 The child transcript uses Pi's own assistant/user message, built-in tool, and editor components—not a second text/JSON renderer. It opens at the newest output and follows streaming text and tool output. **PgUp** pauses following; **Ctrl+End** or paging back to the bottom resumes it. Tools start collapsed; Pi's **Ctrl+O** action expands/collapses them, and its thinking-toggle binding controls reasoning display. Markdown, code highlighting, errors, and tool results use the active Pi theme. Fullscreen mode also supports Pi's native click-to-expand tool results and mouse-wheel scrolling; regular mode leaves mouse handling to the terminal emulator. It does not launch a second writer against the child's session file. Opening a saved child reads its transcript without reviving it; sending a message revives it.
+
+## Reading a result
+
+Every returned report is a run description followed by the child's own words, fenced so the two cannot be confused:
+
+```
+complete · worker-791ede7d · role worker · model anthropic/claude-sonnet-5:medium · context forked from 215 parent messages · 3 turns in 25s · tokens in 6, out 1.5k, cached 639.2k · $0.9446
+session: /…/.agents/pi/subsessions/….jsonl
+changed: src/thing.ts
+
+----- worker-791ede7d reported, verbatim -----
+STATUS: complete
+…
+----- end of report -----
+```
+
+The `session:` path is the child's full transcript; read it when a report looks wrong rather than guessing whether the wrapper is stale.
 
 ## Transcript records
 

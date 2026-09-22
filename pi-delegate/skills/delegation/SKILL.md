@@ -23,7 +23,7 @@ Model is chosen per call from `delegate_ctl models` (below), never from memory o
 Run `reviewer` only when at least one holds: interface or public API change · security or concurrency · migration · more than ~5 files · behavior you could not observe · the change will be hard to reverse. Otherwise your own verification is acceptance. A review that has never changed an outcome is ceremony — stop running it.
 
 ## Correcting a child
-Bounded fix → `delegate_ctl steer` on the same run. The child keeps its context; no new child, no new review. Steering queues a correction or resumes a finished child in the background and returns immediately. Continue independent work; use `wait` when you need the resumed result. New review only for a `rethink`-class change (decomposition or scope moved). Never re-send an unchanged brief.
+Bounded fix → `delegate_ctl steer` on the same run. The child keeps its context; no new child, no new review. A tier switch mid-task is the same call with `model:`, which moves that child to another offering from its next segment on. Steering queues a correction or resumes a finished child in the background and returns immediately. Continue independent work; use `wait` when you need the resumed result. New review only for a `rethink`-class change (decomposition or scope moved). Never re-send an unchanged brief.
 
 ## Launching
 Children run in the background by default. Keep the returned run id and do independent work. When dependent work needs the result, call `delegate_ctl` with `action: "wait"` and that `runId`; do not poll status, sleep, or relaunch the child. If you yield without joining, completion wakes you automatically.
@@ -48,7 +48,9 @@ Do not add a detached-worker supervisor merely for terminal independence. Revisi
 
 Use `steer` to revive an inactive child under the same ID, transcript, and saved execution configuration. Do not relaunch just to recover a report. A completed result awaiting delivery is not interrupted execution.
 
-If the child is `interrupted`, inspect its saved work before continuing; tool side effects are not rolled back. If it was explicitly stopped, use `restart: true` only after the user requests a restart. Missing history or an unavailable saved model requires a decision, not a silent replacement.
+If the child is `interrupted`, inspect its saved work before continuing; tool side effects are not rolled back. If it was explicitly stopped, use `restart: true` only after the user requests a restart. Missing history requires a decision, not a silent replacement.
+
+When the saved offering is gone, rate-limited, or wrong for the remaining work, pass `model:` to that same `steer`. The child continues under its own ID, transcript, tools, and instructions on the offering you name, and later segments keep it; earlier segments keep what they ran on. Choose it like any other model decision — read `models`, propose the offering with its price and serving tradeoff, act on the user's answer. Never relaunch a fresh child to escape an exhausted subscription, and never pick the replacement yourself. A running child refuses the switch: wait for its turn or `cancel` it first.
 
 ## The brief
 Start with a short task title on its own line. It labels the child in the Agents frame; the UI does not guess a summary.
@@ -64,6 +66,8 @@ RETURN         STATUS / CHANGES / VERIFIED / GAPS
 Omit nothing above; add nothing else.
 
 ## Your job after the child returns
+
+The child's words arrive quoted between `----- <id> reported, verbatim -----` and `----- end of report -----`. Everything above that marker is this tool describing the run; everything inside it is the child. A report that reads like your own message is inherited context showing through, not a rendering bug — read the child's `session:` file to settle it.
 Treat the report as a claim. Read the diff (`changed:` in the result), rerun the named verification, observe the behavior when tests alone do not prove it. Then accept, steer, or escalate.
 
 ## Model per role — research, then the user approves
@@ -80,7 +84,8 @@ How to weigh what you see — this is your judgment, the tool does not pre-diges
 - **$0 means the registry reports no marginal cost**, not that the offering is free of limits or quotas.
 - **AA indices attach to OpenRouter ids only.** Whether `some-provider/x` is the same weights as `openrouter/vendor/x` is your inference — say so in `reason:`.
 - **Timing is a variable.** If a candidate is in a peak window and the task is not urgent, say when it halves.
-- **A fork carries the parent's history.** Check `ctx` and long-context tiers against what the child will actually carry.
+- **A fork carries the parent's history.** Check `ctx` and long-context tiers against what the child will actually carry. Your delegation tool calls, their results, and completion notices are stripped from it — the child inherits the work, not your orchestration of it.
+- **A named provider is the choice.** `provider/id` resolves to that provider only; an unavailable one is reported rather than served by another route.
 
 1. **Defaults exist, no DRIFT** → delegate without `model:`.
 2. **Ground the choice.** AA indices arrive live on OpenRouter offerings; they attach by exact OpenRouter id only. Whether `some-provider/x` is the same weights as `openrouter/vendor/x` is your judgment — say so. When AA is absent for a candidate, the live fetch failed, or you have evidence beyond AA (observed runs here, other evals, an offering's serving quality), research and store it with `action=rate` per exact offering.

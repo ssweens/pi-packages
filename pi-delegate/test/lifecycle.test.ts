@@ -29,15 +29,39 @@ test("real SDK delegation lifecycle (loopback provider, no credentials)", { time
 			assert.equal(fromNative.details.status, "complete", fromNative.content[0].text);
 			assert.equal(fromNative.details.output, "NATIVE-PROVIDER-OK");
 			assert.equal(fromNative.details.model, "fixture-native/fixture");
+			// Registration order must not decide what a child can run: providers appear at any time.
+			h.runtime.session.modelRuntime.registerProvider("fixture-late", {
+				api: "openai-completions", baseUrl: api.url, apiKey: "loopback-only",
+				models: [{ id: "fixture", name: "Registered after the first child", reasoning: false, input: ["text"], contextWindow: 32768, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }],
+			});
+			api.script("Late provider work", { text: "LATE-PROVIDER-OK" });
+			const late = await h.launch("Late provider work", { model: "fixture-late/fixture:off", sync: true });
+			assert.equal(late.details.status, "complete", late.content[0].text);
+			assert.equal(late.details.output, "LATE-PROVIDER-OK");
+			// A provider the parent drops stops serving children that must reopen their session;
+			// a session already in memory keeps the model it was built with.
+			h.runtime.session.modelRuntime.unregisterProvider("fixture-late");
+			const evicted = state().runs.get(late.details.id);
+			evicted.session.dispose(); evicted.session = undefined; // what retirement and a cold reopen leave behind
+			api.onUnscripted(() => ({ text: "ACK" })); // this revival fails faster than a waiter can attach, so it wakes the parent
+			const gone = await h.ctl("steer", late.details.id, { message: "Should not run" });
+			assert.equal(gone.details.status, "running");
+			const settled = await h.ctl("wait", late.details.id);
+			assert.equal(settled.details.status, "error");
+			assert.match(settled.details.error, /Saved model is unavailable: fixture-late\/fixture/);
+			await h.runtime.session.agent.waitForIdle();
+			api.onUnscripted();
 		});
 		await t.test("reload retains live execution and attached wait; fork prefix is durable", async () => {
 			h.runtime.session.sessionManager.appendMessage({ role: "user", content: "parent-only-marker", timestamp: Date.now() });
+			const notices = h.notices.length;
 			const gate = deferred();
 			const arrived = api.script("Reload work", { text: "RELOAD-OK", gate });
 			const launch = await h.launch("Reload work", { context: "fork" });
 			const id = launch.details.id, run = state().runs.get(id);
 			const request = await arrived;
 			assert.match(JSON.stringify(request.messages), /parent-only-marker/);
+			assert.match(JSON.stringify(request.messages), /no delegation tools and cannot start another agent/);
 			const wait = h.ctl("wait", id);
 			const child = run.session, file = run.sessionFile;
 			await h.runtime.session.reload();
@@ -47,9 +71,44 @@ test("real SDK delegation lifecycle (loopback provider, no credentials)", { time
 			assert.equal(result.details.status, "complete");
 			assert.equal(result.details.output, "RELOAD-OK");
 			assert.equal(result.details.sessionFile, file);
-			assert.equal(h.notices.length, 0);
+			assert.equal(h.notices.length, notices, "an attached waiter takes the result instead of waking the parent");
 			assert.match(readFileSync(file, "utf8"), /parent-only-marker/);
 			assert.equal((readFileSync(file, "utf8").match(/Reload work/g) ?? []).length, 1);
+		});
+		await t.test("a fork inherits the parent's work, not its delegation records", async () => {
+			const manager = h.runtime.session.sessionManager;
+			const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
+			const assistant = (content: any[]) => manager.appendMessage({ role: "assistant", content, api: "openai-completions", provider: "fixture", model: "fixture", usage, stopReason: "toolUse", timestamp: Date.now() } as any);
+			const toolResult = (id: string, name: string, text: string) => manager.appendMessage({ role: "toolResult", toolCallId: id, toolName: name, content: [{ type: "text", text }], isError: false, timestamp: Date.now() } as any);
+			assistant([
+				{ type: "text", text: "ORDINARY-PARENT-TEXT" },
+				{ type: "toolCall", id: "call-read", name: "read", arguments: { path: "KEPT-TOOL-ARGUMENT" } },
+			]);
+			toolResult("call-read", "read", "KEPT-TOOL-RESULT");
+			assistant([{ type: "toolCall", id: "call-delegation", name: "delegate", arguments: { role: "worker", task: "INHERITED-ORCHESTRATION" } }]);
+			toolResult("call-delegation", "delegate", "DELEGATE-TOOL-RESULT");
+			assistant([{ type: "text", text: "KEPT-TEXT-BESIDE-CONTROL" }, { type: "toolCall", id: "call-control", name: "delegate_ctl", arguments: { action: "wait", runId: "CONTROL-ARGUMENT" } }]);
+			toolResult("call-control", "delegate_ctl", "CONTROL-TOOL-RESULT");
+			manager.appendCustomMessageEntry("delegate", "DELEGATE-COMPLETION-NOTICE", true, { id: "noise" });
+			manager.appendCustomMessageEntry("other-extension", "KEPT-CUSTOM-MESSAGE", true, undefined);
+			const arrived = api.script("Clean fork", { text: "CLEAN-FORK-OK" });
+			await h.launch("Clean fork", { context: "fork", sync: true });
+			const inherited = JSON.stringify((await arrived).messages);
+			// The parent's own work survives: only this package's orchestration records are dropped.
+			for (const kept of [/ORDINARY-PARENT-TEXT/, /KEPT-TOOL-ARGUMENT/, /KEPT-TOOL-RESULT/, /KEPT-TEXT-BESIDE-CONTROL/, /KEPT-CUSTOM-MESSAGE/, /"name":"read"/]) assert.match(inherited, kept);
+			for (const noise of [/INHERITED-ORCHESTRATION/, /DELEGATE-TOOL-RESULT/, /CONTROL-ARGUMENT/, /CONTROL-TOOL-RESULT/, /DELEGATE-COMPLETION-NOTICE/, /"name":"delegate/]) assert.doesNotMatch(inherited, noise);
+			// A message whose only content was a delegation call leaves no empty turn behind.
+			assert(!(await arrived).messages.some((m: any) => Array.isArray(m.content) && m.content.length === 0));
+		});
+		await t.test("the child's report is quoted, never blended into this tool's own reporting", async () => {
+			api.script("Quoted report", { text: "CHILD-WORDS" });
+			const result = await h.launch("Quoted report", { sync: true });
+			const [summary, report] = result.content[0].text.split(/^----- \S+ reported, verbatim -----$/m);
+			assert.match(summary, /^complete \u00b7 scout-[\w-]+ \u00b7 role scout \u00b7 model fixture\/fixture:off \u00b7 context fresh \u00b7 1 turn in \d+s \u00b7 tokens in \d/);
+			assert.match(summary, new RegExp(`\nsession: ${result.details.sessionFile}`));
+			assert.doesNotMatch(summary, /CHILD-WORDS/);
+			assert.doesNotMatch(summary, /error:|changed:|could not have/);
+			assert.equal(report.trim(), "CHILD-WORDS\n----- end of report -----");
 		});
 		await t.test("wait abort detaches; explicit cancel stops; async steer reuses identity", async () => {
 			const gate = deferred(), arrived = api.script("Stop work", { text: "PARTIAL", gate });
@@ -71,6 +130,37 @@ test("real SDK delegation lifecycle (loopback provider, no credentials)", { time
 			assert.equal((await wait).details.output, "RESUMED");
 			assert.equal(state().runs.get(id).sessionFile, file);
 			assert.equal(state().runs.get(id).segment, 2);
+		});
+		await t.test("reviving on another offering applies from the next segment and persists", async () => {
+			api.script("Switch work", { text: "FIRST-MODEL" });
+			const { details: { id } } = await h.launch("Switch work", { sync: true });
+			const run = state().runs.get(id), file = run.sessionFile, segment = run.segment;
+			// A named provider is the choice; it never resolves to the same id on another provider.
+			await assert.rejects(h.ctl("steer", id, { message: "Nope", model: "fixture-typo/fixture" }), /model not found: fixture-typo\/fixture/);
+			await assert.rejects(h.ctl("steer", id, { message: "Nope", model: "fixture/absent" }), /model not found: fixture\/absent/);
+			assert.equal(run.segment, segment); assert.equal(run.model, "fixture/fixture");
+			api.script("Second model work", { text: "SECOND-MODEL" });
+			const resumed = await h.ctl("steer", id, { message: "Second model work", model: "fixture-alias/fixture:medium" });
+			assert.match(resumed.content[0].text, /Model changed from fixture\/fixture:off to fixture-alias\/fixture:medium/);
+			const done = await h.ctl("wait", id);
+			assert.equal(done.details.status, "complete", done.content[0].text);
+			assert.equal(done.details.output, "SECOND-MODEL");
+			assert.equal(done.details.model, "fixture-alias/fixture");
+			assert.equal(done.details.thinking, "medium");
+			assert.equal(done.details.sessionFile, file);
+			assert.equal(JSON.parse(readFileSync(run.recordPath, "utf8")).model, "fixture-alias/fixture");
+			// A saved child keeps the replacement without restating it.
+			api.script("Third work", { text: "STILL-SECOND-MODEL" });
+			await h.ctl("steer", id, { message: "Third work" });
+			const again = await h.ctl("wait", id);
+			assert.equal(again.details.model, "fixture-alias/fixture");
+			assert.equal(again.details.output, "STILL-SECOND-MODEL");
+			// A live turn is bound to the model it started on.
+			const gate = deferred(), arrived = api.script("Live turn", { text: "LIVE", gate });
+			await h.ctl("steer", id, { message: "Live turn" }); await arrived;
+			await assert.rejects(h.ctl("steer", id, { message: "Swap now", model: "fixture/fixture" }), /applies to its next segment/);
+			assert.equal(state().runs.get(id).model, "fixture-alias/fixture");
+			gate.resolve(); await h.ctl("wait", id);
 		});
 		await t.test("cancel during real SDK preflight never dispatches a model request", async () => {
 			api.script("Preflight seed", { text: "SEED" });

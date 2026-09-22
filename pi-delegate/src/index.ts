@@ -44,7 +44,9 @@ const OUTPUT_CAP = 40_000;
 const CONTRACT_FOOTER = `
 
 ## Delegated worker contract
-You are working inside another agent's task. You are not alone in this repository: preserve unrelated and concurrent edits, do not revert work you do not own, stay within the ownership stated in the brief. Do not commit, push, or launch other agents unless the brief says so. Inspect before editing; verify before claiming. End your final message with:
+You are working inside another agent's task. You do the work yourself with the tools listed above: you have no delegation tools and cannot start another agent, so a delegation call is not available to you. That is your fixed toolset, not a broken setup — never ask anyone to reload, restart, or fix an extension, and never stop and wait for a reply. Whatever the conversation above shows another agent doing, your job is the brief below.
+
+You are not alone in this repository: preserve unrelated and concurrent edits, do not revert work you do not own, stay within the ownership stated in the brief. Do not commit or push unless the brief says so. Inspect before editing; verify before claiming. End your final message with:
 STATUS: complete | partial | blocked
 CHANGES: <files changed, from the actual diff; or none>
 VERIFIED: <commands or flows run and their concrete results>
@@ -186,8 +188,9 @@ function resolveModel(spec: string | undefined, ctx: ExtensionContext) {
 	if (!spec) return { model: ctx.model, thinking: undefined as string | undefined };
 	const p = parseModelSpec(spec);
 	const reg: any = ctx.modelRegistry;
-	let model = p.provider ? reg.find(p.provider, p.id) : undefined;
-	if (!model) model = reg.getAll().find((m: any) => m.id === p.id || `${m.provider}/${m.id}` === spec.split(":")[0]);
+	// A named provider is a choice between offerings of the same weights, not a search key:
+	// resolving it to another provider would silently change cost, limits, and serving.
+	const model = p.provider ? reg.find(p.provider, p.id) : reg.getAll().find((m: any) => m.id === p.id);
 	if (!model) throw new Error(`model not found: ${spec}`);
 	return { model, thinking: p.thinking };
 }
@@ -223,6 +226,34 @@ function dirtyDelta(before: Map<string, number> | undefined, cwd: string): strin
 	for (const [p, mt] of after) if (!before.has(p) || before.get(p) !== mt) changed.push(p);
 	for (const p of before.keys()) if (!after.has(p)) changed.push(p);
 	return changed;
+}
+
+/**
+ * A fork inherits the parent's work, not this package's orchestration of it. Delegation tool
+ * calls, their results, and completion notices taught children to re-delegate a brief they were
+ * handed — and children have no delegation tools, so that attempt only failed confusingly.
+ */
+function stripDelegation(messages: any[]): any[] {
+	const removed = new Set<string>();
+	const out: any[] = [];
+	for (const message of messages) {
+		if (message?.role === "custom" && message.customType === "delegate") continue;
+		if (message?.role === "assistant" && Array.isArray(message.content)) {
+			const content = message.content.filter((block: any) => {
+				if (block?.type !== "toolCall" || (block.name !== "delegate" && block.name !== "delegate_ctl")) return true;
+				removed.add(block.id);
+				return false;
+			});
+			if (content.length !== message.content.length) {
+				if (!content.length) continue;
+				out.push({ ...message, content });
+				continue;
+			}
+		}
+		if (message?.role === "toolResult" && removed.has(message.toolCallId)) continue;
+		out.push(message);
+	}
+	return out;
 }
 
 /** Drop a trailing assistant message whose tool calls have no results yet (the call to `delegate` itself). */
@@ -612,26 +643,26 @@ function view(run: Run): RunView {
 function summary(run: Run): string {
 	const dur = ((run.endedAt ?? Date.now()) - run.startedAt) / 1000;
 	const parts = [
-		`[${run.status}] ${run.id}`,
-		`role=${run.role}`,
-		`model=${run.model}${run.thinking ? `:${run.thinking}` : ""}`,
-		`ctx=${run.context}${run.forkedMessages ? `(${run.forkedMessages} msgs)` : ""}`,
-		`${run.turns} turn${run.turns === 1 ? "" : "s"}`,
-		`↑${fmtTokens(run.tokens.input)} ↓${fmtTokens(run.tokens.output)}` +
-			(run.tokens.cacheRead ? ` R${fmtTokens(run.tokens.cacheRead)}` : ""),
+		`${run.status} · ${run.id}`,
+		`role ${run.role}`,
+		`model ${run.model}${run.thinking ? `:${run.thinking}` : ""}`,
+		run.context === "fork" ? `context forked from ${run.forkedMessages ?? 0} parent messages` : "context fresh",
+		`${run.turns} turn${run.turns === 1 ? "" : "s"} in ${dur.toFixed(0)}s`,
+		`tokens in ${fmtTokens(run.tokens.input)}, out ${fmtTokens(run.tokens.output)}` +
+			(run.tokens.cacheRead ? `, cached ${fmtTokens(run.tokens.cacheRead)}` : ""),
 		run.cost ? `$${run.cost.toFixed(4)}` : "",
-		`${dur.toFixed(0)}s`,
 	].filter(Boolean);
-	let s = parts.join("  ");
+	let s = parts.join(" · ");
 	if (run.sessionFile) s += `\nsession: ${run.sessionFile}`;
-	if (run.droppedTools.length) s += `\ndropped tools (not available to children): ${run.droppedTools.join(", ")}`;
+	if (run.droppedTools.length) s += `\ntools the child could not have (children get built-ins only): ${run.droppedTools.join(", ")}`;
 	if (run.changedFiles.length) s += `\nchanged: ${run.changedFiles.join(", ")}`;
 	if (run.error) s += `\nerror: ${run.error}`;
 	return s;
 }
 
+/** The child's words are quoted, never blended into this tool's own reporting. */
 function resultText(run: Run): string {
-	return `${summary(run)}\n\n${run.output || "(no final text)"}`;
+	return `${summary(run)}\n\n----- ${run.id} reported, verbatim -----\n${run.output || "(the child ended without a final message)"}\n----- end of report -----`;
 }
 
 function log(run: Run) {
@@ -726,7 +757,7 @@ async function closeOwner(owner: Owner) {
 }
 
 /** Reserve a segment before awaiting setup: concurrent steers cannot create duplicate sessions. */
-function beginResume(run: Run, restart: boolean) {
+function beginResume(run: Run, restart: boolean, replacement?: { model: string; thinking: string; contextWindow?: number }) {
 	if (!run.completion.settled) throw new Error(`${run.id} is still stopping; wait for completion before resuming.`);
 	if (run.stopped && !restart) throw new Error(`${run.id} was explicitly stopped. Restart only at the user's request (steer with restart: true).`);
 	if (run.writer) {
@@ -734,7 +765,7 @@ function beginResume(run: Run, restart: boolean) {
 		if (clash) throw new Error(`${clash.id} is already writing in ${run.cwd}; wait before resuming this child.`);
 	}
 	openTranscript(run); // Missing history is an error, never permission to start over.
-	const next: Run = { ...run, segment: run.segment + 1, stopped: false, acknowledged: false,
+	const next: Run = { ...run, ...replacement, segment: run.segment + 1, stopped: false, acknowledged: false,
 		status: "running", endedAt: undefined, error: undefined, revision: run.revision + 1,
 		completion: new RunCompletion<RunResult>() };
 	saveRun(next);
@@ -758,21 +789,28 @@ export default function (pi: ExtensionAPI) {
 	// Reload refreshes configuration for future session opens. Live children retain the
 	// runtime they already own; replacing a binding must not mutate their provider state.
 	let modelRuntime: Promise<ModelRuntime> | undefined;
-	const getRuntime = () => {
-		if (modelRuntime) return modelRuntime;
-		// Account/provider extensions register offerings in the parent's live catalog,
-		// not necessarily models.json. Carry their public definitions into this runtime.
-		const registry = requireOwner().binding!.ctx.modelRegistry;
-		return modelRuntime = ModelRuntime.create().then((runtime) => {
-			for (const id of registry.getRegisteredProviderIds()) {
-				const native = registry.getRegisteredNativeProvider(id);
-				if (native) runtime.registerNativeProvider(native);
-				const config = registry.getRegisteredProviderConfig(id);
-				if (config) runtime.registerProvider(id, config);
-			}
-			return runtime;
-		});
-	};
+	const getRuntime = () => modelRuntime ??= ModelRuntime.create();
+	// Account and provider extensions register offerings in the parent's live catalog rather
+	// than models.json, and they register them whenever they please \u2014 at startup, on reload, or
+	// when the user switches accounts. Mirror that catalog into this runtime at every child
+	// session open, so a child is limited by the parent's providers, not by launch order.
+	const mirrored = new Set<string>();
+	function mirrorProviders(runtime: ModelRuntime) {
+		const registry: any = requireOwner().binding!.ctx.modelRegistry;
+		const present = new Set<string>(registry.getRegisteredProviderIds());
+		for (const id of present) {
+			const native = registry.getRegisteredNativeProvider(id);
+			if (native) runtime.registerNativeProvider(native);
+			const config = registry.getRegisteredProviderConfig(id);
+			if (config) runtime.registerProvider(id, config);
+			mirrored.add(id);
+		}
+		for (const id of mirrored) {
+			if (present.has(id)) continue;
+			runtime.unregisterProvider(id); // The parent dropped it; a child must not keep serving it.
+			mirrored.delete(id);
+		}
+	}
 	let owner: Owner | undefined;
 	let attachError: string | undefined;
 	function requireOwner(): Owner {
@@ -812,13 +850,17 @@ export default function (pi: ExtensionAPI) {
 		}
 		for (const run of ownedRuns(owner)) if (run.completion.settled) publish(run.completion);
 	}
-	async function steer(run: Run, message: string, restart = false) {
+	async function steer(run: Run, message: string, restart = false, replacement?: { model: string; thinking: string; contextWindow?: number }) {
 		requireOwner();
 		if (run.status === "running") {
 			await run.ready;
-			if (run.status === "running") { await run.session.steer(message); return; }
+			if (run.status === "running") {
+				// A live turn is already bound to its model. Never swap it underneath running work.
+				if (replacement) throw new Error(`${run.id} is running on ${run.model}; a different offering applies to its next segment. Wait for it or cancel it, then steer with model.`);
+				await run.session.steer(message); return;
+			}
 		}
-		beginResume(run, restart);
+		beginResume(run, restart, replacement);
 		const completion = run.completion;
 		void launch(run, message).then(() => publish(completion));
 	}
@@ -843,9 +885,10 @@ export default function (pi: ExtensionAPI) {
 		if (run.session) return;
 		if (!statSync(run.cwd).isDirectory()) throw new Error(`Saved working directory is unavailable: ${run.cwd}`);
 		const runtime = await getRuntime();
+		mirrorProviders(runtime);
 		const slash = run.model.indexOf("/");
 		const model = runtime.getModel(run.model.slice(0, slash), run.model.slice(slash + 1));
-		if (!model) throw new Error(`Saved model is unavailable: ${run.model}. No fallback was selected.`);
+		if (!model) throw new Error(`Saved model is unavailable: ${run.model}. No fallback was selected \u2014 choose a replacement: delegate_ctl steer runId=${run.id} model=<provider/id[:thinking]>.`);
 		const loader = preparedLoader ?? new DefaultResourceLoader({
 			cwd: run.cwd, agentDir: AGENT_DIR,
 			noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
@@ -993,7 +1036,7 @@ export default function (pi: ExtensionAPI) {
 			writeFileSync(sessionFile, `${JSON.stringify(created.getHeader())}\n`, { flag: "wx", mode: 0o600 });
 			const manager = SessionManager.open(sessionFile);
 			const context = p.context ?? role.context ?? "fork";
-			const inherited = context === "fork" ? convertToLlm(trimDangling(buildSessionContext(ctx.sessionManager.buildContextEntries()).messages)) : [];
+			const inherited = context === "fork" ? convertToLlm(trimDangling(stripDelegation(buildSessionContext(ctx.sessionManager.buildContextEntries()).messages))) : [];
 			for (const message of inherited) manager.appendMessage(message);
 			const id = newId(role.name);
 			const run: Run = {
@@ -1053,11 +1096,11 @@ export default function (pi: ExtensionAPI) {
 		description:
 			"See the delegation skill for the full procedure. models: every offering across all enabled providers, verbatim from the registry (provider/id, reasoning, context, $/M), plus live OpenRouter pricing, tiered rates, expirations and Artificial Analysis indices, your cached ratings, approved defaults and drift \u2014 call before the first delegate of a session. " +
 			"rate: store quality ratings you researched, per exact offering (provider/id), so choices are grounded; stale after 14 days. approve: record a role's default model after the user agreed in conversation. " +
-			"roles: list roles. status: one run or all. result: current report without waiting. wait: join an existing runId without polling; returns its final report, immediately if finished. Cancelling wait only detaches; the child keeps running. An attached waiter receives completion instead of a separate wake-up. steer: queue a correction or resume a finished child in the background, keeping its context; returns immediately. Use wait to join the resumed work. Saved children are restored on parent reopen without running; steer revives them with their original configuration. Explicitly stopped children require restart:true and the user's request. cancel: stop the child and prevent automatic revival.",
+			"roles: list roles. status: one run or all. result: current report without waiting. wait: join an existing runId without polling; returns its final report, immediately if finished. Cancelling wait only detaches; the child keeps running. An attached waiter receives completion instead of a separate wake-up. steer: queue a correction or resume a finished child in the background, keeping its context; returns immediately. Use wait to join the resumed work. Saved children are restored on parent reopen without running; steer revives them with their original configuration unless you pass model:, which moves that child to another offering from the next segment on \u2014 propose it in conversation first, including when the saved offering is exhausted or gone. Explicitly stopped children require restart:true and the user's request. cancel: stop the child and prevent automatic revival.",
 		parameters: Type.Object({
 			action: StringEnum(["models", "rate", "approve", "roles", "status", "result", "wait", "steer", "cancel"] as const),
 			role: Type.Optional(Type.String({ description: "approve: role name" })),
-			model: Type.Optional(Type.String({ description: "approve: provider/id[:thinking] the user agreed to" })),
+			model: Type.Optional(Type.String({ description: "approve: provider/id[:thinking] the user agreed to. steer: run the next segment on this offering instead of the child's saved one; the user chooses it, you never substitute silently" })),
 			runId: Type.Optional(Type.String()),
 			restart: Type.Optional(Type.Boolean({ description: "steer only: restart an explicitly stopped child, only when the user requested it" })),
 			message: Type.Optional(Type.String({ description: "steer: the correction. models: substring filter. approve: one-line reason the user agreed to" })),
@@ -1176,8 +1219,17 @@ export default function (pi: ExtensionAPI) {
 				case "steer": {
 					if (!p.message) throw new Error("steer requires message");
 					const running = run.status === "running";
-					await steer(run, p.message, p.restart);
-					return { content: [{ type: "text", text: `${run.id}: ${running ? "steer queued" : "resumed in the background"}. Completion will wake you; use wait to join.` }], details: view(run) };
+					let replacement: { model: string; thinking: string; contextWindow?: number } | undefined;
+					if (p.model) {
+						const { model, thinking } = resolveModel(p.model, ctx);
+						if (!model) throw new Error(`model not found: ${p.model}`);
+						// Keep the saved reasoning level unless this spec names one.
+						replacement = { model: modelKey(model), thinking: thinking ?? run.thinking, contextWindow: model.contextWindow };
+					}
+					const previous = `${run.model}${run.thinking ? `:${run.thinking}` : ""}`;
+					await steer(run, p.message, p.restart, replacement);
+					const moved = replacement ? ` Model changed from ${previous} to ${run.model}${run.thinking ? `:${run.thinking}` : ""} for this and later segments; its earlier work keeps the model it ran on.` : "";
+					return { content: [{ type: "text", text: `${run.id}: ${running ? "steer queued" : "resumed in the background"}.${moved} Completion will wake you; use wait to join.` }], details: view(run) };
 				}
 			}
 			return { content: [{ type: "text", text: "unreachable" }], isError: true, details: undefined };
