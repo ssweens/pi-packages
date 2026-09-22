@@ -93,7 +93,7 @@ try {
 		const listed = capture();
 		assert.match(listed, /delegate_ctl roles 3/);
 		// One aligned row per role, no wrapped wall of paths.
-		for (const role of ["reviewer", "scout", "worker"]) assert.match(listed, new RegExp(`\\n  ${role} +(fresh|fork)`));
+		for (const role of ["reviewer", "scout", "worker"]) assert.match(listed, new RegExp(`\\n\\s+${role} +(fresh|fork)`));
 		assert.doesNotMatch(listed, /roles\/scout\.md/, "sources belong behind the expand, not in the collapsed row");
 		save(`${mode}-control-collapsed`);
 		key("C-o"); await expect(/roles\/scout\.md/); save(`${mode}-control-expanded`); key("C-o");
@@ -103,7 +103,13 @@ try {
 		await expect(/STATUS-SEEN/);
 		const statusView = capture();
 		assert.match(statusView, /delegate_ctl status/);
-		assert.match(statusView, /\ncomplete · scout-[\w-]+ · role scout · model fixture\/fixture:off/);
+		assert.match(statusView, /\n\s*complete · scout-[\w-]+ · role scout · model fixture\/fixture:off/);
+		// Long output stays clipped with a working expand, at any width.
+		tmux("resize-window", "-t", "pi", "-x", "40", "-y", "20");
+		await expect(/more lines, ctrl\+o to expand/); save(`${mode}-control-clipped`);
+		key("C-o"); await expect(/more lines, ctrl\+o to expand/, true);
+		await expect(/tokens in/); save(`${mode}-control-unclipped`); key("C-o");
+		tmux("resize-window", "-t", "pi", "-x", "110", "-y", "36");
 		save(`${mode}-control-status`);
 		key("C-u"); await command("/agents"); await expect(/Finished agents/); key("Enter"); await expect(/LATEST-END/);
 		api.script("Resume detail", { text: "**RESUMED-SAME-CHILD**" });

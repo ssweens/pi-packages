@@ -26,6 +26,7 @@ Two tools. In `settings.packages`; `pi-subagents` and `pi-strings` removed, `set
 ## Control-tool rendering (uncommitted)
 
 - Field report: "delegate_ctl renders in the chat log still look like absolute shit." They did: a dim `delegate_ctl · models` label followed by up to 12 *logical* lines of raw text, which at terminal width became a wrapped wall, with `… Ctrl+O expand` that did not match Pi's keybinding display.
+- Both tools dropped `renderShell: "self"`, so Pi draws its standard tool shell: same box, padding and success/error background as its built-ins. Content is ours; the frame is Pi's.
 - Now Pi's own shape: `theme.toolTitle` call line with the action and its subject, output in `toolOutput`, preview clipped by visual lines with `keyHint("app.tools.expand")`. Preview keeps the head, since these reports lead with defaults/drift/counts.
 - `roles` returns structured `details` so the renderer can lay out one aligned row per role and hide the file paths behind the expand; the text the model receives is unchanged. `status`/`result` on one child reuse the compact outcome line.
 - `previewLines` in `render.ts` is the head-preview rule, unit-tested; the terminal smoke covers the roles table, the expand, and the per-run status lines in regular and fullscreen.

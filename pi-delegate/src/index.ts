@@ -1085,7 +1085,6 @@ export default function (pi: ExtensionAPI) {
 
 	pi.registerTool({
 		name: "delegate",
-		renderShell: "self",
 		renderCall: blockingCall((args) => args?.sync ? `Waiting for a new ${args.role ?? "child"} \u2014 this launch joins at once (sync)` : undefined),
 		renderResult: resultRenderer("delegate"),
 		label: "Delegate",
@@ -1198,7 +1197,6 @@ export default function (pi: ExtensionAPI) {
 
 	pi.registerTool({
 		name: "delegate_ctl",
-		renderShell: "self",
 		renderCall: blockingCall((args) => args?.action === "wait" ? `Waiting for ${args.runId ?? "a child"}` : undefined),
 		renderResult: resultRenderer("delegate_ctl"),
 		label: "Delegate control",
