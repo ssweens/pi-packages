@@ -804,10 +804,17 @@ function beginResume(run: Run, restart: boolean, replacement?: { model?: string;
 		if (clash) throw new Error(`${clash.id} is already writing in ${run.cwd}; wait before resuming this child.`);
 	}
 	openTranscript(run); // Missing history is an error, never permission to start over.
+	// A retained session stays bound to the offering it was opened with. Changing the record alone
+	// sends the next segment to the old provider, so a new offering reopens from the transcript.
+	const rebind = Boolean(replacement) && ((replacement!.model ?? run.model) !== run.model || (replacement!.thinking ?? run.thinking) !== run.thinking);
 	const next: Run = { ...run, ...replacement, segment: run.segment + 1, stopped: false, acknowledged: false,
 		status: "running", endedAt: undefined, error: undefined, revision: run.revision + 1,
+		session: rebind ? undefined : run.session,
 		completion: new RunCompletion<RunResult>() };
 	saveRun(next);
+	if (rebind) {
+		try { run.session?.dispose(); } catch { /* a stale session must not block its replacement */ }
+	}
 	Object.assign(run, next);
 	changed();
 }

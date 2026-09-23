@@ -183,6 +183,28 @@ test("real SDK delegation lifecycle (loopback provider, no credentials)", { time
 			assert.equal(state().runs.get(id).model, "fixture-alias/fixture");
 			gate.resolve(); await h.ctl("wait", id);
 		});
+		// Field report: the record moved to the new offering while the retained session kept
+		// calling the old one. Aliases above share a model id, so only the request can tell.
+		await t.test("a replacement offering reaches the retained session, not just the record", async () => {
+			h.runtime.session.modelRuntime.registerProvider("fixture-spare", {
+				api: "openai-completions", baseUrl: api.url, apiKey: "loopback-only",
+				models: [{ id: "spare", name: "Distinguishable by request", reasoning: false, input: ["text"], contextWindow: 32768, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }],
+			});
+			api.script("Exhausted work", { error: 429 });
+			const failed = await h.launch("Exhausted work", { sync: true });
+			assert.equal(failed.details.status, "error", failed.content[0].text);
+			assert.equal(failed.details.turns, 0);
+			const id = failed.details.id, file = failed.details.sessionFile;
+			assert.ok(state().runs.get(id).session, "the failed child's session is still in memory");
+			const arrived = api.script("Retry elsewhere", { text: "SPARE-OK" });
+			await h.ctl("steer", id, { message: "Retry elsewhere", model: "fixture-spare/spare:off" });
+			const done = await h.ctl("wait", id);
+			assert.equal((await arrived).model, "spare", "the retry is sent to the replacement offering");
+			assert.equal(done.details.status, "complete", done.content[0].text);
+			assert.equal(done.details.output, "SPARE-OK");
+			assert.equal(done.details.sessionFile, file, "same child, same transcript");
+			assert.match(readFileSync(file, "utf8"), /Exhausted work/, "the brief survives the rebind");
+		});
 		await t.test("cancel during real SDK preflight never dispatches a model request", async () => {
 			api.script("Preflight seed", { text: "SEED" });
 			const { details: { id } } = await h.launch("Preflight seed", { sync: true });
