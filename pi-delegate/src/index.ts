@@ -20,7 +20,7 @@ import { truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { keyHint } from "@earendil-works/pi-coding-agent";
 import { AgentHistory, AgentsPanel, ChildView, type LiveSource } from "./inspector.js";
 import type { ActiveTool, ChildActivity } from "./transcript.js";
-import { elapsed, empty, framed, resultLines, resultView, type RunView } from "./render.js";
+import { type AAIndices, elapsed, empty, framed, type LiveFacts, type ModelRow, type ModelsDetails, resultLines, resultView, type RunView } from "./render.js";
 import { loadRoles } from "./roles.js";
 import { RunCompletion } from "./completion.js";
 import { claimOwner, readRecord, storageDir, writeRecord } from "./storage.js";
@@ -493,13 +493,22 @@ async function fetchEndpoints(id: string): Promise<LiveEndpoints> {
 	return r;
 }
 
-function aaStr(l: any): string {
+function aaOf(l: any): AAIndices | undefined {
 	const aa = l?.benchmarks?.artificial_analysis;
+	if (!aa) return undefined;
+	const out: AAIndices = {};
+	if (aa.intelligence_index != null) out.intel = aa.intelligence_index;
+	if (aa.coding_index != null) out.coding = aa.coding_index;
+	if (aa.agentic_index != null) out.agentic = aa.agentic_index;
+	return out;
+}
+
+function aaStr(aa: AAIndices | undefined): string {
 	if (!aa) return "";
 	const parts: string[] = [];
-	if (aa.intelligence_index != null) parts.push(`intel ${aa.intelligence_index}`);
-	if (aa.coding_index != null) parts.push(`coding ${aa.coding_index}`);
-	if (aa.agentic_index != null) parts.push(`agentic ${aa.agentic_index}`);
+	if (aa.intel != null) parts.push(`intel ${aa.intel}`);
+	if (aa.coding != null) parts.push(`coding ${aa.coding}`);
+	if (aa.agentic != null) parts.push(`agentic ${aa.agentic}`);
 	return parts.length ? `  AA[${parts.join(" ")}]` : "";
 }
 
@@ -523,42 +532,54 @@ function endpointLine(e: any, now: Date): string {
 	return parts.join("  ");
 }
 
-function endpointsStr(id: string, now: Date): string {
-	const c = liveEP.get(id);
-	if (!c) return "";
-	if (c.error && !c.endpoints.length) return `\n      endpoints: fetch failed (${c.error})`;
-	return `\n      endpoints (${c.endpoints.length}):\n${c.endpoints.map((e) => `        ${endpointLine(e, now)}`).join("\n")}`;
-}
-
-function liveStr(m: any, live: LiveOR | undefined): string {
-	if (m.provider !== "openrouter" || !live) return "";
+/** What OpenRouter says right now about one registry offering. The report text and the view both read this. */
+function liveFacts(m: any, live: LiveOR | undefined): LiveFacts | undefined {
+	if (m.provider !== "openrouter" || !live) return undefined;
 	const l = live.byId.get(m.id);
-	if (!l) return "  live: not listed on OpenRouter now";
-	const out: string[] = [];
+	if (!l) return { listed: false, notes: [], tiered: false };
+	const notes: string[] = [];
 	const now = new Date();
 	const lp = perM(l.pricing?.prompt);
 	const lc = perM(l.pricing?.completion);
 	const rp = Math.round((m.cost?.input ?? 0) * 1e4) / 1e4;
 	const rc = Math.round((m.cost?.output ?? 0) * 1e4) / 1e4;
-	if (lp !== undefined && lc !== undefined && (lp !== rp || lc !== rc)) out.push(`live now ${livePriceStr(l)} (registry differs)`);
+	const differs = lp !== undefined && lc !== undefined && (lp !== rp || lc !== rc);
+	if (differs) notes.push(`live now ${livePriceStr(l)} (registry differs)`);
 	else {
 		const req = Number(l.pricing?.request);
-		if (Number.isFinite(req) && req > 0) out.push(`+$${req}/req`);
+		if (Number.isFinite(req) && req > 0) notes.push(`+$${req}/req`);
 	}
 	const ov = overridesStr(l.pricing, now);
-	if (ov.text) out.push(`top provider overrides: ${ov.text}`);
-	if (ov.skipped) out.push(`${ov.skipped} override(s) with unrecognized conditions skipped`);
-	if (l.expiration_date) out.push(`expires ${l.expiration_date}`);
-	const aa = aaStr(l);
-	return (out.length ? `  ${out.join("; ")}` : "") + aa + endpointsStr(m.id, now);
+	if (ov.text) notes.push(`top provider overrides: ${ov.text}`);
+	if (ov.skipped) notes.push(`${ov.skipped} override(s) with unrecognized conditions skipped`);
+	if (l.expiration_date) notes.push(`expires ${l.expiration_date}`);
+	const ep = liveEP.get(m.id);
+	const epFailed = Boolean(ep?.error && !ep.endpoints.length);
+	return {
+		listed: true, notes, tiered: Boolean(ov.text),
+		livePrice: differs ? livePriceStr(l) : undefined,
+		expires: l.expiration_date ? String(l.expiration_date) : undefined,
+		aa: aaOf(l),
+		endpoints: ep && !epFailed ? ep.endpoints.map((e) => endpointLine(e, now)) : undefined,
+		endpointsError: epFailed ? ep!.error : undefined,
+	};
 }
 
-function liveStatus(live: LiveOR | undefined): string {
-	if (!live) return "OPENROUTER: not fetched";
+function liveStr(f: LiveFacts | undefined): string {
+	if (!f) return "";
+	if (!f.listed) return "  live: not listed on OpenRouter now";
+	const endpoints = f.endpointsError
+		? `\n      endpoints: fetch failed (${f.endpointsError})`
+		: f.endpoints ? `\n      endpoints (${f.endpoints.length}):\n${f.endpoints.map((e) => `        ${e}`).join("\n")}` : "";
+	return (f.notes.length ? `  ${f.notes.join("; ")}` : "") + aaStr(f.aa) + endpoints;
+}
+
+function liveSummary(live: LiveOR | undefined): string {
+	if (!live) return "not fetched";
 	const age = Math.round((Date.now() - live.at) / 1000);
 	const aaCount = [...live.byId.values()].filter((l) => l.benchmarks?.artificial_analysis).length;
-	if (live.error) return `OPENROUTER: fetch failed (${live.error})${live.byId.size ? `, data from ${age}s ago` : ""}`;
-	return `OPENROUTER: ${live.byId.size} live, ${aaCount} with AA, fetched ${age}s ago (${new Date().toISOString().slice(11, 16)}Z)`;
+	if (live.error) return `fetch failed (${live.error})${live.byId.size ? `, data from ${age}s ago` : ""}`;
+	return `${live.byId.size} live, ${aaCount} with AA, fetched ${age}s ago (${new Date().toISOString().slice(11, 16)}Z)`;
 }
 
 function ratingStr(r: Ratings, name: string): string {
@@ -568,11 +589,11 @@ function ratingStr(r: Ratings, name: string): string {
 	return `  rated ${e.score} (${e.source.length > 40 ? `${e.source.slice(0, 40)}\u2026` : e.source})${note}`;
 }
 
-function ratingsStatus(r: Ratings): string {
+function ratingsSummary(r: Ratings): string {
 	const n = Object.keys(r.entries).length;
-	if (!n) return "RATINGS: none";
+	if (!n) return "none";
 	const age = ageDays(r.updatedAt);
-	return `RATINGS: ${n}, ${age}d old${age > RATINGS_STALE_DAYS ? " (stale)" : ""}`;
+	return `${n}, ${age}d old${age > RATINGS_STALE_DAYS ? " (stale)" : ""}`;
 }
 
 function costStr(m: any): string {
@@ -583,18 +604,18 @@ function ageDays(ts: number): number {
 	return Math.floor((Date.now() - ts) / 86_400_000);
 }
 
-/** Approved defaults + drift against the live catalog. Empty string when nothing to report. */
-function defaultsReport(ctx: ExtensionContext): string {
+/** Approved defaults + drift against the live catalog. */
+function defaultsFacts(ctx: ExtensionContext): ModelsDetails["defaults"] {
 	const d = loadDefaults();
 	const reg: any = ctx.modelRegistry;
 	const avail: any[] = reg.getAvailable();
 	const byKey = new Map(avail.map((m) => [modelKey(m), m]));
-	const lines: string[] = [];
+	const approved: ModelsDetails["defaults"]["approved"] = [];
 	const drift: string[] = [];
 	for (const [role, a] of Object.entries(d.approved)) {
 		const base = a.spec.split(":")[0];
 		const m = byKey.get(base);
-		lines.push(`  ${role}: ${a.spec}  approved ${ageDays(a.approvedAt)}d ago${a.reason ? ` \u2014 ${a.reason}` : ""}`);
+		approved.push({ role, spec: a.spec, ageDays: ageDays(a.approvedAt), reason: a.reason });
 		if (!m) drift.push(`${role}: ${base} is no longer available`);
 		else if (a.cost && m.cost && (a.cost.input !== m.cost.input || a.cost.output !== m.cost.output))
 			drift.push(`${role}: price changed $${a.cost.input}/${a.cost.output} \u2192 $${m.cost.input}/${m.cost.output}/M`);
@@ -616,8 +637,13 @@ function defaultsReport(ctx: ExtensionContext): string {
 		const added = avail.map(modelKey).filter((k) => !snap.has(k));
 		if (added.length) drift.push(`${added.length} new since approval${added.length <= 8 ? `: ${added.join(", ")}` : " (message=<substring> to list)"}`);
 	}
-	if (!lines.length) return "DEFAULTS: none";
-	let out = `DEFAULTS (approved by user)\n${lines.join("\n")}`;
+	// Without an approval there is nothing to drift from; the report has always said just "none".
+	return { approved, drift: approved.length ? drift : [] };
+}
+
+function defaultsReport({ approved, drift }: ModelsDetails["defaults"]): string {
+	if (!approved.length) return "DEFAULTS: none";
+	let out = `DEFAULTS (approved by user)\n${approved.map((a) => `  ${a.role}: ${a.spec}  approved ${a.ageDays}d ago${a.reason ? ` \u2014 ${a.reason}` : ""}`).join("\n")}`;
 	if (drift.length) out += `\nDRIFT:\n  ${drift.join("\n  ")}`;
 	return out;
 }
@@ -1214,27 +1240,28 @@ export default function (pi: ExtensionAPI) {
 				const f = (p.message ?? "").toLowerCase();
 				const ratings = loadRatings();
 				const live = await fetchOpenRouter();
-				const aaOf = (m: any) => (m.provider === "openrouter" ? live.byId.get(m.id)?.benchmarks?.artificial_analysis : undefined);
+				const liveAA = (m: any) => (m.provider === "openrouter" ? live.byId.get(m.id)?.benchmarks?.artificial_analysis : undefined);
+				const EP_CAP = 12;
 				let offers: any[];
 				let scope: string;
-				let order: string;
+				let endpointCap: number | undefined;
 				if (f) {
 					offers = all.filter((m) => modelKey(m).toLowerCase().includes(f));
 					scope = `matching "${p.message}"`;
-					order = "";
 					const orIds = offers.filter((m) => m.provider === "openrouter" && live.byId.has(m.id)).map((m) => m.id);
-					const EP_CAP = 12;
 					await Promise.all(orIds.slice(0, EP_CAP).map(fetchEndpoints));
-					if (orIds.length > EP_CAP) scope += ` (endpoints fetched for the first ${EP_CAP} OpenRouter matches; narrow the filter for the rest)`;
+					if (orIds.length > EP_CAP) {
+						endpointCap = EP_CAP;
+						scope += ` (endpoints fetched for the first ${EP_CAP} OpenRouter matches; narrow the filter for the rest)`;
+					}
 				} else {
-					offers = all.filter((m) => ratings.entries[modelKey(m)] || aaOf(m)?.intelligence_index != null);
+					offers = all.filter((m) => ratings.entries[modelKey(m)] || liveAA(m)?.intelligence_index != null);
 					scope = `rated; ${all.length - offers.length} unrated hidden (message=<substring>)`;
-					order = "";
 				}
 				const score = (m: any) => {
 					const mine = ratings.entries[modelKey(m)]?.score;
 					if (mine != null) return [1, mine];
-					const aa = aaOf(m)?.intelligence_index;
+					const aa = liveAA(m)?.intelligence_index;
 					return aa != null ? [0, aa] : [-1, 0];
 				};
 				offers.sort((a, b) => {
@@ -1243,13 +1270,23 @@ export default function (pi: ExtensionAPI) {
 					return tb - ta || sb - sa || modelKey(a).localeCompare(modelKey(b));
 				});
 				const CAP = 120;
-				const lines = offers.slice(0, CAP).map((m) => {
-					const ctxk = m.contextWindow ? `${Math.round(m.contextWindow / 1000)}k` : "?";
-					return `${modelKey(m) === cur ? "* " : "  "}${modelKey(m)}  ${m.reasoning ? "reasoning" : "no-reasoning"}  ctx=${ctxk}  ${costStr(m)}${liveStr(m, live)}${ratingStr(ratings, modelKey(m))}`;
+				const rows: ModelRow[] = offers.slice(0, CAP).map((m) => ({
+					key: modelKey(m),
+					current: modelKey(m) === cur,
+					reasoning: Boolean(m.reasoning),
+					contextWindow: m.contextWindow || undefined,
+					cost: m.cost ? { input: m.cost.input ?? 0, output: m.cost.output ?? 0 } : undefined,
+					live: liveFacts(m, live),
+					rating: ratings.entries[modelKey(m)],
+				}));
+				const lines = rows.map((r, i) => {
+					const ctxk = r.contextWindow ? `${Math.round(r.contextWindow / 1000)}k` : "?";
+					return `${r.current ? "* " : "  "}${r.key}  ${r.reasoning ? "reasoning" : "no-reasoning"}  ctx=${ctxk}  ${costStr(offers[i])}${liveStr(r.live)}${ratingStr(ratings, r.key)}`;
 				});
 				const provs = new Map<string, number>();
 				for (const m of all) provs.set(m.provider, (provs.get(m.provider) ?? 0) + 1);
-				const provLine = [...provs.entries()].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v}`).join(", ");
+				const providers = [...provs.entries()].sort((a, b) => b[1] - a[1]);
+				const provLine = providers.map(([k, v]) => `${k} ${v}`).join(", ");
 				const more = offers.length > CAP ? `\n  \u2026${offers.length - CAP} more` : "";
 				// live on OpenRouter but absent from the registry: usable only after adding to models.json
 				const registryOR = new Set(all.filter((m) => m.provider === "openrouter").map((m) => m.id));
@@ -1257,15 +1294,23 @@ export default function (pi: ExtensionAPI) {
 				const liveOnlyStr = !liveOnly.length
 					? ""
 					: f
-						? `\n\nON OPENROUTER BUT NOT IN YOUR REGISTRY (${liveOnly.length}) \u2014 add to ~/.pi/agent/models.json to make usable:\n${liveOnly.slice(0, 20).map((id) => `  ${id}  ${livePriceStr(live.byId.get(id))}${aaStr(live.byId.get(id))}`).join("\n")}${liveOnly.length > 20 ? "\n  \u2026" : ""}`
+						? `\n\nON OPENROUTER BUT NOT IN YOUR REGISTRY (${liveOnly.length}) \u2014 add to ~/.pi/agent/models.json to make usable:\n${liveOnly.slice(0, 20).map((id) => `  ${id}  ${livePriceStr(live.byId.get(id))}${aaStr(aaOf(live.byId.get(id)))}`).join("\n")}${liveOnly.length > 20 ? "\n  \u2026" : ""}`
 						: `\n\nON OPENROUTER BUT NOT IN YOUR REGISTRY: ${liveOnly.length} models; message=<substring> lists matches.`;
 				const head = `CATALOG: ${all.length} offerings, ${provs.size} providers`;
 				const body = offers.length
-					? `\n\nOFFERINGS ${offers.length} ${scope}${order}. * = current.\n${lines.join("\n")}${more}`
+					? `\n\nOFFERINGS ${offers.length} ${scope}. * = current.\n${lines.join("\n")}${more}`
 					: f
 						? `\n\nno registry offering matches "${p.message}"`
 						: "\n\nno rated offerings; message=<substring> to search, action=rate to add";
-				return { content: [{ type: "text", text: `${defaultsReport(ctx)}\n${ratingsStatus(ratings)}\n${liveStatus(live)}\n\n${head}${body}${liveOnlyStr}\n\nproviders: ${provLine}` }], details: undefined };
+				const defaults = defaultsFacts(ctx);
+				const details: ModelsDetails = {
+					kind: "models", filter: p.message ?? "", total: all.length, providers,
+					matched: offers.length, unratedHidden: f ? 0 : all.length - offers.length, endpointCap, rows,
+					defaults, ratings: ratingsSummary(ratings),
+					openrouter: { summary: liveSummary(live), error: Boolean(live.error) },
+					liveOnly: { count: liveOnly.length, rows: f ? liveOnly.slice(0, 20).map((id) => ({ id, price: livePriceStr(live.byId.get(id)), aa: aaOf(live.byId.get(id)) })) : [] },
+				};
+				return { content: [{ type: "text", text: `${defaultsReport(defaults)}\nRATINGS: ${details.ratings}\nOPENROUTER: ${details.openrouter.summary}\n\n${head}${body}${liveOnlyStr}\n\nproviders: ${provLine}` }], details };
 			}
 			if (p.action === "roles") {
 				const roles = [...loadRoles(ctx.cwd, ctx.isProjectTrusted()).values()].sort((a, b) => a.name.localeCompare(b.name));

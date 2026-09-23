@@ -167,6 +167,207 @@ const isRoleRow = (r: any) => Boolean(r) && typeof r === "object"
 const isRunRow = (r: any) => Boolean(r) && typeof r === "object"
 	&& typeof r.id === "string" && typeof r.status === "string" && typeof r.task === "string";
 
+/** Artificial Analysis indices as OpenRouter lists them; an absent index stays absent. */
+export interface AAIndices { intel?: number; coding?: number; agentic?: number }
+
+/** OpenRouter's current word on one registry offering. `notes` is the report's own wording. */
+export interface LiveFacts {
+	listed: boolean;
+	notes: string[];
+	tiered: boolean;
+	livePrice?: string;
+	expires?: string;
+	aa?: AAIndices;
+	endpoints?: string[];
+	endpointsError?: string;
+}
+
+export interface ModelRow {
+	key: string;
+	current: boolean;
+	reasoning: boolean;
+	contextWindow?: number;
+	cost?: { input: number; output: number };
+	live?: LiveFacts;
+	rating?: { score: number; source: string; note?: string };
+}
+
+/** The facts behind a models report, so a human gets a table instead of the model's text. */
+export interface ModelsDetails {
+	kind: "models";
+	filter: string;
+	total: number;
+	providers: [string, number][];
+	matched: number;
+	unratedHidden: number;
+	endpointCap?: number;
+	rows: ModelRow[];
+	defaults: { approved: { role: string; spec: string; ageDays: number; reason?: string }[]; drift: string[] };
+	ratings: string;
+	openrouter: { summary: string; error: boolean };
+	liveOnly: { count: number; rows: { id: string; price: string; aa?: AAIndices }[] };
+}
+
+const isStrings = (v: any) => Array.isArray(v) && v.every((s) => typeof s === "string");
+
+const isModelRow = (r: any) => Boolean(r) && typeof r === "object"
+	&& typeof r.key === "string" && typeof r.current === "boolean" && typeof r.reasoning === "boolean"
+	&& (r.contextWindow === undefined || typeof r.contextWindow === "number")
+	&& (r.cost === undefined || (typeof r.cost?.input === "number" && typeof r.cost?.output === "number"))
+	&& (r.rating === undefined || (typeof r.rating?.score === "number" && typeof r.rating?.source === "string"))
+	&& (r.live === undefined || (typeof r.live?.listed === "boolean" && isStrings(r.live.notes)
+		&& (r.live.endpoints === undefined || isStrings(r.live.endpoints))));
+
+const isModelsDetails = (d: any): d is ModelsDetails => d?.kind === "models"
+	&& Array.isArray(d.rows) && d.rows.every(isModelRow)
+	&& typeof d.filter === "string" && typeof d.total === "number" && typeof d.matched === "number" && typeof d.unratedHidden === "number"
+	&& Array.isArray(d.providers) && d.providers.every((p: any) => Array.isArray(p) && typeof p[0] === "string" && typeof p[1] === "number")
+	&& Array.isArray(d.defaults?.approved) && isStrings(d.defaults.drift)
+	&& d.defaults.approved.every((a: any) => typeof a?.role === "string" && typeof a?.spec === "string" && typeof a?.ageDays === "number")
+	&& typeof d.ratings === "string" && typeof d.openrouter?.summary === "string"
+	&& typeof d.liveOnly?.count === "number" && Array.isArray(d.liveOnly.rows)
+	&& d.liveOnly.rows.every((r: any) => typeof r?.id === "string" && typeof r?.price === "string");
+
+const MODEL_PREVIEW_ROWS = 6;
+const FIELD_LABEL = 13;
+
+/** Exceptions only: a column of "reasoning yes" would be noise, a missing one is a fact. */
+function modelNotes(r: ModelRow, theme: Theme): string {
+	const l = r.live;
+	const n = l?.endpoints?.length ?? 0;
+	return [
+		r.current ? theme.fg("accent", "current") : "",
+		r.reasoning ? "" : theme.fg("muted", "no reasoning"),
+		l && !l.listed ? theme.fg("warning", "not listed on OpenRouter now") : "",
+		l?.livePrice ? theme.fg("warning", `live ${l.livePrice}`) : "",
+		l?.tiered ? theme.fg("dim", "tiered pricing") : "",
+		l?.expires ? theme.fg("warning", `expires ${l.expires}`) : "",
+		n ? theme.fg("dim", `${n} endpoint${n === 1 ? "" : "s"}`) : "",
+		l?.endpointsError ? theme.fg("warning", "endpoints unavailable") : "",
+	].filter(Boolean).join(theme.fg("dim", " \u00b7 "));
+}
+
+/** Wrapped text whose continuation lines keep the indent of the first. */
+function indented(text: string, indent: number, width: number): string[] {
+	return wrapTextWithAnsi(text, Math.max(1, width - indent)).map((l) => " ".repeat(indent) + l);
+}
+
+/** A list wraps between its entries, never inside one like "anthropic 15". */
+function packed(entries: string[], width: number, theme: Theme): string[] {
+	const lines: string[] = [];
+	let line = "";
+	entries.forEach((raw, i) => {
+		// A line that continues ends in " ·", two columns it must leave free; only the last may fill.
+		const room = i === entries.length - 1 ? width : width - 2;
+		const entry = truncateToWidth(raw, Math.max(1, width - 2), "\u2026");
+		const next = line ? `${line}${theme.fg("dim", " \u00b7 ")}${entry}` : entry;
+		if (line && visibleWidth(next) > room) { lines.push(line + theme.fg("dim", " \u00b7")); line = entry; } else line = next;
+	});
+	return line ? [...lines, line] : lines;
+}
+
+function modelTable(rows: ModelRow[], expanded: boolean, theme: Theme, width: number): string[] {
+	const num = (v: unknown) => (v == null ? "" : String(v));
+	const cols: { head: string; right?: true; cell: (r: ModelRow) => [string, ThemeColor] }[] = [
+		{ head: "ctx", right: true, cell: (r) => [r.contextWindow ? `${Math.round(r.contextWindow / 1000)}k` : "?", "muted"] },
+		{ head: "$/M in/out", cell: (r) => [r.cost ? `$${r.cost.input}/${r.cost.output}` : "$?", "text"] },
+	];
+	const has = (pick: (r: ModelRow) => unknown) => rows.some((r) => pick(r) != null);
+	if (has((r) => r.live?.aa?.intel)) cols.push({ head: "intel", right: true, cell: (r) => [num(r.live?.aa?.intel), "text"] });
+	if (has((r) => r.live?.aa?.coding)) cols.push({ head: "coding", right: true, cell: (r) => [num(r.live?.aa?.coding), "muted"] });
+	if (has((r) => r.live?.aa?.agentic)) cols.push({ head: "agentic", right: true, cell: (r) => [num(r.live?.aa?.agentic), "muted"] });
+	if (has((r) => r.rating)) cols.push({ head: "rated", right: true, cell: (r) => [num(r.rating?.score), "accent"] });
+	const cells = rows.map((r) => cols.map((c) => c.cell(r)));
+	const widths = cols.map((c, i) => Math.max(visibleWidth(c.head), ...cells.map((row) => visibleWidth(row[i][0]))));
+	// The id is what you choose by: scores give way from the right before it is cut, and notes
+	// only get what is left. Context and price always stay.
+	const keyNeed = Math.max(8, ...rows.map((r) => visibleWidth(r.key)));
+	const span = (n: number) => widths.slice(0, n).reduce((sum, w) => sum + w + 2, 2);
+	let keep = cols.length;
+	while (keep > 2 && keyNeed + span(keep) > width) keep--;
+	cols.length = keep;
+	const keyWidth = Math.max(12, Math.min(keyNeed, width - span(keep)));
+	const fit = (text: string, w: number, right?: true) => {
+		const t = truncateToWidth(text, w, "\u2026");
+		const gap = " ".repeat(Math.max(0, w - visibleWidth(t)));
+		return right ? gap + t : t + gap;
+	};
+	// Notes take only what the columns leave; a clipped row must never cut into a price.
+	const line = (key: string, rest: string, notes: string) => {
+		const base = `  ${key}${rest}`;
+		const room = width - visibleWidth(base) - 2;
+		return truncateToWidth(notes && room >= 4 ? `${base}  ${truncateToWidth(notes, room, "\u2026")}` : base, width, "\u2026");
+	};
+	const out = [line(theme.fg("dim", fit("offering", keyWidth)), cols.map((c, i) => `  ${theme.fg("dim", fit(c.head, widths[i], c.right))}`).join(""), "")];
+	rows.forEach((r, n) => {
+		const key = fit(r.key, keyWidth);
+		out.push(line(r.current ? theme.bold(theme.fg("accent", key)) : theme.fg("text", key),
+			cols.map((c, i) => `  ${theme.fg(cells[n][i][1], fit(cells[n][i][0], widths[i], c.right))}`).join(""), modelNotes(r, theme)));
+		if (!expanded) return;
+		const l = r.live;
+		const detail = [
+			...(l?.notes ?? []).map((note) => theme.fg("dim", note)),
+			...(r.rating ? [theme.fg("accent", `rated ${r.rating.score}`) + theme.fg("dim", ` \u2014 ${r.rating.source}${r.rating.note ? ` \u2014 ${r.rating.note}` : ""}`)] : []),
+			...(l?.endpointsError ? [theme.fg("warning", `endpoints: fetch failed (${l.endpointsError})`)] : []),
+			...(l?.endpoints ?? []).map((e) => theme.fg("dim", `\u21b3 ${e}`)),
+		];
+		for (const d of detail) out.push(...indented(d, 4, width));
+	});
+	return out;
+}
+
+function modelsView(title: string, subject: string, d: ModelsDetails, expanded: boolean, theme: Theme, width: number): string[] {
+	const dim = (s: string) => theme.fg("dim", s);
+	const sep = dim(" \u00b7 ");
+	const { approved, drift } = d.defaults;
+	const shown = expanded ? d.rows : d.rows.slice(0, MODEL_PREVIEW_ROWS);
+	const out = [truncateToWidth(theme.fg("toolTitle", theme.bold(title)) + ` ${theme.fg("accent", "models")}` + (subject ? theme.fg("muted", ` ${subject}`) : "")
+		+ theme.fg("muted", `  ${d.matched}${d.filter ? "" : " rated"} of ${d.total} offerings`), width, "\u2026")];
+	// Collapsed, one line says what the defaults are and whether anything needs attention; the
+	// expand spells each of those out below the table instead.
+	if (!expanded) out.push(truncateToWidth("  " + dim("defaults ")
+		+ (approved.length ? approved.map((a) => theme.fg("text", a.role) + dim(" \u2192 ") + theme.fg("muted", a.spec)).join(sep) : dim("none approved"))
+		+ (drift.length ? sep + theme.fg("warning", `${drift.length} change${drift.length === 1 ? "" : "s"} since approval`) : "")
+		+ (d.openrouter.error ? sep + theme.fg("warning", `OpenRouter ${d.openrouter.summary}`) : ""), width, "\u2026"));
+	if (shown.length) out.push(...modelTable(shown, expanded, theme, width));
+	else out.push("  " + theme.fg("muted", d.filter ? `no registry offering matches "${d.filter}"` : "no rated offerings yet"));
+	if (!expanded) {
+		const hidden = d.matched - shown.length;
+		const withheld = [
+			hidden > 0 ? `\u2026 ${hidden} more` : "",
+			d.filter && d.liveOnly.count ? `${d.liveOnly.count} on OpenRouter but not in your registry` : "",
+		].filter(Boolean).join(" \u00b7 ");
+		out.push(...indented(withheld ? `${dim(`${withheld},`)} ${keyHint("app.tools.expand", "to expand")}` : keyHint("app.tools.expand", "for pricing detail and providers"), 2, width));
+		return out;
+	}
+	const valueWidth = Math.max(1, width - FIELD_LABEL - 2);
+	const field = (label: string, value: string | string[]) => {
+		const lines = typeof value === "string" ? wrapTextWithAnsi(value, valueWidth) : value;
+		lines.forEach((l, i) => out.push((i ? " ".repeat(FIELD_LABEL + 2) : `  ${dim(label.padEnd(FIELD_LABEL))}`) + l));
+	};
+	if (d.matched > d.rows.length) out.push("  " + dim(`\u2026 ${d.matched - d.rows.length} more beyond the first ${d.rows.length}; a filter narrows them`));
+	out.push("");
+	if (!approved.length) field("defaults", dim("none approved"));
+	for (const a of approved) {
+		field(a === approved[0] ? "defaults" : "", theme.fg("text", a.role) + dim(" \u2192 ") + theme.fg("muted", a.spec) + dim(` \u00b7 approved ${a.ageDays}d ago`));
+		if (a.reason) field("", dim(a.reason));
+	}
+	drift.forEach((x, i) => field(i ? "" : "drift", theme.fg("warning", x)));
+	field("OpenRouter", theme.fg(d.openrouter.error ? "warning" : "muted", d.openrouter.summary)
+		+ (d.endpointCap ? dim(` \u00b7 endpoints for the first ${d.endpointCap} matches only`) : ""));
+	field("ratings", theme.fg("muted", d.ratings));
+	if (d.unratedHidden) field("unrated", dim(`${d.unratedHidden} offerings without a rating or AA index are not listed`));
+	if (d.liveOnly.count) {
+		field("unregistered", dim(`${d.liveOnly.count} on OpenRouter, not in your registry \u2014 add to ~/.pi/agent/models.json to use`));
+		for (const r of d.liveOnly.rows) {
+			const aa = [r.aa?.intel != null ? `intel ${r.aa.intel}` : "", r.aa?.coding != null ? `coding ${r.aa.coding}` : "", r.aa?.agentic != null ? `agentic ${r.aa.agentic}` : ""].filter(Boolean).join(" ");
+			field("", theme.fg("text", r.id) + theme.fg("muted", `  ${r.price}`) + (aa ? dim(`  ${aa}`) : ""));
+		}
+	}
+	field("providers", packed(d.providers.map(([name, n]) => theme.fg("muted", name) + dim(` ${n}`)), valueWidth, theme));
+	return out;
+}
+
 export function resultView(
 	title: string,
 	action: string | undefined,
@@ -223,6 +424,12 @@ export function resultView(
 				])
 				: [theme.fg("muted", "  ") + keyHint("app.tools.expand", "what each role is for, and where it comes from")]),
 		];
+	}
+
+	// Pi exits on any line wider than the terminal, and this record is re-rendered at whatever width
+	// the terminal has after a reload. The view wraps to fit; the clamp makes that a guarantee.
+	if (action === "models" && isModelsDetails(result.details)) {
+		return modelsView(title, subject, result.details, Boolean(opts.expanded), theme, inner).map((l) => truncateToWidth(l, inner, "\u2026"));
 	}
 
 	const blocks = Array.isArray(result.content) ? result.content : [];

@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { visibleWidth } from "@earendil-works/pi-tui";
 
 // keyHint resolves real keybindings on first use; keep that away from this machine's config.
 process.env.HOME = mkdtempSync(join(tmpdir(), "pi-delegate-render-"));
@@ -79,4 +80,71 @@ test("child rows tolerate records missing later fields", () => {
 	const expanded = render(outcome, { expanded: true });
 	assert.match(expanded, /report text/);
 	assert.match(expanded, /worker-2/);
+});
+
+const modelRow = (key: string, extra: any = {}) => ({ key, current: false, reasoning: true, contextWindow: 262144, cost: { input: 0.1, output: 0.3 }, ...extra });
+const models = (rows: any[], extra: any = {}) => ({
+	content: [{ type: "text", text: "DEFAULTS (approved by user)\nOPENROUTER: 454 live\n\nCATALOG: 998 offerings\n\nOFFERINGS model text" }],
+	details: {
+		kind: "models", filter: "step", total: 998, matched: rows.length, unratedHidden: 0, rows,
+		// The catalog from the terminal that crashed at 40 columns.
+		providers: Object.entries({ openrouter: 387, "local-llm": 139, huggingface: 76, opencode: 73, vertex: 52, "local-dgx": 31, "opencode-go": 30, clinepass: 25, omlx: 24, "github-copilot": 22, "qwen-token-plan": 20, anthropic: 15, "anthropic-2": 15, "google-vertex": 14, "corral-local": 14, "qwen-token-plan-individual": 9, "openai-codex": 8, zai: 7 }),
+		defaults: { approved: [{ role: "scout", spec: "vendor/luna", ageDays: 1, reason: "flat-rate recon" }], drift: ["scout: price changed $1/2 → $2/4/M"] },
+		ratings: "none", openrouter: { summary: "454 live, 188 with AA, fetched 0s ago (06:53Z)", error: false },
+		liveOnly: { count: 1, rows: [{ id: "stepfun/step-5-preview", price: "$0.3/1.2/M" }] },
+		...extra,
+	},
+});
+const modelLines = (result: any, expanded = false, width = 110) => resultView("delegate_ctl", "models", '"step"', result, { expanded }, theme, width);
+
+// Field report: the collapsed report was eight lines of preamble, and not one offering.
+test("a models report previews offerings as an aligned table, not the model's text", () => {
+	const rows = [
+		modelRow("local-llm/stepfun-ai/Step-3.7-Flash-IQ3_XS", { reasoning: false, cost: { input: 0, output: 0 } }),
+		modelRow("openrouter/stepfun/step-3.7-flash", { current: true, live: { listed: true, tiered: false, notes: ["live now $0.16/0.92/M (registry differs)"], livePrice: "$0.16/0.92/M", aa: { coding: 39.6 }, endpoints: ["SiliconFlow [siliconflow/fp8]  $0.1/0.3/M  fp8"] } }),
+		...Array.from({ length: 6 }, (_, i) => modelRow(`vendor/step-${i}`)),
+	];
+	const lines = modelLines(models(rows));
+	const flat = lines.join("\n");
+	assert.match(lines[0], /delegate_ctl models "step"\s+8 of 998 offerings/);
+	assert.match(flat, /defaults scout → vendor\/luna · 1 change since approval/);
+	assert.doesNotMatch(flat, /DEFAULTS|OPENROUTER|CATALOG/, "the model's text is not the human's view");
+	assert.match(flat, /local-llm\/stepfun-ai\/Step-3\.7-Flash-IQ3_XS\s+262k\s+\$0\/0\s+no reasoning/);
+	assert.match(flat, /openrouter\/stepfun\/step-3\.7-flash\s+262k\s+\$0\.1\/0\.3\s+39\.6\s+current · live \$0\.16\/0\.92\/M/, "exceptions are named on the row");
+	assert.match(flat, /vendor\/step-3/);
+	assert.doesNotMatch(flat, /vendor\/step-4/, "six rows in the preview");
+	assert.match(flat, /… 2 more · 1 on OpenRouter but not in your registry,/);
+	assert.doesNotMatch(flat, /SiliconFlow/, "endpoints wait for the expand");
+	const table = lines.filter((l) => /\d+k /.test(l));
+	assert.equal(new Set(table.map((l) => l.indexOf("262k"))).size, 1, "columns line up");
+
+	const expanded = modelLines(models(rows), true);
+	const all = expanded.join("\n");
+	assert.match(all, /vendor\/step-5/);
+	assert.match(all, /↳ SiliconFlow \[siliconflow\/fp8\]/);
+	assert.match(all, /live now \$0\.16\/0\.92\/M \(registry differs\)/);
+	assert.match(all, /drift\s+scout: price changed/);
+	assert.match(all, /flat-rate recon/);
+	assert.match(all, /stepfun\/step-5-preview\s+\$0\.3\/1\.2\/M/);
+	for (const line of expanded.filter((l) => /anthropic|qwen/.test(l))) {
+		assert.doesNotMatch(line, /(anthropic|qwen-token-plan-individual)(\s·)?$/, `a provider keeps its count on its line: ${line}`);
+	}
+	// Pi exits on a line wider than the terminal; the providers list once overflowed at 40.
+	for (const width of [110, 54, 40]) {
+		for (const view of [modelLines(models(rows), false, width), modelLines(models(rows), true, width)]) {
+			for (const line of view) assert.ok(visibleWidth(line) <= width, `overflows ${width} columns: ${JSON.stringify(line)}`);
+		}
+		// The clamp keeps Pi alive; the list must still fit on its own, breaking only between entries.
+		const view = modelLines(models(rows), true, width);
+		const providers = view.slice(view.findIndex((l) => /^\s+providers/.test(l)));
+		for (const line of providers.slice(0, -1)) assert.match(line, / ·$/, `providers break between entries at ${width}: ${JSON.stringify(line)}`);
+	}
+});
+
+test("a models record without usable details renders its text", () => {
+	const text = { content: [{ type: "text", text: "OFFERINGS legacy text" }] };
+	for (const details of [undefined, { kind: "models" }, { kind: "models", rows: [{}] }, models([modelRow("a/b", { live: { listed: true, notes: "oops" } })]).details]) {
+		assert.match(modelLines({ ...text, details }).join(" "), /OFFERINGS legacy text/, `falls back for ${JSON.stringify(details)?.slice(0, 60)}`);
+	}
+	assert.match(modelLines(models([])).join(" "), /no registry offering matches "step"/);
 });
