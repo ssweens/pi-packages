@@ -123,7 +123,9 @@ export default function (pi: ExtensionAPI) {
   ];
   pi.on("session_start", async (_event, ctx) => {
     ctx.ui.setWidget("pi-vertex-startup", (_tui, theme) => ({
-      render: () => [...vertexStartupLines.map(l => theme.fg("muted", l)), ""],
+      // A line wider than the terminal is a fatal render error in Pi. These lines are ASCII
+      // (GCP project ids are [a-z0-9-]), so length is their width.
+      render: (width: number) => [...vertexStartupLines.map(l => theme.fg("muted", l.length > width ? `${l.slice(0, Math.max(0, width - 1))}…` : l)), ""],
       invalidate: () => {},
     }));
   });

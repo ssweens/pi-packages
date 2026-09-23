@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.4] - 2026-09-23
+
+### Fixed
+- **The startup notice no longer crashes Pi on a narrow terminal.** The `[pi-vertex] Initializing with project: …` widget ignored the render width, and Pi exits on any line wider than the terminal. With a typical project id that line is about 68 columns, so resizing below that, or reloading in a narrow pane, killed the app (`Rendered line … exceeds terminal width (68 > 54)`). The widget now clips to the width it is given.
+
 ## [1.2.3] - 2026-09-22
 
 ### Fixed
