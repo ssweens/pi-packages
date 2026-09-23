@@ -54,7 +54,7 @@ Distinguish the three in your own words when you report to the user: the child's
 If automatic continuation fails, distinguish child completion, notification delivery, and parent continuation using the transcript and runtime errors. Do not claim the cause from configuration alone or work around it by switching every launch to synchronous.
 
 ## Execution model and terminal independence
-Keep children in the parent Pi process. Here, **background means asynchronous, not a detached worker**. Use `delegate` and `delegate_ctl` for child coordination. The pinned Agents frame shows only live work; finished children leave one expandable transcript line. For human inspection, `/agents` opens finished-child history; Alt+J focuses live children or opens history when idle. Opening history or a child transcript does not restart work.
+Keep children in the parent Pi process. Here, **background means asynchronous, not a detached worker**. Use `delegate` and `delegate_ctl` for child coordination. The pinned Agents frame shows only live work; finished children leave one expandable transcript line. For human inspection, `/agents` opens finished-child history; Ctrl+J focuses live children or opens history when idle. Opening history or a child transcript does not restart work.
 
 If work must continue after a terminal disconnect, run the **parent Pi inside tmux**. Use one tmux session per independent workstream, not per subagent. Detach from tmux instead of quitting Pi. Keep using the delegation tools; do not orchestrate children through terminal panes. tmux is optional, not a package dependency.
 

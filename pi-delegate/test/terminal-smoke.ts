@@ -34,6 +34,8 @@ const mouse = (button: number, row: number) => text(`\x1b[<${button};3;${row}M${
 async function command(value: string) { text(value); key("Enter"); }
 try {
 	writeFileSync(join(box.cwd, "sample.ts"), Array.from({ length: 36 }, (_, i) => `export const line${i + 1} = ${i + 1};`).join("\n"));
+	// The setup the README documents: Ctrl+J belongs to the Agents frame, the newline keeps Shift+Enter.
+	writeFileSync(join(box.agentDir, "keybindings.json"), JSON.stringify({ "tui.input.newLine": ["shift+enter"] }));
 	for (const mode of ["regular", "fullscreen"]) {
 		const release = join(box.root, `${mode}.release`);
 		const finalGate = deferred();
@@ -55,7 +57,7 @@ try {
 		assert.doesNotMatch(capture(), /shortcut conflict/);
 		await command("/fixture-spawn Native detail");
 		await expect(/Agents.*1 active/);
-		text("PARENT-DRAFT"); key("M-j"); key("Enter");
+		text("PARENT-DRAFT"); key("C-j"); key("Enter");
 		await expect(/^\s+OUTPUT-30\s*$/m); save(`${mode}-collapsed-live`);
 		assert.doesNotMatch(capture(), /"command":|"path":/);
 		assert.match(capture(), /earlier lines|more lines/);
@@ -67,7 +69,7 @@ try {
 		key("C-o"); key("PPage"); await expect(/^\s+OUTPUT-(?:1|2)\s*$/m); save(`${mode}-expanded`);
 		key("C-o"); key("C-End");
 		text("CHILD-DRAFT"); key("Escape"); await expect(/PARENT-DRAFT/);
-		key("M-j"); key("Enter"); await expect(/CHILD-DRAFT/); key("C-u");
+		key("C-j"); key("Enter"); await expect(/CHILD-DRAFT/); key("C-u");
 		writeFileSync(release, "release");
 		await expect(/Streaming line 35/); save(`${mode}-streaming-latest`);
 		key("PPage"); await expect(/scroll paused/);
@@ -137,11 +139,10 @@ try {
 		await expect(/Reloaded .*extensions/); // the real completion line; a persisting footer proves nothing
 		await expect(/Agents.*active/, true);
 		assert.doesNotMatch(capture(), /\[Extension issues\]/);
-		// Ctrl+J stays the newline. Without it, terminals lacking the kitty protocol cannot
-		// type a multiline draft at all — the regression that motivated moving our key.
-		text("MULTI-A"); key("C-j"); text("MULTI-B");
-		await expect(/MULTI-A/);
-		await expect(/MULTI-B/);
+		// Ctrl+J is taken, so a multiline draft must still work through the remaining newline key.
+		// tmux cannot send Shift+Enter without extended-keys; send its modifyOtherKeys encoding.
+		text("MULTI-A"); text("\x1b[27;2;13~"); text("MULTI-B");
+		await expect(/MULTI-A[^\n]*\n[^\n]*MULTI-B/); // two lines, not one submitted or joined draft
 		save(`${mode}-multiline`);
 		key("C-c"); await expect(/MULTI-B/, true);
 		tmux("kill-session", "-t", "pi");

@@ -1424,10 +1424,9 @@ export default function (pi: ExtensionAPI) {
 		description: "Open finished delegate history without restarting children",
 		handler: async (_args, ctx) => { await openHistory(ctx); },
 	});
-	// Alt+J, not Ctrl+J: Ctrl+J is the newline, and the only one that works without the kitty
-	// keyboard protocol. Taking it made multiline drafts impossible there, and Pi warns about
-	// the override at every startup.
-	pi.registerShortcut("alt+j", {
+	// Ctrl+J is also Pi's default secondary newline (tui.input.newLine), so Pi reports the override
+	// at startup until the user drops ctrl+j from that action in keybindings.json (see README).
+	pi.registerShortcut("ctrl+j", {
 		description: "Focus active delegates, or open finished history when idle",
 		handler: async (ctx) => {
 			if (navigationOpen) return;
