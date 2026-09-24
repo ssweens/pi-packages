@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -23,7 +23,7 @@ import type { ActiveTool, ChildActivity } from "./transcript.js";
 import { type AAIndices, elapsed, empty, framed, type LiveFacts, type ModelRow, type ModelsDetails, resultLines, resultView, type RunView } from "./render.js";
 import { loadRoles } from "./roles.js";
 import { RunCompletion } from "./completion.js";
-import { claimOwner, readRecord, storageDir, writeRecord } from "./storage.js";
+import { ownedElsewhere, processOwner, readRecord, storageDir, writeRecord } from "./storage.js";
 
 const AGENT_DIR = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
 const LOG_FILE = join(AGENT_DIR, "delegate-runs.jsonl");
@@ -112,16 +112,20 @@ interface Run {
 	dirtyBefore?: Map<string, number>;
 	timer?: ReturnType<typeof setTimeout>;
 	sessionFile?: string;
+	// Per-run ownership (see storage.ts). A run owned by another live process is read-only here.
+	ownerPid?: number;
+	ownerHost?: string;
+	ownerToken?: string;
+	foreign?: boolean;
 }
 
+/** A parent's in-process binding. There is no parent-level lock: runs carry their own ownership. */
 interface Owner {
 	key: string;
-	path: string;
-	runPaths: string[];
+	// One pointer file per run: concurrent processes on the same parent never clobber a shared list.
+	dir: string;
 	queued: Set<string>;
 	closed: boolean;
-	lost?: Error;
-	release: () => Promise<void>;
 	binding?: { pi: ExtensionAPI; ctx: ExtensionContext };
 }
 interface RuntimeState {
@@ -141,12 +145,29 @@ function ownerPath(ctx: ExtensionContext): string {
 	return join(storageDir(ctx.sessionManager.getCwd()), "owners", `${ctx.sessionManager.getSessionId()}.json`);
 }
 function ownedRuns(owner: Owner): Run[] { return [...runs.values()].filter((r) => r.ownerKey === owner.key); }
+function pointerDir(key: string): string { return key.replace(/\.json$/, ""); }
+function foreignError(run: Run): Error {
+	return new Error(`${run.id} is owned by another live Pi process (pid ${run.ownerPid} on ${run.ownerHost}); it is read-only here. Use that session, or wait for it to exit.`);
+}
+/** Legacy single-file index (read only) plus one pointer file per run. */
+function runRecordPaths(owner: Owner): string[] {
+	const paths: string[] = [];
+	const legacy = readRecord<{ version: number; runs: string[] }>(owner.key);
+	if (legacy && (legacy.version !== 1 || !Array.isArray(legacy.runs) || legacy.runs.some((p) => typeof p !== "string"))) throw new Error(`Invalid delegate index: ${owner.key}`);
+	paths.push(...(legacy?.runs ?? []));
+	const names = existsSync(owner.dir) ? readdirSync(owner.dir).filter((n) => n.endsWith(".json")).sort() : [];
+	for (const name of names) {
+		const pointer = readRecord<{ version: number; recordPath: string }>(join(owner.dir, name));
+		if (!pointer || pointer.version !== 1 || typeof pointer.recordPath !== "string") throw new Error(`Invalid delegate pointer: ${join(owner.dir, name)}`);
+		paths.push(pointer.recordPath);
+	}
+	return [...new Set(paths)];
+}
 
-type RunRecord = Omit<Run, "completion" | "session" | "timer" | "streamingMessage" | "activeTools" | "activityCache" | "dirtyBefore" | "ready" | "acknowledged"> & { version: 1; savedAt: number };
+type RunRecord = Omit<Run, "completion" | "session" | "timer" | "streamingMessage" | "activeTools" | "activityCache" | "dirtyBefore" | "ready" | "acknowledged" | "foreign"> & { version: 1; savedAt: number };
 function saveRun(run: Run): void {
-	const owner = state.owners.get(run.ownerKey);
-	if (owner?.lost) throw owner.lost;
-	const { completion, session, timer, streamingMessage, activeTools, activityCache, dirtyBefore, ready, acknowledged, ...record } = run;
+	if (run.foreign) throw foreignError(run);
+	const { completion, session, timer, streamingMessage, activeTools, activityCache, dirtyBefore, ready, acknowledged, foreign, ...record } = run;
 	writeRecord(run.recordPath, { ...record, version: 1, savedAt: Date.now() });
 }
 function messagesOf(run: Run): any[] {
@@ -173,6 +194,14 @@ function restoreRun(path: string, owner: Owner): Run {
 	// Parent message_end hooks run before Pi appends the message. Only its transcript
 	// can establish durable delivery after a crash; never trust a saved in-memory acknowledgement.
 	const run: Run = { ...record, recordPath: path, acknowledged: false, completion: new RunCompletion(), activeTools: new Map() };
+	if (ownedElsewhere(record)) {
+		// Its live owner is still running or delivering it: show a snapshot, never write or re-deliver it.
+		run.foreign = true;
+		run.completion.settle(finalResult(run));
+		return run;
+	}
+	// Unowned, ours from before a reload, or its owner died: this process adopts it.
+	Object.assign(run, processOwner());
 	if (run.status === "running") {
 		run.status = "interrupted";
 		run.endedAt = record.savedAt;
@@ -180,6 +209,7 @@ function restoreRun(path: string, owner: Owner): Run {
 	}
 	try { harvest(run); }
 	catch (error) { run.status = "error"; run.error = String(error); }
+	saveRun(run);
 	run.completion.settle(finalResult(run));
 	return run;
 }
@@ -767,6 +797,7 @@ function finish(run: Run, status: Status, error?: string) {
 }
 
 async function cancelRun(run: Run) {
+	if (run.foreign) throw foreignError(run);
 	run.stopped = true;
 	if (run.status === "running") run.status = "cancelled";
 	try { saveRun(run); }
@@ -778,8 +809,9 @@ function publish(completion: RunCompletion<RunResult>) {
 	const result = completion.result;
 	const run = runs.get(result.details.id);
 	if (!run || run.segment !== result.details.segment || run.acknowledged) return;
+	if (run.foreign) return; // Its owner delivers it.
 	const owner = state.owners.get(run.ownerKey);
-	if (!owner?.binding || owner.closed || owner.lost) return;
+	if (!owner?.binding || owner.closed) return;
 	const key = `${run.id}:${run.segment}`;
 	if (owner.queued.has(key)) return;
 	owner.queued.add(key);
@@ -802,15 +834,20 @@ async function closeOwner(owner: Owner) {
 	owner.binding = undefined;
 	owner.closed = true;
 	await Promise.all(ownedRuns(owner).map(async (run) => {
-		if (!run.completion.settled) {
-			if (run.status === "running") run.status = "interrupted";
-			await run.session?.abort();
-			await run.completion.wait();
+		if (!run.foreign) {
+			if (!run.completion.settled) {
+				if (run.status === "running") run.status = "interrupted";
+				await run.session?.abort();
+				await run.completion.wait();
+			}
+			run.session?.dispose();
+			// Release ownership so the next process to open this parent adopts it.
+			run.ownerPid = run.ownerHost = run.ownerToken = undefined;
+			try { saveRun(run); } catch { /* the record stays with its last owner; a dead owner is adopted anyway */ }
 		}
-		run.session?.dispose();
 		runs.delete(run.id);
 	}));
-	try { await owner.release(); } finally { state.owners.delete(owner.key); }
+	state.owners.delete(owner.key);
 }
 
 /** Reserve a segment before awaiting setup: concurrent steers cannot create duplicate sessions. */
@@ -886,7 +923,7 @@ export default function (pi: ExtensionAPI) {
 	let owner: Owner | undefined;
 	let attachError: string | undefined;
 	function requireOwner(): Owner {
-		if (!owner || owner.closed || owner.lost || owner.binding?.pi !== pi) throw new Error(attachError ?? owner?.lost?.message ?? "Delegate runtime is not attached to this parent.");
+		if (!owner || owner.closed || owner.binding?.pi !== pi) throw new Error(attachError ?? "Delegate runtime is not attached to this parent.");
 		return owner;
 	}
 	async function attach(ctx: ExtensionContext) {
@@ -894,18 +931,10 @@ export default function (pi: ExtensionAPI) {
 		let existing = state.owners.get(path);
 		if (existing?.binding && existing.binding.pi !== pi) throw new Error("This parent already has an attached delegate runtime.");
 		if (!existing) {
-			const created: Owner = { key: path, path, runPaths: [], queued: new Set(), closed: false, release: async () => {} };
-			created.release = await claimOwner(path, (error) => {
-				created.lost = error;
-				created.binding?.ctx.ui.notify(`Delegate ownership lost: ${error.message}`, "error");
-				void closeOwner(created).catch(() => {});
-			});
+			const created: Owner = { key: path, dir: pointerDir(path), queued: new Set(), closed: false };
 			state.owners.set(path, created);
 			try {
-				const index = readRecord<{ version: number; runs: string[] }>(path);
-				if (index && (index.version !== 1 || !Array.isArray(index.runs) || index.runs.some((p) => typeof p !== "string"))) throw new Error(`Invalid delegate index: ${path}`);
-				created.runPaths = index?.runs ?? [];
-				for (const recordPath of created.runPaths) {
+				for (const recordPath of runRecordPaths(created)) {
 					const run = restoreRun(recordPath, created);
 					runs.set(run.id, run);
 				}
@@ -924,6 +953,7 @@ export default function (pi: ExtensionAPI) {
 	}
 	async function steer(run: Run, message: string, restart = false, replacement?: { model?: string; thinking?: string; contextWindow?: number; timeoutMs?: number }) {
 		requireOwner();
+		if (run.foreign) throw foreignError(run);
 		if (run.status === "running") {
 			await run.ready;
 			if (run.status === "running") {
@@ -1170,11 +1200,10 @@ export default function (pi: ExtensionAPI) {
 				activeTools: new Map(),
 				revision: 0,
 				contextWindow: model.contextWindow,
+				...processOwner(),
 			};
 			saveRun(run);
-			const paths = [...owner.runPaths, run.recordPath];
-			writeRecord(owner.path, { version: 1, runs: paths });
-			owner.runPaths = paths;
+			writeRecord(join(owner.dir, `${encodeURIComponent(run.id)}.json`), { version: 1, recordPath: run.recordPath });
 			runs.set(run.id, run);
 			changed();
 			const completion = run.completion;

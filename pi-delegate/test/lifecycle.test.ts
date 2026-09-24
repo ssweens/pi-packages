@@ -343,10 +343,13 @@ test("real SDK delegation lifecycle (loopback provider, no credentials)", { time
 			assert.equal(h.notices.length, before + 1);
 			api.onUnscripted();
 		});
-		await t.test("separate process cannot acquire a live parent's lease", async () => {
-			const child = spawn(process.execPath, ["--import", "tsx", "test/reopen.ts", box.root, h.parent, "locked"], { env: box.env, stdio: ["ignore", "pipe", "pipe"] });
+		await t.test("a second process on the same parent delegates; the live parent's runs stay read-only there", async () => {
+			api.script("Shared child", { text: "SHARED-OK" });
+			api.onUnscripted(() => ({ text: "SHARED-ACK" }));
+			const child = spawn(process.execPath, ["--import", "tsx", "test/reopen.ts", box.root, h.parent, "shared"], { env: box.env, stdio: ["ignore", "pipe", "pipe"] });
 			let output = ""; child.stdout.on("data", (s) => output += s); child.stderr.on("data", (s) => output += s);
-			const [code] = await once(child, "exit"); assert.equal(code, 0, output); assert.match(output, /LEASE-REFUSED/);
+			const [code] = await once(child, "exit"); assert.equal(code, 0, output); assert.match(output, /SHARED-PARENT-OK/);
+			api.onUnscripted();
 		});
 		await t.test("cold reopen is read-only; stopped and completed records stay inert", async () => {
 			const parent = h.parent;

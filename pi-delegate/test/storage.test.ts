@@ -3,7 +3,8 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { claimOwner, readRecord, storageDir, writeRecord } from "../src/storage.ts";
+import { spawnSync } from "node:child_process";
+import { ownedElsewhere, processOwner, readRecord, storageDir, writeRecord } from "../src/storage.ts";
 
 function fixture(t: any) {
 	const dir = mkdtempSync(join(tmpdir(), "delegate-storage-"));
@@ -40,13 +41,14 @@ test("subsession storage is self-ignored and resolves cwd aliases", (t) => {
 	assert.equal(readFileSync(join(path, ".gitignore"), "utf8"), "*\n# retained\n");
 });
 
-test("one parent owner holds the lease until release", async (t) => {
-	const path = join(fixture(t), "owners", "parent.json");
-	const compromised = (error: Error) => { throw error; };
-	const release = await claimOwner(path, compromised);
-	await assert.rejects(claimOwner(path, compromised), /owned by another Pi process/);
-	await release();
-	const releaseAgain = await claimOwner(path, compromised);
-	await releaseAgain();
-	assert.deepEqual(readdirSync(join(path, "..")), []);
+test("runs are owned per process: a live owner elsewhere is read-only, a dead owner is adoptable", () => {
+	const me = processOwner();
+	assert.equal(processOwner(), me, "identity is stable within a process");
+	assert.equal(ownedElsewhere({}), false, "unowned records are adoptable");
+	assert.equal(ownedElsewhere(me), false, "our own records are ours");
+	assert.equal(ownedElsewhere({ ...me, ownerToken: "other", ownerPid: process.ppid }), true, "a live process on this host owns it");
+	const exited = spawnSync(process.execPath, ["-e", ""]).pid!;
+	assert.equal(ownedElsewhere({ ...me, ownerToken: "other", ownerPid: exited }), false, "a dead owner is adoptable");
+	assert.equal(ownedElsewhere({ ...me, ownerToken: "other" }), false, "same pid, other token: an earlier process that reused our pid");
+	assert.equal(ownedElsewhere({ ...me, ownerToken: "other", ownerHost: "elsewhere.invalid" }), true, "another host's owner is never taken");
 });

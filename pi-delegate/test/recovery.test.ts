@@ -4,7 +4,6 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
 import { provider, sandbox, type Sandbox } from "./fixture.ts";
 
 async function run(box: Sandbox, mode: string) {
@@ -21,8 +20,7 @@ test("SIGKILL before delivery and before receipt persistence recovers once witho
 		const crashes = await Promise.all(scenarios.map(({ box, mode }) => run(box, mode)));
 		for (const crash of crashes) assert.equal(crash.signal, "SIGKILL", crash.output);
 		assert.equal(api.requests.length, 2);
-		// Real lease policy is stale=10s; do not rewrite lock mtimes or mock ownership.
-		await sleep(11000);
+		// The crashed owner's pid is dead, so the next process adopts its runs at once.
 		api.onUnscripted((request) => {
 			assert.match(JSON.stringify(request.messages.at(-1)), /delegate finished.*CRASH-RESULT/s);
 			return { text: "RECOVERED-ACK" };
