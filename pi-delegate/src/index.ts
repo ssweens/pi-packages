@@ -926,10 +926,30 @@ export default function (pi: ExtensionAPI) {
 		if (!owner || owner.closed || owner.binding?.pi !== pi) throw new Error(attachError ?? "Delegate runtime is not attached to this parent.");
 		return owner;
 	}
+	/**
+	 * The runtime registry outlives /reload so that live children survive it, so the Owner found
+	 * there may have been built by the previous version of this file. Before per-run ownership it
+	 * held a parent lease and a shared index, had no pointer `dir`, and its runs carried no owner.
+	 * Upgrade it in place: its live children hold references to this very object.
+	 */
+	function adoptPreviousOwner(previous: Owner) {
+		const legacy = previous as Owner & { path?: string; runPaths?: string[]; lost?: Error; release?: () => Promise<void> };
+		const release = legacy.release;
+		delete legacy.path; delete legacy.runPaths; delete legacy.lost; delete legacy.release;
+		legacy.dir = pointerDir(legacy.key);
+		legacy.queued ??= new Set();
+		// Its runs, live or settled, belong to this process. Recording that stops another process
+		// opening this parent from adopting children that are still running here.
+		for (const run of ownedRuns(legacy)) if (!run.ownerToken) { Object.assign(run, processOwner()); saveRun(run); }
+		// The lease no longer guards anything; releasing it stops its refresh timer and removes its lock.
+		// Call it with no arguments: proper-lockfile reads an extra one as its callback and crashes Pi.
+		if (release) void Promise.resolve().then(() => release()).catch(() => {});
+	}
 	async function attach(ctx: ExtensionContext) {
 		const path = ownerPath(ctx);
 		let existing = state.owners.get(path);
 		if (existing?.binding && existing.binding.pi !== pi) throw new Error("This parent already has an attached delegate runtime.");
+		if (existing && typeof existing.dir !== "string") adoptPreviousOwner(existing);
 		if (!existing) {
 			const created: Owner = { key: path, dir: pointerDir(path), queued: new Set(), closed: false };
 			state.owners.set(path, created);

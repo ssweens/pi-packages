@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { rmSync, readFileSync, renameSync } from "node:fs";
+import { existsSync, rmSync, readFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
@@ -75,6 +75,33 @@ test("real SDK delegation lifecycle (loopback provider, no credentials)", { time
 			assert.equal(h.notices.length, notices, "an attached waiter takes the result instead of waking the parent");
 			assert.match(readFileSync(file, "utf8"), /parent-only-marker/);
 			assert.equal((readFileSync(file, "utf8").match(/Reload work/g) ?? []).length, 1);
+		});
+		// Field report: every delegate failed with `The "path" argument must be of type string` after a
+		// live session reloaded onto per-run ownership. The runtime registry outlives /reload so live
+		// children survive it, which means the Owner in it was built by the previous version: no `dir`,
+		// a parent lease, a shared index, and runs recorded without an owner.
+		await t.test("a reload onto this version adopts the parent the previous version registered", async () => {
+			const owner = [...state().owners.values()].find((o: any) => o.binding);
+			const earlier = [...state().runs.values()].filter((r: any) => r.ownerKey === owner.key);
+			assert.ok(earlier.length, "the parent already has children from before the reload");
+			const released: number[] = [];
+			delete owner.dir;
+			// proper-lockfile's release takes no arguments; handed one, it treats it as a callback and
+			// throws from an fs callback, which took real Pi down during the first version of this fix.
+			Object.assign(owner, { path: owner.key, runPaths: earlier.map((r: any) => r.recordPath), release: async (...args: unknown[]) => { released.push(args.length); } });
+			for (const run of earlier) { delete run.ownerPid; delete run.ownerHost; delete run.ownerToken; }
+			await h.runtime.session.reload();
+			assert.equal(state().owners.get(owner.key), owner, "the same parent object, so live children stay attached");
+			api.script("After version reload", { text: "UPGRADED-OK" });
+			const result = await h.launch("After version reload", { sync: true });
+			assert.equal(result.details.status, "complete", result.content[0].text);
+			assert.equal(result.details.output, "UPGRADED-OK");
+			assert.ok(existsSync(join(owner.dir, `${encodeURIComponent(result.details.id)}.json`)), "new runs get their pointer file");
+			assert.deepEqual(released, [0], "the previous version's lease is released once, with no arguments");
+			assert.equal("path" in owner || "runPaths" in owner || "release" in owner, false);
+			// Runs from before the reload belong to this process, and their records now say so; otherwise
+			// another process opening this parent would adopt children that are still ours.
+			for (const run of earlier) assert.equal(JSON.parse(readFileSync(run.recordPath, "utf8")).ownerPid, process.pid, run.id);
 		});
 		await t.test("a fork inherits the parent's work, not its delegation records", async () => {
 			const manager = h.runtime.session.sessionManager;

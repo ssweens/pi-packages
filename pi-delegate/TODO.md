@@ -23,7 +23,16 @@ Two tools. In `settings.packages`; `pi-subagents` and `pi-strings` removed, `set
 - Discovery, lowest → highest priority: package `roles/` → `~/.pi/agent/agents/` → `~/.agents/agents/` (skips `_*`/`.*`) → `<cwd>/.pi/agents/` when trusted.
 - State: `~/.pi/agent/delegate-runs.jsonl` (plaintext task, tokens, cost, duration, changed files), `delegate-models.json` (approved defaults + catalog snapshot), `delegate-ratings.json` (agent-researched ratings, stale after 14 days), child transcripts in `<cwd>/.agents/pi/subsessions/` — with the work, not under `~/.pi`.
 
-## `models` as a table; steer model that never reached the session (uncommitted)
+## Reloading onto per-run ownership broke every delegate (uncommitted)
+
+- Field report after `eea99c6` (per-run ownership, no parent lease): every `delegate` failed with `The "path" argument must be of type string`. The agent then fell back to `pi -p` in tmux. Cause: the process-global runtime registry deliberately outlives `/reload` so live children survive it. A session that reloaded onto `eea99c6` therefore kept an Owner built by the previous code, which has no `dir`, so `join(owner.dir, …)` for the new pointer file got `undefined`. A fresh process was never affected; the suite only ever started fresh.
+- Reproduced in real Pi: a worktree at `83d0e05`, one child, source switched to `eea99c6`, `/reload`, delegate again gives the exact error. The control (starting and reloading on `eea99c6`) works.
+- Fix: `attach` upgrades an Owner of the previous shape in place (`adoptPreviousOwner`). It keeps the same object because live children reference it, and it sets `dir`. It stamps that parent's runs with this process as owner, so another process cannot adopt children still running here. It drops `path`/`runPaths`/`lost`, and releases the old proper-lockfile lease.
+- The first version of that fix crashed real Pi on reload: `.then(release)` passed the resolved value as an argument, which proper-lockfile read as its callback (`callback is not a function`, uncaught, from an fs callback). The in-process test missed it because its fake release ignored arguments. The test now records the arity and requires zero, and fails on the buggy call.
+- **Lesson:** anything in the process-global registry is foreign input across a `/reload`, exactly like persisted tool results. A change to `Owner` or `Run` shape needs a migration in `attach`, or a registry version bump if live children may be dropped.
+- Checks: `npm run check` 36/36, `smoke:tui` PASS. Real cross-version reload `83d0e05` → fixed: launches after the reload, both children complete, lease lock removed, and the pre-reload run's record carries this process's `ownerPid`.
+
+## `models` as a table; steer model that never reached the session (`ae7fa45`, `44a5b89`)
 
 - Field report (screenshot from another machine): `delegate_ctl models` still "looks like absolute ASS". That machine was stale (its `… Ctrl+O expand` string was removed in `24f88ca`), but current code was bad too: `models` had no structured details, so it rendered the model's text. The 8-line head preview was entirely `DEFAULTS`/`RATINGS`/`OPENROUTER`/`CATALOG`, with **zero offerings visible** when collapsed.
 - `models` now returns `details.kind: "models"`. The model-facing text is byte-identical: verified by diffing before and after for three filters. Only live OpenRouter uptime/order drift differed. `liveFacts`/`defaultsFacts` are the single source for both text and view.
@@ -34,7 +43,7 @@ Two tools. In `settings.packages`; `pi-subagents` and `pi-strings` removed, `set
 - **Steer `model:` did not reach a retained session.** `beginResume` spread `...run` (including the live `session`), and `openSession` returns early when a session exists, so the next segment ran on the old provider/thinking while the record claimed the new one. The common trigger is a first request that fails (for example on a usage limit): zero turns, session still in memory, retries keep hitting the exhausted provider. Now a changed model or thinking level drops and disposes the retained session after the record is saved, and the normal open path rebinds from the transcript. The SDK honors an explicit `options.model` on open. The old test missed it because `fixture` and `fixture-alias` share a model id on one loopback, and it asserted only the record. The new regression test gives the replacement a distinct id and asserts the retry request's `model`. It failed before the fix (`actual: 'fixture'`).
 - Checks: `npm run check` 35/35, `npm run smoke:tui` PASS, pi-vertex `npm test` 1/1. Real Pi 0.87.1 sessions (parent on `github-copilot/gpt-5-mini`, real registry and live OpenRouter) rendered `models "stepfun"`/`"glm"` collapsed and expanded at 110/54/40/30 cols, across `/reload`, without a crash.
 
-## Ctrl+J is the Agents key again (uncommitted)
+## Ctrl+J is the Agents key again (`83d0e05`)
 
 - User call: back to **Ctrl+J**. The newline they use is Ctrl+Enter, never Ctrl+J. This supersedes the Alt+J move below.
 - It does not collide with their Ctrl+Enter in Ghostty. Pi negotiates kitty flags 7, and Ghostty keeps the legacy Enter byte only when no modifier is held, so Ctrl+Enter arrives as `CSI 13;5u`. `matchesKey` confirms that matches `ctrl+enter`, not `ctrl+j`. Only a terminal that sends Ctrl+Enter as a bare LF would collide: LF matches `ctrl+j`, and the extension shortcut wins over the editor.
@@ -152,7 +161,7 @@ Field reports, all from one incident: a forked child re-delegated its own brief,
 
 Requires Pi 0.86.1+ for lifecycle reasons and the prompt dispatch callback. Model-runtime configuration refreshes with the extension binding; already-running children keep their existing runtime.
 
-Implementation: process-global runtime registry, one lease per parent (`proper-lockfile`), atomic per-child JSON snapshots and parent indexes. No detached runners, daemon, tmux dependency, or second session writer. Snapshot delivery is reconciled with receipts in the parent transcript. Recovery starts with children launched by this version; pre-upgrade JSONL files do not contain the required parent/runtime metadata.
+Implementation: process-global runtime registry, per-run ownership (`ownerPid`/`ownerHost`/`ownerToken`; the parent lease was dropped in `eea99c6`), atomic per-child JSON snapshots and one pointer file per run (the legacy parent index is still read). No detached runners, daemon, tmux dependency, or second session writer. Snapshot delivery is reconciled with receipts in the parent transcript. Recovery starts with children launched by this version; pre-upgrade JSONL files do not contain the required parent/runtime metadata.
 
 ## Fleet notes
 
