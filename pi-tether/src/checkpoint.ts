@@ -1,5 +1,6 @@
 import type { Cut, SessionReader } from "./feed.ts";
 import type { Notice } from "./contract.ts";
+import { PROCESS_RISK_CLASSES, processNoticeKey } from "./process-health.ts";
 import { isAdvisorRecord, type AdvisorRecord } from "./advisor.ts";
 import type { MomStore, SidecarRecord } from "./sidecar.ts";
 import { Check } from "typebox/value";
@@ -63,7 +64,8 @@ function checkpointValue(x: unknown, allowCutover: boolean): { checkpoint: Check
 		if (c.before !== null && c.after !== c.before + c.created.length - c.retired.length) return undefined;
 	}
 	if (!cutLike(value.cut)) return undefined;
-	if (!(value.note === null || (record(value.note) && ["text", "obligationRef", "triggerRef"].every((k) => typeof value.note[k] === "string") &&
+	if (!(value.note === null || (record(value.note) && typeof value.note.text === "string" && PROCESS_RISK_CLASSES.includes(value.note.riskClass) &&
+		typeof value.note.target === "string" && [value.note.riskRefs, value.note.actionRefs].every(refs => Array.isArray(refs) && refs.length && refs.every((ref: unknown) => typeof ref === "string")) &&
 		(value.note.nextRequest === undefined || typeof value.note.nextRequest === "boolean")))) return undefined;
 	return { checkpoint: value as Checkpoint, cutover: normalized.changed };
 }
@@ -72,11 +74,11 @@ export function isCheckpoint(x: unknown): x is Checkpoint { return Boolean(check
 
 export interface CursorFailure { key: string; from: Cut; through: Cut; refs: string[]; error: string; failures: number }
 export interface SkippedGap extends CursorFailure { id: string }
-export interface MomState { checkpoint?: Checkpoint; checkpointId?: string; coverageCut?: Cut; enabled: boolean; delivered?: string; usage?: Usage; error?: string; failure?: CursorFailure; gaps: SkippedGap[]; cutover?: boolean }
+export interface MomState { checkpoint?: Checkpoint; checkpointId?: string; coverageCut?: Cut; enabled: boolean; unresolvedNotices: string[]; usage?: Usage; error?: string; failure?: CursorFailure; gaps: SkippedGap[]; cutover?: boolean }
 
 const failureLike = (x: unknown): x is CursorFailure => record(x) && typeof x.key === "string" && cutLike(x.from) && cutLike(x.through) &&
 	Array.isArray(x.refs) && x.refs.every((ref: unknown) => typeof ref === "string") && typeof x.error === "string" && integer(x.failures);
-const mapKeys = new Set(["snapshot", "base", "cut", "enabled", "failure", "gap"]);
+const mapKeys = new Set(["snapshot", "base", "cut", "enabled", "failure", "gap", "resolvedNotices"]);
 
 /** Full map snapshots valid for the selected branch; map patches never become history handles. */
 export function branchCheckpoints(records: readonly SidecarRecord[], branch: ReadonlySet<string>): { id: string; data: Checkpoint }[] {
@@ -93,14 +95,15 @@ export function branchCheckpoints(records: readonly SidecarRecord[], branch: Rea
 
 /** Mom state comes only from map/notice/usage records in her sidecar. */
 export async function loadState(store: MomStore, manager: SessionReader): Promise<MomState> {
-	const state: MomState = { enabled: true, gaps: [] };
+	const state: MomState = { enabled: true, gaps: [], unresolvedNotices: [] };
 	const records = await store.load(), branch = new Set(manager.getBranch().map(e => e.id));
-	const gaps = new Map<string, SkippedGap>();
+	const gaps = new Map<string, SkippedGap>(), unresolvedNotices = new Set<string>();
 	let coverageAt = 0;
 	for (const item of records) {
 		if (item.type === "notice") {
-			if (typeof item.data.key !== "string") throw new Error("Invalid Mom notice state in her sidecar.");
-			state.delivered = item.data.key;
+			if (typeof item.data.key !== "string" || item.data.action !== "delivered" || (item.data.parent !== null && typeof item.data.parent !== "string")) throw new Error("Invalid Mom notice state in her sidecar.");
+			if (item.data.parent !== null && !branch.has(item.data.parent)) continue;
+			unresolvedNotices.add(item.data.key);
 			continue;
 		}
 		if (item.type === "usage") {
@@ -159,12 +162,16 @@ export async function loadState(store: MomStore, manager: SessionReader): Promis
 				if (gapData.through.parent === null || branch.has(gapData.through.parent)) gaps.set(id, { ...gapData, id });
 			}
 		}
+		if (item.data.resolvedNotices !== undefined) {
+			if (!branchAnchor || !Array.isArray(item.data.resolvedNotices) || !item.data.resolvedNotices.every((key: unknown) => typeof key === "string")) throw new Error("Invalid Mom process-risk resolution in her sidecar.");
+			if (applies) for (const key of item.data.resolvedNotices) unresolvedNotices.delete(key);
+		}
 	}
-	state.gaps = [...gaps.values()];
+	state.gaps = [...gaps.values()]; state.unresolvedNotices = [...unresolvedNotices];
 	return state;
 }
 
-export const noticeKey = (note: Notice) => `${note.obligationRef}|${note.triggerRef}`;
+export const noticeKey = (note: Notice) => processNoticeKey(note);
 export function sumUsage(a: Usage, b: Usage): Usage {
 	const sum = emptyUsage();
 	for (const key of Object.keys(sum) as (keyof Usage)[]) sum[key] = a[key] + b[key];

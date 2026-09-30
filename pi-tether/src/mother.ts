@@ -46,7 +46,8 @@ export class Mom {
 	private readonly cacheSessionId = randomUUID();
 	get graph() { return this.checkpoint?.graph ?? this.initialGraph; }
 	enabled = true;
-	delivered?: string;
+	/** Delivered risks remain unresolved until a sourced resolution record closes them. */
+	readonly unresolvedNotices = new Set<string>();
 	usage = emptyUsage();
 	error?: string;
 	busy = false;
@@ -77,7 +78,7 @@ export class Mom {
 		this.checkpoint = state.checkpoint;
 		this.checkpointId = state.checkpointId;
 		this.enabled = state.enabled;
-		this.delivered = state.delivered;
+		this.unresolvedNotices.clear(); for (const key of state.unresolvedNotices) this.unresolvedNotices.add(key);
 		this.usage = state.usage ?? emptyUsage();
 		this.error = state.error;
 		this.failure = state.failure; this.gaps = state.gaps;
@@ -197,11 +198,14 @@ export class Mom {
 			// The map is current state; the session log is history. Include only one boundary
 			// event so a short assent can resolve the preceding proposal, then use evidence tools.
 			const prior = this.feed.events.slice(0, batch.startIndex).findLast((e) => e.actor === "lead" && Boolean(e.text) && ["assistant", "tool_call"].includes(e.kind));
+			const unresolved = new Set(this.unresolvedNotices);
+			if (this.checkpoint?.note) unresolved.add(noticeKey(this.checkpoint.note));
 			const messages: Message[] = [{ role: "user", timestamp: Date.now(), content: JSON.stringify({
 				original: original ? { ref: original.ref, text: original.text } : null,
 				graph: this.graph, contextBeforeBatch: prior ? renderEvent(prior) : null,
 				newEvents: renderEvents(batch.events), gaps: batch.gaps, pendingMore: batch.more,
 				compactionReview: compactionReview ?? null,
+				unresolvedProcessRisks: [...unresolved],
 				question: question ?? null, evidencePagesRemaining: readPages, metadataSearchesRemaining: searches,
 			}) }];
 			let mustInspect = false;
@@ -245,7 +249,7 @@ export class Mom {
 					if (searchRetryOnly) throw new Error("Retry the zero-result search with a shorter literal phrase before any other operation.");
 					if (mustInspect) throw new Error("Inspect an original source from the search before answering.");
 					let next;
-					try { next = acceptGraph(args, this.graph, this.checkpointId, known, newRefs, inspected, question, Boolean(compactionReview)); }
+					try { next = acceptGraph(args, this.graph, this.checkpointId, known, newRefs, inspected, question, Boolean(compactionReview), unresolved); }
 					catch (error) {
 						if (callsRemaining === 0) {
 							if (question) throw error;
@@ -281,8 +285,10 @@ export class Mom {
 					const acceptedAt = Date.now(), acceptedUsage = sumUsage(this.usage, attempt);
 					// A graph-identical acceptance still advances durable evidence coverage. Keep
 					// that compact by layering a cursor record over the latest full checkpoint.
-					const pendingNotice = this.checkpoint?.note?.nextRequest && noticeKey(this.checkpoint.note) !== this.delivered ? this.checkpoint.note : null;
-					const proposedNotice = next.note && compactionReview ? { ...next.note, nextRequest: true } : next.note;
+					const resolutionKeys = new Set(next.resolutions.map(item => `${item.riskClass}:${item.target}`));
+					const pendingNotice = this.checkpoint?.note?.nextRequest && !this.unresolvedNotices.has(noticeKey(this.checkpoint.note)) && !resolutionKeys.has(noticeKey(this.checkpoint.note)) ? this.checkpoint.note : null;
+					// All process advice reuses 005's next-request path; no notice is injected into a settled lead turn.
+					const proposedNotice = next.note ? { ...next.note, nextRequest: true } : null;
 					const effectiveNote = proposedNotice ?? pendingNotice;
 					const material = !this.checkpoint
 						|| JSON.stringify(next.graph) !== JSON.stringify(this.graph)
@@ -292,22 +298,25 @@ export class Mom {
 					const gapUpdate = !batch.retryGapId ? {} : batch.retryGapRemaining?.length && retriedGap
 						? { gap: { action: "open", ...retriedGap, refs: batch.retryGapRemaining } }
 						: { gap: { action: "resolved", id: batch.retryGapId } };
+					const resolutionUpdate = resolutionKeys.size ? { resolvedNotices: [...resolutionKeys] } : {};
 					if (material) {
 						const checkpoint: Checkpoint = { sessionId: this.host.ctx.sessionManager.getSessionId(),
 							graph: next.graph, change: graphChange(this.checkpoint?.graph ?? this.initialGraph, next.graph),
 							note: effectiveNote, unfinished: next.unfinished, cut: batch.cut, at: acceptedAt, model: this.host.model,
 							...(advisor ? { advisor } : {}) };
 						let record;
-						try { record = await this.host.store.append("map", { snapshot: checkpoint, failure: null, ...gapUpdate }); }
+						try { record = await this.host.store.append("map", { snapshot: checkpoint, failure: null, ...gapUpdate, ...resolutionUpdate }); }
 						catch (error) { throw new Error(`Mom could not write her state beside the session: ${String(error)}`); }
 						this.checkpoint = checkpoint; this.checkpointId = record.id;
 						this.checkpoints.push({ id: record.id, data: checkpoint });
 					} else {
 						if (!this.checkpointId) throw new Error("Mom cannot advance evidence coverage without a saved sidecar checkpoint.");
-						try { await this.host.store.append("map", { base: this.checkpointId, cut: batch.cut, failure: null, ...gapUpdate }); }
+						try { await this.host.store.append("map", { base: this.checkpointId, cut: batch.cut, failure: null, ...gapUpdate, ...resolutionUpdate }); }
 						catch (error) { throw new Error(`Mom could not advance her state beside the session: ${String(error)}`); }
 						this.checkpoint = { ...this.checkpoint!, cut: batch.cut, at: acceptedAt };
 					}
+					// Risk resolutions and their consumed evidence commit in the same map record.
+					for (const key of resolutionKeys) this.unresolvedNotices.delete(key);
 					this.usage = acceptedUsage;
 					if (batch.retryGapId) {
 						if (batch.retryGapRemaining?.length && retriedGap) this.gaps = this.gaps.map(gap => gap.id === batch.retryGapId

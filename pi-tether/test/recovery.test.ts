@@ -11,24 +11,24 @@ test("retry preserves its original coverage revision and processes a newer corre
 	const h = await setup(true), gate = deferred(); let calls = 0;
 	try {
 		h.api.onUnscripted((request) => {
-			if (!isMomRequest(request)) return { text: "I will delete the file now." };
+			if (!isMomRequest(request)) return { text: "Several completed files remain uncommitted while I add more changes." };
 			calls++;
 			if (calls === 1) return { error: 400 };
 			if (calls === 2) {
 				const body = input(request), trigger = /\[src:([^\]]+)\] [^\n]+ lead assistant/.exec(body.newEvents)![1];
-				assert(!body.newEvents.includes("Deletion is now authorized"));
-				return replacement(request, { note: { text: "Do not delete the file.", obligationRef: body.original.ref, triggerRef: trigger } });
+				assert(!body.newEvents.includes("The changes are now committed"));
+				return replacement(request, { note: { text: "Commit the completed changes before more work makes them harder to recover.", riskClass: "uncommitted_work", target: "main", riskRefs: [body.original.ref, trigger], actionRefs: [body.original.ref] } });
 			}
-			assert.match(input(request).newEvents, /Deletion is now authorized/);
+			assert.match(input(request).newEvents, /The changes are now committed/);
 			return { ...replacement(request), gate };
 		});
 		// The failed batch must contain both the user hold and the assistant claim.
 		await h.command("pause");
-		await h.runtime.session.prompt("Do not delete the file.");
+		await h.runtime.session.prompt("Commits are allowed. Commit completed changes before adding more work.");
 		await h.command("resume");
 		await until(() => calls === 1);
 		await until(async () => (await readSidecar(h)).some(r => r.type === "usage" && r.data.error));
-		await h.command("correct Deletion is now authorized for this fixture file.");
+		await h.command("correct The changes are now committed for this fixture.");
 		await until(() => calls === 3, "correction captured after staged retry");
 		assert.equal((await snapshots(h)).length, 1);
 		assert(!h.runtime.session.sessionManager.getBranch().some((e: any) => e.customType === NOTICE));

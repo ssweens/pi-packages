@@ -44,6 +44,8 @@ export default function piTether(pi: ExtensionAPI) {
 	let leadTool: string | undefined;
 	let pendingCompaction: PendingCompactionReview | undefined;
 	let unsubscribe: (() => void) | undefined;
+	// Session reload must not overtake a just-published notice's sidecar record.
+	let noticePersistence: Promise<void> = Promise.resolve();
 	const interval = () => {
 		const n = Number(pi.getFlag("mom-interval-ms") ?? 15000);
 		return Number.isFinite(n) && n >= 0 ? n : 15000;
@@ -77,20 +79,29 @@ export default function piTether(pi: ExtensionAPI) {
 		const u = mom?.usage;
 		return `${v.summary || "Mom has not saved a view of this work yet."}\n\n${v.status}${v.error ? `\n${v.error}` : ""}${v.note ? `\n\nNotice: ${v.note}` : ""}${u ? `\n\nMom (session): ${u.calls} model calls · ${u.input + u.cacheRead + u.cacheWrite} input tokens · ${u.output} output tokens · $${u.nominalCost.toFixed(5)} nominal · ${(u.elapsedMs / 1000).toFixed(1)}s cumulative model/update time` : ""}`;
 	}
-	function deliver(onNextRequest = false) {
+	async function deliver(onNextRequest = false) {
 		const m = mom, note = m?.checkpoint?.note;
 		const nextRequestNotice = Boolean(onNextRequest && note?.nextRequest);
 		if ((onNextRequest && !note?.nextRequest) || (note?.nextRequest && !onNextRequest)) return;
 		if (!m || !note || !ctx || !m.enabled || m.busy || m.error || m.failure || m.gaps.length || openingError || m.feed.gaps.size ||
 			(!nextRequestNotice && (dirty || m.more || !ctx.isIdle() || ctx.hasPendingMessages() || coveredRevision !== revision))) return;
 		const key = noticeKey(note);
-		if (key === m.delivered) return;
-		// No steering, follow-up request, or extra lead turn. This is advisory context at a verified pause.
-		pi.sendMessage({ customType: NOTICE, content: `Mom (advisory, not verification): ${note.text}\nObligation [src:${note.obligationRef}]; action [src:${note.triggerRef}].`,
-			display: false, details: { key } }, { triggerTurn: false });
-		m.delivered = key;
-		// Delivery state is sidecar state; the message itself is normal conversation output.
-		void store?.append("notice", { key }).catch(() => undefined);
+		if (m.unresolvedNotices.has(key)) return;
+		const destination = store, parent = ctx.sessionManager.getLeafId(), token = epoch;
+		if (!destination) return;
+		// Reserve durably before publishing. A crash can lose advice, but cannot repeat it.
+		noticePersistence = noticePersistence.then(async () => {
+			if (token !== epoch || m !== mom || m.unresolvedNotices.has(key)) return;
+			await destination.append("notice", { key, action: "delivered", note, parent });
+			m.unresolvedNotices.add(key);
+			if (token !== epoch || m !== mom) return;
+			// No steering, follow-up request, extra lead turn, or internal reference text.
+			pi.sendMessage({ customType: NOTICE, content: `Mom: ${note.text}`,
+				display: false, details: { key } }, { triggerTurn: false });
+		}).catch(error => {
+			if (token === epoch && m === mom) { m.error = `Mom could not deliver her advisory: ${String(error)}`; sync(); }
+		});
+		await noticePersistence;
 	}
 	async function run(question?: string, signal?: AbortSignal, refresh = false, compactionReview?: ReturnType<typeof finishCompactionReview>): Promise<string | undefined> {
 		const requestedEpoch = epoch;
@@ -113,7 +124,7 @@ export default function piTether(pi: ExtensionAPI) {
 			if (token === epoch && mine === mom) {
 				if (!mine.more) coveredRevision = mine.coveredRevision;
 				if (coveredRevision !== revision) dirty = true;
-				if (!compactionReview) deliver();
+				if (!compactionReview) await deliver();
 			}
 			return answer && (dirty || mine.more || coveredRevision !== revision)
 				? `Mom is still catching up. This answer covers only the activity she has read so far.\n\n${answer}` : answer;
@@ -150,7 +161,7 @@ export default function piTether(pi: ExtensionAPI) {
 		});
 		ctx = context; openingError = undefined; readError = undefined; savedView = undefined; lastStarted = 0;
 		revision = 0; coveredRevision = -1; dirty = true; leadTool = undefined; pendingCompaction = undefined;
-		const token = epoch;
+		const token = epoch, priorNoticePersistence = noticePersistence;
 		const advisorUrl = String(pi.getFlag("mom-advisor-url") ?? "").trim();
 		const instance: Mom = new Mom({ ctx: context, model: String(pi.getFlag("mom-model") ?? DEFAULT_MODEL),
 			...(advisorUrl ? { advisor: new SystemOneAdvisor({ url: advisorUrl, model: String(pi.getFlag("mom-advisor-model") ?? "kev-latest"),
@@ -161,7 +172,7 @@ export default function piTether(pi: ExtensionAPI) {
 			changed: () => { if (token === epoch) sync(); },
 		});
 		mom = instance;
-		ready = instance.open().then(() => {
+		ready = priorNoticePersistence.then(() => instance.open()).then(() => {
 			if (token !== epoch) return;
 			savedView = undefined;
 			// Opening or changing branches only restores and renders durable state. New
@@ -181,7 +192,7 @@ export default function piTether(pi: ExtensionAPI) {
 
 	pi.on("session_start", (_event, context) => { reset(context); });
 	pi.on("session_tree", (_event, context) => { reset(context); });
-	pi.on("session_shutdown", () => { close(); });
+	pi.on("session_shutdown", async () => { await noticePersistence; close(); });
 	pi.on("session_before_compact", (event, context) => {
 		pendingCompaction = prepareCompactionReview(event, context.sessionManager.getSessionId());
 	});
@@ -200,7 +211,7 @@ export default function piTether(pi: ExtensionAPI) {
 	pi.on("before_agent_start", async (event) => {
 		const token = epoch;
 		await ready.catch(() => undefined);
-		if (token === epoch) deliver(true);
+		if (token === epoch) await deliver(true);
 		if (token === epoch && mom?.enabled) event.systemPromptOptions.sections[LEAD_BEHAVIOR_SECTION_KEY] = LEAD_BEHAVIOR_SECTION;
 		else delete event.systemPromptOptions.sections[LEAD_BEHAVIOR_SECTION_KEY];
 	});
@@ -208,8 +219,8 @@ export default function piTether(pi: ExtensionAPI) {
 	pi.on("agent_settled", (_event, context) => { ctx = context; leadTool = undefined; wake(); deliver(); });
 	pi.on("tool_execution_start", (event) => { leadTool = event.toolName; sync(); });
 	pi.on("tool_execution_end", () => { leadTool = undefined; sync(); });
-	pi.on("input", (event, context) => {
-		if (event.source !== "extension") deliver(true);
+	pi.on("input", async (event, context) => {
+		if (event.source !== "extension") await deliver(true);
 		if (event.source === "extension" || !isStatusPing(event.text)) return { action: "continue" as const };
 		if (!context.hasUI) return { action: "continue" as const };
 		context.ui.notify(cached(), "info");

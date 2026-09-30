@@ -143,20 +143,64 @@ test("a sourced notice is appended once at a breakpoint without generating a lea
 	const h = await setup(true);
 	try {
 		h.api.onUnscripted((request) => {
-			if (!isMomRequest(request)) return { text: "I will delete the unowned file now." };
+			if (!isMomRequest(request)) return { text: "Several completed files remain uncommitted while I add more changes." };
 			const body = input(request);
 			const trigger = /\[src:([^\]]+)\] [^\n]+ lead assistant/.exec(body.newEvents)?.[1];
-			if (!trigger) return replacement(request); // User and assistant can arrive in separate batches.
-			return replacement(request, { note: { text: "The user prohibited deleting unowned files.", obligationRef: body.original.ref, triggerRef: trigger } });
+			if (!trigger) return replacement(request);
+			return replacement(request, { note: { text: "Commit the completed changes before more work makes them harder to recover.", riskClass: "uncommitted_work", target: "main", riskRefs: [body.original.ref, trigger], actionRefs: [body.original.ref] } });
 		});
-		await h.runtime.session.prompt("Do not delete unowned files.");
+		await h.runtime.session.prompt("Commits are allowed. Commit completed changes before adding more work.");
+		assert.equal(h.runtime.session.sessionManager.getBranch().filter((e: any) => e.customType === NOTICE).length, 0, "advice waits for the next request");
+		await until(async () => Boolean((await snapshots(h)).at(-1)?.data.note), "saved process advice");
+		const momCalls = h.requests().length;
+		await h.emitExtension("input", { type: "input", text: "Continue", source: "interactive" });
 		await until(() => h.runtime.session.sessionManager.getBranch().some((e: any) => e.customType === NOTICE), "notice delivery");
 		const calls = h.api.requests.length;
+		assert.equal(h.requests().length, momCalls, "notice delivery makes no extra Mom call");
 		assert.equal(h.api.requests.filter((r) => !isMomRequest(r)).length, 1);
 		assert.equal(h.runtime.session.isStreaming, false);
 		await h.runtime.session.reload(); await pause(300);
 		assert.equal(h.api.requests.length, calls);
 		assert.equal(h.runtime.session.sessionManager.getBranch().filter((e: any) => e.customType === NOTICE).length, 1);
+	} finally { await h.close(); }
+});
+
+test("an unresolved process risk stays quiet, then a sourced resolution permits one genuine recurrence", { timeout: 20000 }, async () => {
+	const h = await setup(true);
+	try {
+		h.api.onUnscripted((request) => {
+			if (!isMomRequest(request)) {
+				const latest = JSON.stringify(request.messages.findLast((message: any) => message.role === "user"));
+				if (latest.includes("Resolve the release risk")) return { text: "The release changes are committed; the commit was created successfully." };
+				if (latest.includes("Start later release work")) return { text: "A later set of completed release files is again uncommitted while more work is added." };
+				return { text: "Several completed release files remain uncommitted while more work is added." };
+			}
+			const body = input(request);
+			const assistant = [...body.newEvents.matchAll(/\[src:([^\]]+)\] [^\n]+ lead assistant/g)].at(-1)?.[1];
+			if (!assistant) return replacement(request);
+			if (body.newEvents.includes("commit was created successfully")) return replacement(request, { note: null, resolutions: [{ riskClass: "uncommitted_work", target: "main", resolutionRefs: [assistant] }] });
+			return replacement(request, { note: { text: "Commit the release changes before more work makes them harder to recover.", riskClass: "uncommitted_work", target: "main", riskRefs: [body.original.ref, assistant], actionRefs: [body.original.ref] } });
+		});
+		await h.runtime.session.prompt("Commits are allowed. Commit completed release changes before adding more work.");
+		await until(async () => Boolean((await snapshots(h)).at(-1)?.data.note));
+		await h.emitExtension("input", { type: "input", text: "Continue", source: "interactive" });
+		await until(() => h.runtime.session.sessionManager.getBranch().filter((e: any) => e.customType === NOTICE).length === 1);
+		const beforeRepeat = h.requests().length;
+		await h.runtime.session.prompt("Continue with the same unresolved release risk.");
+		await until(() => h.requests().length > beforeRepeat, "repeat risk update");
+		await h.emitExtension("input", { type: "input", text: "Continue unchanged", source: "interactive" });
+		assert.equal(h.runtime.session.sessionManager.getBranch().filter((e: any) => e.customType === NOTICE).length, 1, "unchanged risk across updates does not nag");
+
+		await h.runtime.session.prompt("Resolve the release risk now.");
+		await until(async () => (await readSidecar(h)).some((r: any) => r.type === "map" && r.data.resolvedNotices?.includes("uncommitted_work:main")));
+		await h.runtime.session.prompt("Start later release work with commits still allowed.");
+		await until(async () => { const saved = await snapshots(h); const firstTrigger = saved[0]?.data.note?.riskRefs?.at(-1); return saved.at(-1)?.data.note?.riskRefs.some((ref: string) => ref !== firstTrigger); });
+		await until(async () => !/updating|catching up/.test((await h.tools.get("mom").execute("settled", {}, undefined)).content[0].text), "recurred risk checkpoint settlement");
+		await h.emitExtension("input", { type: "input", text: "Continue later work", source: "interactive" });
+		await until(() => h.runtime.session.sessionManager.getBranch().filter((e: any) => e.customType === NOTICE).length === 2);
+		await h.runtime.session.reload(); await pause(300);
+		await h.emitExtension("input", { type: "input", text: "Continue after reload", source: "interactive" });
+		assert.equal(h.runtime.session.sessionManager.getBranch().filter((e: any) => e.customType === NOTICE).length, 2, "reload preserves and suppresses the unresolved second occurrence");
 	} finally { await h.close(); }
 });
 

@@ -32,10 +32,10 @@ test("map, notice, and usage records restore state; abandoned branches stay invi
 		mapSnapshot("keep", sessionId, current),
 	]);
 	await store.append("control", { enabled: false });
-	await store.append("notice", { key: "obligation|trigger" });
+	await store.append("notice", { key: "purpose_drift:main", action: "delivered", parent: null });
 	await store.append("usage", { usage: { ...emptyUsage(), calls: 9 }, error: "last failure" });
 	assert.deepEqual(await loadState(store, manager), { checkpoint: current, checkpointId: "keep", coverageCut: current.cut, enabled: false, gaps: [],
-		delivered: "obligation|trigger", usage: { ...emptyUsage(), calls: 9 }, error: "last failure" });
+		unresolvedNotices: ["purpose_drift:main"], usage: { ...emptyUsage(), calls: 9 }, error: "last failure" });
 	const gone = memoryStore(sessionId, [mapSnapshot("gone", sessionId, { ...current, cut: { parent: "missing", workers: [] } })]);
 	assert.equal((await loadState(gone, manager)).checkpoint, undefined);
 });
@@ -92,6 +92,22 @@ test("a sibling-branch cursor cannot clear the selected branch's retry failure",
 	assert.equal(restored.failure?.key, "selected-range", "the sibling clear does not erase selected-branch retry state");
 });
 
+test("notice delivery and resolution state apply only on their recorded branch", async () => {
+	const manager = SessionManager.inMemory("/tmp"), sessionId = manager.getSessionId();
+	const root = manager.appendMessage({ role: "user", content: "root", timestamp: Date.now() });
+	const sibling = manager.appendMessage({ role: "user", content: "sibling", timestamp: Date.now() });
+	manager.branch(root);
+	const selected = manager.appendMessage({ role: "user", content: "selected", timestamp: Date.now() });
+	const store = memoryStore(sessionId);
+	await store.append("notice", { key: "purpose_drift:main", action: "delivered", parent: selected });
+	await store.append("notice", { key: "uncommitted_work:main", action: "delivered", parent: sibling });
+	assert.deepEqual((await loadState(store, manager)).unresolvedNotices, ["purpose_drift:main"]);
+	await store.append("map", { base: null, cut: { parent: sibling, workers: [] }, resolvedNotices: ["purpose_drift:main"] });
+	assert.deepEqual((await loadState(store, manager)).unresolvedNotices, ["purpose_drift:main"], "a sibling cannot resolve the selected branch risk");
+	await store.append("map", { base: null, cut: { parent: selected, workers: [] }, resolvedNotices: ["purpose_drift:main"] });
+	assert.deepEqual((await loadState(store, manager)).unresolvedNotices, [], "an accepted selected-branch map resolves the risk");
+});
+
 test("a sibling-branch cursor cannot resolve the selected branch's skipped gap", async () => {
 	const manager = SessionManager.inMemory("/tmp"), sessionId = manager.getSessionId();
 	const root = manager.appendMessage({ role: "user", content: "root", timestamp: Date.now() });
@@ -114,7 +130,7 @@ test("the session transcript is never a Mom state source; only sidecar map recor
 	const current = checkpoint(manager.getSessionId());
 	manager.appendCustomEntry("pi-tether.mom.v4", current);
 	manager.appendCustomEntry("pi-tether.mom-control", { sessionId: manager.getSessionId(), enabled: false });
-	assert.deepEqual(await loadState(store, manager), { enabled: true, gaps: [] });
+	assert.deepEqual(await loadState(store, manager), { enabled: true, gaps: [], unresolvedNotices: [] });
 	await store.append("map", { snapshot: current });
 	assert.equal((await loadState(store, manager)).checkpoint, current); assert(isCheckpoint(current));
 	assert.equal(isCheckpoint({ ...current, version: 4, usage: emptyUsage() }), false, "legacy versioned snapshot layouts are not accepted");
@@ -122,7 +138,7 @@ test("the session transcript is never a Mom state source; only sidecar map recor
 	await assert.rejects(() => loadState(bad, manager), /Invalid Mom map snapshot/);
 });
 
-test("source validator rejects invented citations and user-as-violation notices", () => {
+test("source validator rejects invented citations and malformed process notices", () => {
 	const events: FeedEvent[] = [
 		{ ref: "s:u", at: "", actor: "lead", kind: "user", text: "Do not delete." },
 		{ ref: "s:a", at: "", actor: "lead", kind: "assistant", text: "I will delete it." },
@@ -135,10 +151,6 @@ test("source validator rejects invented citations and user-as-violation notices"
 	assert.equal(accept(base).note, null);
 	assert.throws(() => accept({ ...base, upsertNodes: [{ ...node, sources: ["s:nope"] }] }), /Unknown/);
 	assert.throws(() => accept({ ...base, upsertNodes: [{ ...node, sources: ["s:u", "s:u"] }] }), /Duplicate/);
-	assert.throws(() => accept({ ...base, note: { text: "Wrong", obligationRef: "s:a", triggerRef: "s:u" } }), /agent action/);
-	assert.throws(() => accept({ ...base, note: { text: "Check", obligationRef: "s:u", triggerRef: "s:r" } }), /agent action/);
+	assert.throws(() => accept({ ...base, note: { text: "Check it", riskClass: "purpose_drift", target: "main", riskRefs: ["s:u"], actionRefs: ["s:r"] } }), /shape|visible/);
 	assert.throws(() => accept(base, fresh, "Why?"), /explicit question/);
-	const note = { text: "The user forbids deletion.", obligationRef: "s:u", triggerRef: "s:a" };
-	assert.deepEqual(accept({ ...base, note }).note, note);
-	assert.throws(() => accept({ ...base, note }, new Set(["s:u"])), /new agent action/);
 });

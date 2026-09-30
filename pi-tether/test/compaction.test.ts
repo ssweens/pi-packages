@@ -75,17 +75,17 @@ test("SDK preparation can put the new boundary before the latest prior compactio
 		new Set(["session:hold"])).rawReplacedEvents, /Do not modify KEEP\.txt/);
 });
 
-test("a compaction that drops an active hold causes one deferred advisory and no lead call", { timeout: 15000 }, async () => {
+test("a compaction that drops an active decision causes one deferred process advisory and no lead call", { timeout: 15000 }, async () => {
 	const h = await setup(true);
 	try {
-		await h.runtime.session.prompt("Keep KEEP.txt unchanged while doing the migration.");
+		await h.runtime.session.prompt("Record the decision to keep KEEP.txt unchanged before continuing the migration.");
 		await until(() => h.requests().length === 1);
 		const leadCalls = h.api.requests.filter((request: any) => !isMomRequest(request)).length;
 		h.api.onUnscripted((request) => {
 			if (!isMomRequest(request)) return { text: "Lead continued." };
 			const body = input(request);
-			const trigger = /\[src:([^\]]+)\] [^\n]+ lead compaction/.exec(body.newEvents)?.[1];
-			return replacement(request, { note: { text: "Still in force — keep KEEP.txt unchanged.", obligationRef: body.original.ref, triggerRef: trigger } });
+			const trigger = body.compactionReview.triggerRef;
+			return replacement(request, { note: { text: "Record the KEEP decision now before its instruction is lost.", riskClass: "compaction_decisions", target: "main", riskRefs: [body.original.ref, trigger], actionRefs: [body.original.ref] } });
 		});
 		await compact(h, "Migration work continues.");
 		assert.equal(h.requests().length, 2, "one Mom update for the compaction");
@@ -94,7 +94,7 @@ test("a compaction that drops an active hold causes one deferred advisory and no
 		await until(() => h.runtime.session.sessionManager.getBranch().some((entry: any) => entry.customType === NOTICE));
 		assert.equal(h.api.requests.filter((request: any) => !isMomRequest(request)).length, leadCalls, "notice starts no lead turn");
 		const review = input(h.requests()[1]).compactionReview;
-		assert.match(review.rawReplacedEvents, /Keep KEEP\.txt unchanged/);
+		assert.match(review.rawReplacedEvents, /keep KEEP\.txt unchanged/);
 		assert.equal(review.summary, "Migration work continues.");
 		const notices = h.runtime.session.sessionManager.getBranch().filter((entry: any) => entry.customType === NOTICE);
 		assert.equal(notices.length, 1);

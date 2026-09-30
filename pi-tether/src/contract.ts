@@ -3,11 +3,17 @@ import { Check } from "typebox/value";
 import type { Tool } from "@earendil-works/pi-ai";
 import type { FeedEvent } from "./feed.ts";
 import { Edge, NodeInput, Unfinished, checkUnfinished, unfinishedPreflightErrors, editGraph, shapeError, sourceSuggestion, type GraphEdit, type WorkGraph } from "./graph.ts";
+import { PROCESS_RISK_CLASSES, validateProcessNotice, validateProcessResolution, type ProcessNotice, type ProcessResolution } from "./process-health.ts";
 
-export interface Notice { text: string; obligationRef: string; triggerRef: string; nextRequest?: boolean }
-const ref = Type.String({ minLength: 1, description: "Bare SOURCE_ID from [src:SOURCE_ID], without src: or brackets." });
-const pointer = Type.Union([Type.String(), Type.Null()]);
+export type Notice = ProcessNotice;
 const object = { additionalProperties: false } as const;
+const ref = Type.String({ minLength: 1, description: "Bare SOURCE_ID from [src:SOURCE_ID], without src: or brackets." });
+const riskClass = Type.Union(PROCESS_RISK_CLASSES.map(value => Type.Literal(value)));
+const processIdentity = { riskClass, target: Type.String({ minLength: 1 }) };
+const notice = Type.Object({ text: Type.String({ minLength: 1, maxLength: 240 }), ...processIdentity,
+	riskRefs: Type.Array(ref, { minItems: 1, maxItems: 6 }), actionRefs: Type.Array(ref, { minItems: 1, maxItems: 6 }) }, object);
+const resolution = Type.Object({ ...processIdentity, resolutionRefs: Type.Array(ref, { minItems: 1, maxItems: 6 }) }, object);
+const pointer = Type.Union([Type.String(), Type.Null()]);
 const citedReason = { reason: Type.String({ minLength: 1 }), sources: NodeInput.properties.sources };
 // Pi's strict-schema transport cannot encode unions of objects. Group the edits in a fixed order instead.
 const Transaction = Type.Object({ revision: Type.Integer({ minimum: 0 }), purpose: pointer, focus: pointer,
@@ -19,7 +25,8 @@ const Transaction = Type.Object({ revision: Type.Integer({ minimum: 0 }), purpos
 	removeNodes: Type.Array(Type.Object({ id: NodeInput.properties.id, ...citedReason }, object), { maxItems: 64 }),
 	supersessions: Type.Array(Type.Object({ node: NodeInput.properties.id, prior: ref, by: ref }, object), { maxItems: 64,
 		description: "Transaction-only proof for omitted prior user authority: node, omitted prior user source, and later fresh user source retained on that node. Empty when no prior user source is removed." }),
-	note: Type.Optional(Type.Object({ text: Type.String({ minLength: 1, maxLength: 350 }), obligationRef: ref, triggerRef: ref }, object)),
+	note: Type.Optional(notice),
+	resolutions: Type.Optional(Type.Array(resolution, { maxItems: 4 })),
 	answer: Type.Optional(Type.String({ maxLength: 6000 })),
 }, object);
 
@@ -43,9 +50,14 @@ Merge centers with merges: name the existing source endeavor as thread and survi
 
 Do not silently widen a scoped constraint while contracting. If a governs connection would change endpoint, explicitly remove it and, only when the evidence supports it, replace it with the correct scoped relationship. Update the constraint's account as needed. The host rejects implicit governing-endpoint redirection. Other external links redirect to the surviving center; return links that would become self-edges remain recorded as historical landings. Do not copy old exploration into outcome prose or retain every obsolete claim. Do not reconstruct retired subjects from historical sources as parked or active work. Add a center to organize current work, not to resurrect an old task. A prohibition is an attached rule, not an unfinished assignment. Only new direction or evidence can reopen work. Keep consumed activity historical, not new launches.
 
-When compactionReview is present, review the provider summary against BOTH the current source-backed graph and rawReplacedEvents captured before compaction. An empty or provider-placeholder summary is still reviewable. If the summary dropped or distorted any still-active purpose, rule, permission hold, return point, or current work, set one short plain-English note naming what remains in force; cite its governing source as obligationRef and the new compaction event as triggerRef. Do not change the map merely because summary prose omitted material. If all active material was retained, set note=null.
+When compactionReview is present, review the provider summary against BOTH the current source-backed graph and rawReplacedEvents captured before compaction. An empty or provider-placeholder summary is still reviewable. Do not change the map merely because summary prose omitted material. A notice is allowed only when compaction leaves a consequential decision unrecorded, under the process-health rules below; merely omitting active material from summary prose is not enough.
 
-Default note=null. Outside a compaction review, a notice requires a still-governing obligation and a distinct NEW observed agent action/claim that conflicts with it. Evaluate against latest user direction. User messages/dialog answers may establish obligations but never be offending actions. Trigger sources must be new assistant narrative or inspected tool calls/results, except that a compaction review uses the new compaction event. Pending work, unknown verification, waiting, a missing summary, or a consult answer are not triggers. Stay silent if already addressed. Never authorize deletion. Notice text <=350 characters.
+PROCESS-HEALTH ADVICE
+Default note=null and resolutions=[]. Use the same update and commit_graph call; never request an extra pass, dispatch work, gate work, or use retrieval in the background. A notice is permitted only for one of four consequential current risks: (1) compaction is occurring and consequential decisions are not recorded, (2) material uncommitted work is piling up while commits are allowed, (3) current work has consequentially drifted from its source-backed goal, or (4) the same fix has failed repeatedly. Thresholds, counts, elapsed time, pending work, unknown verification, and generic good practice are never enough.
+
+Every notice names the affected existing endeavor as target, its riskClass, current riskRefs proving the consequential problem, and actionRefs supporting a concrete next step. At least one risk reference must be new. Repeated failure needs two observed attempts. Purpose drift must cite the target's current purpose source. Compaction risk must cite the current compaction and the still-material decision. Uncommitted-work advice requires actual user permission to commit: contrary instructions such as “do not commit” are not permission. If either the risk or next step lacks source evidence, remain silent. Raw counts or elapsed time do not become consequential merely because they are cited. The short text must name the specific problem and action in plain English. Never put citation syntax or internal terms such as cursor, gap, endeavor, source ref, commit_graph, sidecar, or checkpoint in text.
+
+You—not keyword matching by the host—judge whether evidence semantically supports the risk, permission, action, and resolution. Read negation and scope literally. “Not committed,” “did not pass,” and similar negative statements never prove resolution. Identity is derived by the host from riskClass plus target. Repeat an unresolved notice in later updates only to preserve it until next-request delivery; changed evidence or wording does not create another notice. Resolve one only with resolutions naming its same class and target plus new evidence that the problem actually ended. A later genuine recurrence needs new risk evidence and may then notify once. Do not resolve and reopen the same identity in one transaction.
 
 For explicit questions, answer with precise [src:SOURCE_ID] citations without inventing work. Historical findings are not current blockers. In tool arguments and structured sources pass bare SOURCE_ID, without src: or brackets. Search matches narrative, metadata and original argument/output text; payload matches disclose only references/metadata until inspected. Search queries must be short literal phrases copied from likely evidence, never the user's full natural-language question. You have at most two metadata searches and separately at most two original-source reads. A zero-result first search must be followed by one shorter literal search; do not inspect or answer between them. Read original command evidence, not merely a narrative quoting it. Report actual lookup errors and truncation honestly. Either side of a tool pair includes its counterpart within one 4000-character read. A successful question search requires inspection next. No speculative browsing.
 
@@ -90,11 +102,11 @@ export function directlyGrounded(claim: string, source: string): boolean {
 }
 
 /** Validate shape, provenance identity and notice eligibility, not semantic truth. */
-export function acceptGraph(value: unknown, previous: WorkGraph, checkpoint: string | undefined, known: ReadonlyMap<string, FeedEvent>, newRefs: ReadonlySet<string>, inspected: ReadonlySet<string>, question?: string, compactionReview = false) {
+export function acceptGraph(value: unknown, previous: WorkGraph, checkpoint: string | undefined, known: ReadonlyMap<string, FeedEvent>, newRefs: ReadonlySet<string>, inspected: ReadonlySet<string>, question?: string, compactionReview = false, unresolvedNotices: ReadonlySet<string> = new Set()) {
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid graph transaction shape.");
 	// Strict provider transport represents optional properties as null; internal data omits them.
-	const { note: rawNote, answer: rawAnswer, ...rest } = value as Record<string, unknown>;
-	const proposed = { ...rest, ...(rawNote != null ? { note: rawNote } : {}), ...(rawAnswer != null ? { answer: rawAnswer } : {}) };
+	const { note: rawNote, answer: rawAnswer, resolutions: rawResolutions, ...rest } = value as Record<string, unknown>;
+	const proposed = { ...rest, ...(rawNote != null ? { note: rawNote } : {}), ...(rawAnswer != null ? { answer: rawAnswer } : {}), ...(rawResolutions != null ? { resolutions: rawResolutions } : {}) };
 	if (!Check(Transaction, proposed)) throw shapeError("Invalid graph transaction shape:", Transaction, proposed, "upsertNodes");
 	// purposeSource is deterministic provenance ownership, not model judgment. If the
 	// exact public text is grounded by cited evidence, choose the first such citation
@@ -119,14 +131,10 @@ export function acceptGraph(value: unknown, previous: WorkGraph, checkpoint: str
 	const v = { ...proposed, upsertNodes };
 	if (question && !v.answer?.trim()) throw new Error("Answer the explicit question in answer.");
 	let note: Notice | null = null;
-	if (v.note) {
-		const n = v.note, obligation = known.get(n.obligationRef), trigger = known.get(n.triggerRef);
-		const visible = obligation && (["user", "user_answer", "assistant"].includes(obligation.kind) || inspected.has(obligation.ref));
-		const action = trigger && (trigger.kind === "assistant" || (["tool_call", "tool_result"].includes(trigger.kind) && inspected.has(trigger.ref)));
-		const compactionLoss = compactionReview && trigger?.kind === "compaction";
-		if (!n.text.trim() || !visible || (!action && !compactionLoss) || !newRefs.has(trigger!.ref) || obligation!.ref === trigger!.ref) throw new Error("Note needs a visible obligation and a distinct new agent action/claim, or the current compaction while reviewing dropped active material. User direction is not an offending action.");
-		note = n;
-	}
+	const resolutions = (v.resolutions ?? []) as ProcessResolution[];
+	if (v.note) note = v.note as Notice;
+	for (const item of resolutions) validateProcessResolution(item, unresolvedNotices, known, newRefs);
+	if (note && resolutions.some(item => item.riskClass === note!.riskClass && item.target === note!.target)) throw new Error("A process risk cannot be resolved and reopened in one update.");
 	const defects: string[] = [];
 	for (const match of JSON.stringify(value).matchAll(/\[src:([^\]\s]+)\]/g)) if (!known.has(match[1])) {
 		const suggestion = sourceSuggestion(match[1], known.keys());
@@ -267,5 +275,6 @@ export function acceptGraph(value: unknown, previous: WorkGraph, checkpoint: str
 	const graph = editGraph(previous, v.revision, edits, v.purpose, v.focus, refs, checkpoint);
 	checkUnfinished(previous, effectiveNodes, v.folds, graph, v.unfinished, refs);
 	if (known.size && !graph.nodes.length) throw new Error("Observed work needs a purpose node; do not erase the graph.");
-	return { graph, note, unfinished: v.unfinished, ...(question && v.answer ? { answer: v.answer } : {}) };
+	if (note) validateProcessNotice(note, graph, known, newRefs, compactionReview);
+	return { graph, note, resolutions, unfinished: v.unfinished, ...(question && v.answer ? { answer: v.answer } : {}) };
 }
