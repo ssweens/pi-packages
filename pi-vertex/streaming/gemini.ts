@@ -12,7 +12,7 @@ import { GoogleGenAI, FinishReason, ThinkingLevel } from "@google/genai";
 import type { VertexModelConfig, Context, StreamOptions, AssistantMessage } from "../types.js";
 import { getAuthConfig, resolveLocation } from "../auth.js";
 import { sanitizeText, convertToGeminiMessages, convertToolsForGemini, retainThoughtSignature, calculateCost } from "../utils.js";
-import { createAssistantMessageEventStream, type AssistantMessageEventStream, type JsonObject } from "@earendil-works/pi-ai";
+import { createAssistantMessageEventStream, type AssistantMessageEventStream, type JsonObject, getCurrentTools, getCurrentSystemPrompt } from "@earendil-works/pi-ai";
 
 // Module-level counter for generating unique tool call IDs (matches pi-mono pattern)
 let toolCallCounter = 0;
@@ -113,14 +113,17 @@ export function streamGemini(
         ...(options?.temperature !== undefined && { temperature: options.temperature }),
       };
 
-      // Add system prompt if present
-      if (context.systemPrompt) {
-        config.systemInstruction = sanitizeText(context.systemPrompt);
+      // Extract system prompt and tools from transcript system messages.
+      // Pi 1.0+ stores these inside context.messages, not as top-level
+      // context.systemPrompt / context.tools.
+      const systemPrompt = getCurrentSystemPrompt(context.messages as any);
+      if (systemPrompt) {
+        config.systemInstruction = sanitizeText(systemPrompt);
       }
 
-      // Add tools if present (using parametersJsonSchema for full JSON Schema support)
-      if (context.tools && context.tools.length > 0) {
-        config.tools = convertToolsForGemini(context.tools);
+      const resolvedTools = getCurrentTools(context.messages as any);
+      if (resolvedTools.length > 0) {
+        config.tools = convertToolsForGemini(resolvedTools);
       }
 
       // Add thinking configuration (matches pi-mono's buildParams logic).

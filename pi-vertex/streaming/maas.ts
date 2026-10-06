@@ -12,6 +12,8 @@ import {
   type AssistantMessageEventStream,
   type Model,
   calculateCost,
+  getCurrentTools,
+  getCurrentSystemPrompt,
 } from "@earendil-works/pi-ai";
 // Pi 0.99 moved the per-API stream functions off the pi-ai root. The compat
 // entry is what Pi's extension loader maps pi-ai to, so it resolves at runtime.
@@ -212,8 +214,11 @@ async function streamAnthropic(
     }
   }
 
-  // Build tools
-  const tools = context.tools?.map((t: any) => ({
+  // Build tools from transcript system messages (pi 1.0+ stores tools and
+  // system prompts inside system messages in context.messages, not as
+  // top-level context.tools / context.systemPrompt).
+  const resolvedTools = getCurrentTools(context.messages as any);
+  const tools = resolvedTools.map((t: any) => ({
     name: t.name,
     description: t.description,
     input_schema: {
@@ -223,11 +228,13 @@ async function streamAnthropic(
     },
   }));
 
+  const systemPrompt = getCurrentSystemPrompt(context.messages as any);
+
   const params: any = {
     model: model.apiId,
     max_tokens: options?.maxTokens || model.maxTokens,
     messages,
-    ...(context.systemPrompt ? { system: context.systemPrompt } : {}),
+    ...(systemPrompt ? { system: systemPrompt } : {}),
     ...(tools && tools.length > 0 ? { tools } : {}),
     ...(options?.temperature !== undefined && !options?.reasoning ? { temperature: options.temperature } : {}),
   };
